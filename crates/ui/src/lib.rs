@@ -1608,6 +1608,15 @@ impl MessagingUi {
 		let keyboard_enabled = !self.switcher_frame
 			&& !self.switcher.is_open()
 			&& ctx.memory(|memory| memory.top_modal_layer().is_none());
+		fn ime_updates_text(event: &egui::Event) -> bool {
+			match event {
+				egui::Event::Ime(
+					egui::ImeEvent::Preedit { text, .. } | egui::ImeEvent::Commit(text),
+				) => !text.is_empty(),
+				egui::Event::Ime(egui::ImeEvent::DeleteSurrounding { .. }) => true,
+				_ => false,
+			}
+		}
 		if keyboard_enabled
 			&& self.editing.is_none()
 			&& !self.ime_active
@@ -1615,10 +1624,7 @@ impl MessagingUi {
 			&& ctx.memory(|memory| memory.has_focus(ui.make_persistent_id("message-input")))
 			&& state.drafts.get(&channel).is_none_or(String::is_empty)
 			&& ctx.input_mut(|input| {
-				let up = !input
-					.events
-					.iter()
-					.any(|event| matches!(event, egui::Event::Ime(_)))
+				let up = !input.events.iter().any(ime_updates_text)
 					&& input.events.iter().any(|event| {
 						matches!(event, egui::Event::Key {
 							key: egui::Key::ArrowUp, pressed: true, repeat: false, modifiers, ..
@@ -1826,8 +1832,10 @@ impl MessagingUi {
 			}
 			return;
 		}
+		// Wayland/Fcitx can repeatedly emit empty preedits while idle. Only real
+		// composition blocks shortcuts; dismissing an active composition still does.
 		let ime_this_frame = keyboard_enabled
-			&& ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Ime(_))));
+			&& (self.ime_active || ctx.input(|i| i.events.iter().any(ime_updates_text)));
 		if keyboard_enabled {
 			ctx.input(|i| {
 				for event in &i.events {
@@ -3262,6 +3270,133 @@ mod composer_tests {
 			pressed: true,
 			repeat: false,
 			modifiers: egui::Modifiers::NONE,
+		}
+	}
+
+	#[test]
+	fn composer_enter_ignores_idle_linux_ime_updates() {
+		for editing in [false, true] {
+			for shift in [false, true] {
+				for ime in [
+					egui::ImeEvent::Preedit {
+						text: String::new(),
+						active_range_chars: None,
+					},
+					egui::ImeEvent::Preedit {
+						text: String::new(),
+						active_range_chars: Some(0..0),
+					},
+					egui::ImeEvent::Commit(String::new()),
+				] {
+					let ctx = egui::Context::default();
+					ctx.set_os(egui::os::OperatingSystem::Nix);
+					let mut state = edit_state();
+					state.drafts.insert(Id(10), "Message".into());
+					let mut view = MessagingUi::default();
+					if editing {
+						view.editing = Some((Id(10), Id(20), "Changed".into()));
+					}
+					ctx.run_ui(Default::default(), |ui| {
+						view.composer(ui, &mut state, Id(10), &ctx, &mut vec![]);
+						ctx.memory_mut(|m| {
+							m.request_focus(ui.make_persistent_id(if editing {
+								"message-edit"
+							} else {
+								"message-input"
+							}))
+						});
+					})
+					.drop_without_applying_deltas();
+					let mut enter = edit_key(egui::Key::Enter);
+					if let egui::Event::Key { modifiers, .. } = &mut enter {
+						modifiers.shift = shift;
+					}
+					let commands = edit_frame(
+						&ctx,
+						&mut view,
+						&mut state,
+						vec![egui::Event::Ime(ime), enter],
+					);
+					if shift {
+						assert!(commands.is_empty());
+						let text = if editing {
+							&view.editing.as_ref().unwrap().2
+						} else {
+							&state.drafts[&Id(10)]
+						};
+						assert!(text.contains('\n'));
+					} else if editing {
+						assert!(
+							matches!(commands.as_slice(), [Command::Edit { content, .. }] if content == "Changed")
+						);
+					} else {
+						assert!(
+							matches!(commands.as_slice(), [Command::Send { content, .. }] if content == "Message")
+						);
+					}
+				}
+			}
+		}
+	}
+
+	#[test]
+	fn composer_enter_dismissing_composition_does_not_send() {
+		for finish in [
+			egui::ImeEvent::Preedit {
+				text: String::new(),
+				active_range_chars: None,
+			},
+			egui::ImeEvent::Commit(String::new()),
+			egui::ImeEvent::Commit("composed".into()),
+		] {
+			let ctx = egui::Context::default();
+			ctx.set_os(egui::os::OperatingSystem::Nix);
+			let mut state = edit_state();
+			let mut view = MessagingUi::default();
+			ctx.run_ui(Default::default(), |ui| {
+				view.composer(ui, &mut state, Id(10), &ctx, &mut vec![]);
+				ctx.memory_mut(|m| m.request_focus(ui.make_persistent_id("message-input")));
+			})
+			.drop_without_applying_deltas();
+			assert!(
+				edit_frame(
+					&ctx,
+					&mut view,
+					&mut state,
+					vec![egui::Event::Ime(egui::ImeEvent::Preedit {
+						text: "composition".into(),
+						active_range_chars: None,
+					})]
+				)
+				.is_empty()
+			);
+			assert!(view.ime_active);
+			assert!(
+				edit_frame(
+					&ctx,
+					&mut view,
+					&mut state,
+					vec![egui::Event::Ime(finish), edit_key(egui::Key::Enter)]
+				)
+				.is_empty()
+			);
+			assert!(!view.ime_active);
+			assert!(matches!(
+				edit_frame(
+					&ctx,
+					&mut view,
+					&mut state,
+					vec![
+						egui::Event::Ime(egui::ImeEvent::Preedit {
+							text: String::new(),
+							active_range_chars: None,
+						}),
+						edit_key(egui::Key::Enter)
+					]
+				)
+				.as_slice(),
+				[Command::Send { .. }]
+			));
 		}
 	}
 

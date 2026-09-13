@@ -436,6 +436,16 @@ are outside this slice. Synthetic parser, localhost transport and reducer/UI gua
 not establish live compatibility. Native automation remains paused after owner Escape stops;
 no live account action, microphone capture or new native screenshot was performed.
 
+## Composer IME shortcuts
+
+Empty IME preedit/commit updates while idle do not block Enter-to-send or the
+composer's ArrowUp edit shortcut. The pinned egui-winit integration documents
+repeated empty preedits on Linux/Wayland with Fcitx. Active composition, text
+commits and composition dismissal still guard shortcuts for that frame;
+Shift+Enter continues to insert a newline. The shared composer applies this to
+new messages and inline edits. Synthetic event tests cover these transitions;
+native Ubuntu input-method interoperability remains unverified.
+
 ## Composer and notifications — September 10, 2026
 
 See notifications for service badge/read-state reconciliation, focused
