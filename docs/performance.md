@@ -25,3 +25,20 @@ The encoded assets total 106,608 bytes. Source decoding and sample-rate conversi
 run outside UI/audio callbacks; the callback copies prepared samples and tracks
 the final device playback timestamp. Memory ceilings are documented in
 [storage-policy.md](storage-policy.md).
+
+## Composer IME shortcut fix — September 13, 2026
+
+Windows x64, Rust 1.98.1, `cargo xtask package` including voice, without demo or
+developer features. Baseline `baec1df`; corrected runtime `e10629c`. Both packages
+built successfully with the same OpenH264 LNK4255 debug-info linker warning.
+
+| Measurement | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Executable bytes | 69,655,040 | 69,650,944 | -4,096 |
+| Sum of files under dist, bytes | 142,928,042 | 142,924,500 | -3,542 |
+| PowerShell Compress-Archive dist/*, bytes | 82,711,371 | 82,712,592 | +1,221 |
+
+One package/archive per revision; archive sizes are observations, not a speed
+comparison. No native UI frame-time, CPU or RAM measurements were available:
+native CUA APIs were disabled and the Orca CLI was unavailable. Synthetic event
+regressions verify behavior, not native Ubuntu input-method interoperability.
