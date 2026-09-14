@@ -262,6 +262,7 @@ For full details, review the [Storage Policy](docs/storage-policy.md) and [Threa
 
 ## Documentation
 
+- [Plugin and Theme Creator Wiki](https://github.com/ViceVerse-cz/Serein/wiki)
 - [Architecture & Monorepo Design](docs/architecture.md)
 - [Discord Compatibility & Protocol Details](docs/discord-compatibility.md)
 - [Authentication & Login Handoff](docs/authentication.md)
