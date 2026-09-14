@@ -35,6 +35,16 @@ pub enum LoginTermination {
 }
 
 /// Allowlisted, session-only facts. Never store page text, URLs or credentials here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoginNavigationBlock {
+	AboutBlank,
+	InlineData,
+	Blob,
+	OtherDestination,
+	ResponsePolicy,
+	OtherPolicy,
+}
+
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LoginDiagnostics {
 	pub elapsed_seconds: u16,
@@ -45,7 +55,11 @@ pub struct LoginDiagnostics {
 	pub qr_responses: u16,
 	pub qr_last_status: u16,
 	pub qr_network_failures: u16,
+	pub qr_error_reports: u16,
+	pub qr_error_status: u16,
+	pub qr_error_code: Option<u32>,
 	pub blocked_navigations: u16,
+	pub blocked_last: Option<LoginNavigationBlock>,
 	pub storage_allowed: u16,
 	pub storage_denied: u16,
 	pub candidate_accepted: bool,
@@ -68,7 +82,7 @@ impl LoginDiagnostics {
 			"native"
 		};
 		format!(
-			"Serein login diagnostics v2\napp_version={}\nos={}\ndisplay={}\nwebkit={:?}\ngtk={:?}\nelapsed_seconds={}\nbridge_wakes={}\nquery_attempts={}\nquery_errors={}\nqr_requests={}\nqr_responses={}\nqr_last_status={}\nqr_network_failures={}\nblocked_navigations={}\nstorage_allowed={}\nstorage_denied={}\ncandidate_accepted={}\ntermination={:?}\n",
+			"Serein login diagnostics v3\napp_version={}\nos={}\ndisplay={}\nwebkit={:?}\ngtk={:?}\nelapsed_seconds={}\nbridge_wakes={}\nquery_attempts={}\nquery_errors={}\nqr_requests={}\nqr_responses={}\nqr_last_status={}\nqr_network_failures={}\nqr_error_reports={}\nqr_error_status={}\nqr_error_code={:?}\nblocked_navigations={}\nblocked_last={:?}\nstorage_allowed={}\nstorage_denied={}\ncandidate_accepted={}\ntermination={:?}\n",
 			env!("CARGO_PKG_VERSION"),
 			std::env::consts::OS,
 			display,
@@ -82,7 +96,11 @@ impl LoginDiagnostics {
 			self.qr_responses,
 			self.qr_last_status,
 			self.qr_network_failures,
+			self.qr_error_reports,
+			self.qr_error_status,
+			self.qr_error_code,
 			self.blocked_navigations,
+			self.blocked_last,
 			self.storage_allowed,
 			self.storage_denied,
 			self.candidate_accepted,
@@ -238,7 +256,11 @@ mod tests {
 			qr_responses: u16::MAX,
 			qr_last_status: u16::MAX,
 			qr_network_failures: u16::MAX,
+			qr_error_reports: u16::MAX,
+			qr_error_status: u16::MAX,
+			qr_error_code: Some(u32::MAX),
 			blocked_navigations: u16::MAX,
+			blocked_last: Some(LoginNavigationBlock::OtherDestination),
 			storage_allowed: u16::MAX,
 			storage_denied: u16::MAX,
 			candidate_accepted: true,
@@ -248,8 +270,8 @@ mod tests {
 		}
 		.summary();
 		assert!(report.len() < 4096);
-		assert_eq!(report.lines().count(), 19);
-		assert!(report.starts_with("Serein login diagnostics v2\n"));
+		assert_eq!(report.lines().count(), 23);
+		assert!(report.starts_with("Serein login diagnostics v3\n"));
 		for field in [
 			"qr_requests",
 			"qr_responses",

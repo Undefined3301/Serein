@@ -219,3 +219,4 @@ for (const invalidate of ['expiry', 'origin', 'frame', 'pagehide']) {
   assert.equal(messages.length, 0);
 }
 console.log('Authentication handoff: request preservation, observer/bridge failures, repeatable bounded Linux slot, optional wakes, origin/frame/expiry/navigation checks passed (synthetic only).');
+require('./login-qr-diagnostics.cjs');

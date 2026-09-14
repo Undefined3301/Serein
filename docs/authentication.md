@@ -75,6 +75,21 @@ not trusted authentication signals. A 400 does not establish a CAPTCHA rejection
 zero storage requests does not prove cookies work. These counters do not change
 cookie, navigation, permission, TLS or challenge policy.
 
+Diagnostics v3 adds `qr_error_status` and `qr_error_code` as a paired observation,
+plus `blocked_last`: AboutBlank, InlineData, Blob, OtherDestination, ResponsePolicy
+or OtherPolicy. No denied URI is retained. The code observer only inspects 400-599
+responses from the exact QR route in the top Discord frame, up to 64 attempts per document.
+Fetch uses one clone reader with a 4096-byte accumulator and five-second deadline;
+an oversized engine chunk is rejected, not accumulated. XHR inspects only text
+responses of at most 4096 UTF-16 code units; the browser still owns the original
+response buffer. Successful response bodies and request headers/bodies are untouched.
+Only the JSON object's numeric `code` (0-999999999) and HTTP status cross to Rust;
+response text is transient, never copied into the report, persisted or logged.
+Native validation caps reports at 64 and discards late/cancelled results. These
+page-supplied numbers are untrusted diagnostic hints, never authentication signals.
+`None` means no eligible numeric code was observed, not a successful exchange.
+The paired error status may differ from the later native `qr_last_status`.
+
 Issue #173 reports Arch/Wayland build `ee8c246` (`1.0.0-nightly.20260914.16`), which predates
 the login-media protection on main. The handoff retry and cancellation defects are separately
 reproducible with synthetic tests; this does not establish which failure occurred on that machine.

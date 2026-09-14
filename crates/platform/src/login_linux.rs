@@ -1,7 +1,7 @@
 //! A separate ephemeral GTK4/WebKit6 window for owner-operated Discord login.
 use super::{
-	Failure, LoginDiagnostics, LoginTermination, SessionSecret, captcha::hcaptcha_origin,
-	discord_origin,
+	Failure, LoginDiagnostics, LoginNavigationBlock, LoginTermination, SessionSecret,
+	captcha::hcaptcha_origin, discord_origin,
 };
 use std::{
 	cell::{Cell, RefCell},
@@ -14,6 +14,7 @@ use webkit6::{gio, glib, prelude::*};
 const LIFETIME: Duration = Duration::from_secs(600);
 const QUERY_INTERVAL: Duration = Duration::from_millis(100);
 const HANDLER: &str = "sereinLogin";
+const QR_HANDLER: &str = "sereinQrDiagnostics";
 
 struct Handoff {
 	opened: Instant,
@@ -29,6 +30,27 @@ struct Handoff {
 }
 
 impl Handoff {
+	fn qr_error(&self, packed: f64) {
+		if !packed.is_finite()
+			|| packed.fract() != 0.0
+			|| !(400.0..=999_999_999_599.0).contains(&packed)
+		{
+			return;
+		}
+		let packed = packed as u64;
+		let status = (packed % 1000) as u16;
+		if !(400..=599).contains(&status) {
+			return;
+		}
+		self.record(|d| {
+			if d.qr_error_reports < 64 {
+				d.qr_error_reports += 1;
+				d.qr_error_status = status;
+				d.qr_error_code = Some((packed / 1000) as u32);
+			}
+		});
+	}
+
 	fn record(&self, update: impl FnOnce(&mut LoginDiagnostics)) {
 		if self.active() {
 			let mut diagnostics = self.diagnostics.get();
@@ -190,6 +212,7 @@ impl LoginView {
 			.collect::<String>()
 			+ ":";
 		let script = [
+			include_str!("login-qr-diagnostics.js"),
 			include_str!("login-linux-bridge.js"),
 			include_str!("login-handoff.js"),
 		]
@@ -320,6 +343,19 @@ impl LoginView {
 		if !manager.register_script_message_handler(HANDLER, None) {
 			return Err(Failure::ProtocolAt("Linux login bridge unavailable"));
 		}
+		let qr_state = Rc::downgrade(&state);
+		let qr_view = view.downgrade();
+		manager.connect_script_message_received(Some(QR_HANDLER), move |_, value| {
+			let (Some(state), Some(view)) = (qr_state.upgrade(), qr_view.upgrade()) else {
+				return;
+			};
+			// Numeric diagnostic hints only. Never accept credentials through this handler.
+			if value.is_number() && view.uri().is_some_and(|uri| discord_origin(&uri)) {
+				state.qr_error(value.to_double());
+			}
+		});
+		// Optional diagnostics must never prevent the authentication window opening.
+		let _ = manager.register_script_message_handler(QR_HANDLER, None);
 		let policy_state = Rc::downgrade(&state);
 		view.connect_decide_policy(move |_, decision, kind| {
 			let allowed = match kind {
@@ -346,9 +382,22 @@ impl LoginView {
 			if allowed {
 				decision.use_();
 			} else {
+				let blocked = match kind {
+					webkit6::PolicyDecisionType::NavigationAction => decision
+						.downcast_ref::<webkit6::NavigationPolicyDecision>()
+						.and_then(|d| d.navigation_action())
+						.and_then(|a| a.request())
+						.and_then(|r| r.uri())
+						.map_or(LoginNavigationBlock::OtherDestination, |uri| {
+							blocked_destination(&uri)
+						}),
+					webkit6::PolicyDecisionType::Response => LoginNavigationBlock::ResponsePolicy,
+					_ => LoginNavigationBlock::OtherPolicy,
+				};
 				if let Some(state) = policy_state.upgrade() {
 					state.record(|d| {
-						d.blocked_navigations = d.blocked_navigations.saturating_add(1)
+						d.blocked_navigations = d.blocked_navigations.saturating_add(1);
+						d.blocked_last = Some(blocked);
 					});
 				}
 				decision.ignore();
@@ -544,6 +593,8 @@ impl Drop for LoginView {
 		self.cancel.cancel();
 		self.manager
 			.unregister_script_message_handler(HANDLER, None);
+		self.manager
+			.unregister_script_message_handler(QR_HANDLER, None);
 		self.manager.remove_all_scripts();
 		self.view.stop_loading();
 		self.view.terminate_web_process();
@@ -576,12 +627,40 @@ fn qr_exchange_uri(value: &str) -> bool {
 		&& route == "users/@me/remote-auth/login"
 }
 
+fn blocked_destination(uri: &str) -> LoginNavigationBlock {
+	if uri == "about:blank" || uri.starts_with("about:blank#") || uri == "about:srcdoc" {
+		LoginNavigationBlock::AboutBlank
+	} else if uri.starts_with("data:") {
+		LoginNavigationBlock::InlineData
+	} else if uri.starts_with("blob:") {
+		LoginNavigationBlock::Blob
+	} else {
+		LoginNavigationBlock::OtherDestination
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
 
 	#[test]
 	fn qr_diagnostics_scope_and_cancellation() {
+		assert_eq!(
+			blocked_destination("about:blank"),
+			LoginNavigationBlock::AboutBlank
+		);
+		assert_eq!(
+			blocked_destination("data:text/html,synthetic"),
+			LoginNavigationBlock::InlineData
+		);
+		assert_eq!(
+			blocked_destination("blob:https://discord.com/synthetic"),
+			LoginNavigationBlock::Blob
+		);
+		assert_eq!(
+			blocked_destination("https://other.test/private"),
+			LoginNavigationBlock::OtherDestination
+		);
 		assert!(qr_exchange_uri(
 			"https://discord.com/api/v9/users/@me/remote-auth/login"
 		));
@@ -603,9 +682,29 @@ mod tests {
 			"x".repeat(2048)
 		)));
 		let state = Handoff::new("synthetic".into());
+		for invalid in [
+			f64::NAN,
+			f64::INFINITY,
+			-1.0,
+			400.5,
+			200.0,
+			1000.0,
+			1_000_000_000_404.0,
+		] {
+			state.qr_error(invalid);
+		}
+		assert_eq!(state.diagnostics.get().qr_error_code, None);
+		for _ in 0..100 {
+			state.qr_error(12_345_404.0);
+		}
+		assert_eq!(state.diagnostics.get().qr_error_reports, 64);
+		assert_eq!(state.diagnostics.get().qr_error_code, Some(12345));
+		assert_eq!(state.diagnostics.get().qr_error_status, 404);
 		state.record(|d| d.qr_last_status = 400);
 		assert_eq!(state.diagnostics.get().qr_last_status, 400);
 		state.stop(LoginTermination::Cancelled);
+		state.qr_error(678_403.0);
+		assert_eq!(state.diagnostics.get().qr_error_code, Some(12345));
 		state.record(|d| d.qr_last_status = 200);
 		assert_eq!(state.diagnostics.get().qr_last_status, 400);
 	}
@@ -831,6 +930,12 @@ mod tests {
 	#[ignore = "requires an explicitly selected Linux GTK/WebKit desktop; synthetic and offline"]
 	fn native_login_webkit_retry_and_lifecycle() {
 		let mut login = native_fixture();
+		native_assert_script(
+			&login.view,
+			"(() => { window.webkit.messageHandlers.sereinQrDiagnostics.postMessage(12345404); return true; })()",
+		);
+		native_until(|| login.diagnostics().qr_error_code == Some(12345));
+		assert_eq!(login.diagnostics().qr_error_status, 404);
 		// Remove the native wake receiver: the protected candidate must still survive.
 		login
 			.manager
