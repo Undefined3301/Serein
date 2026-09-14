@@ -578,6 +578,13 @@ timer, autostart or new dependency. Minimizing stays in the taskbar; enabling or
 the tray icon does not hide or restore the window. Shell failure restores the window.
 Closing still follows existing application exit gates.
 
+The Linux adapter registers a StatusNotifier item on the existing Tokio runtime,
+with a three-second registration deadline and two-second shutdown wait. It retains
+one bundled 32x32 ARGB icon (4,096 bytes), two fixed menu entries, three atomic event
+bits and one cancellation signal. Dropping the adapter cancels registration or
+unregisters the item; host loss reports unavailable. No account data is sent to the
+tray, and no new settings, logs, polling loop or dedicated thread are introduced.
+
 While local game sharing is enabled, one cancellable account-settings operation reads
 Discord's actual sharing preference. A one-slot request channel permits an explicit
 refresh or enable action; a fixed-size watch result carries completion. Only the

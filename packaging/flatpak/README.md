@@ -31,7 +31,7 @@ Install a newer bundle to update; the in-app Linux updater delegates installatio
 to package management. Runtime updates remain managed by Flatpak.
 
 The sandbox grants network, graphics, Wayland with X11 fallback, audio and
-specific Secret Service/notification D-Bus names. Files are selected through
+specific Secret Service/notification/StatusNotifierWatcher D-Bus names. Files are selected through
 the existing desktop portal; home and session-bus access are not granted.
 Caches/preferences use Flatpak's isolated XDG directories under
 `~/.var/app/org.serein.desktop`; a native installation's data is not imported.

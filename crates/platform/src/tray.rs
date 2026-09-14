@@ -9,7 +9,7 @@ pub enum Event {
 }
 
 pub const fn supported() -> bool {
-	cfg!(target_os = "windows")
+	cfg!(any(target_os = "windows", target_os = "linux"))
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -33,16 +33,22 @@ impl Events {
 #[cfg(target_os = "windows")]
 pub use native::Tray;
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "linux")]
+#[path = "tray/linux.rs"]
+mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::Tray;
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 pub struct Tray;
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 impl Tray {
 	pub fn new(
 		_window: std::sync::Arc<winit::window::Window>,
 		_wake: impl Fn() + 'static,
 	) -> Result<Self, &'static str> {
-		Err("The tray icon is currently available on Windows only.")
+		Err("The tray icon is currently available on Windows and Linux only.")
 	}
 	pub fn take_event(&self) -> Option<Event> {
 		None

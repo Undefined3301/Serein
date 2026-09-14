@@ -68,17 +68,26 @@ provider rejection and missing native webview runtimes fail visibly. macOS/Linux
 live CAPTCHA acceptance remains unverified. Widget
 loading and synthetic checks do not establish live Discord challenge acceptance.
 
-## Opt-in tray icon (September 13, 2026)
+## Opt-in tray icon (September 14, 2026)
 
-Windows General settings offer Show Serein in System Tray, off by default. Minimizing
+Windows and Linux General settings offer Show Serein in System Tray, off by default. Minimizing
 keeps the window in the taskbar, including taskbar clicks and automatic startup. The icon supports
 keyboard/mouse restore and a Show Serein / Quit menu. Quit uses the normal unsaved
 work/download exit checks; the window Close button retains normal exit behavior.
 Disabling removes the tray icon without changing the window's minimized state.
-The adapter uses existing user32/Shell APIs and dependencies, with no background
+The Windows adapter uses existing user32/Shell APIs and dependencies, with no background
 polling. A synthetic native Windows test verifies registration,
-minimize/restore, own-window taskbar recovery, Quit event and cleanup. Linux/macOS have
-an explicitly disabled control; their tray integration is not implemented.
+minimize/restore, own-window taskbar recovery, Quit event and cleanup.
+
+Linux uses `ksni` and the session bus's StatusNotifierWatcher, with the bundled icon
+and the same Show Serein / Quit actions. A compatible desktop tray host is required;
+desktops without one report the tray unavailable and keep normal window behavior.
+If the host exits, toggle the setting off/on after the host returns to retry.
+Wayland compositors may decline application-requested focus. Flatpak permits only
+the additional `org.kde.StatusNotifierWatcher` bus name, not unrestricted session-bus
+access. The protocol can be checked without a desktop or account using
+`dbus-run-session -- cargo run --locked -p tray-debug`; it does not verify panel
+rendering, compositor focus, or sandbox interoperability. macOS remains disabled.
 
 ## Opt-in automatic startup
 

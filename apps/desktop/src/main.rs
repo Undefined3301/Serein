@@ -1469,7 +1469,14 @@ impl Desktop {
 			self.tray = None;
 		} else if self.tray.is_none() {
 			let wake = ctx.clone();
-			match platform::tray::Tray::new(self.window.clone(), move || wake.request_repaint()) {
+			#[cfg(target_os = "linux")]
+			let tray = {
+				let _runtime = self.runtime.enter();
+				platform::tray::Tray::new(move || wake.request_repaint())
+			};
+			#[cfg(not(target_os = "linux"))]
+			let tray = platform::tray::Tray::new(self.window.clone(), move || wake.request_repaint());
+			match tray {
 				Ok(tray) => self.tray = Some(tray),
 				Err(error) => self.tray_error = Some(error),
 			}
@@ -3549,9 +3556,20 @@ impl eframe::App for Desktop {
 					platform::tray::Event::Quit => {
 						ctx.send_viewport_cmd(egui::ViewportCommand::Close)
 					}
-					platform::tray::Event::Show => {}
+					platform::tray::Event::Show => {
+						#[cfg(target_os = "linux")]
+						{
+							ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+							ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+							ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+						}
+					}
 					platform::tray::Event::Unavailable => {
-						self.tray_error = Some("Tray unavailable. The window will stay visible.")
+						self.tray_error = Some(if cfg!(target_os = "linux") {
+							"Tray unavailable. Enable a StatusNotifier host, then toggle this setting off/on."
+						} else {
+							"Tray unavailable. The window will stay visible."
+						});
 					}
 				}
 			}
