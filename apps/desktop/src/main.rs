@@ -104,6 +104,14 @@ fn main() -> eframe::Result {
 		},
 		renderer: eframe::Renderer::Wgpu,
 		wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
+			wgpu_setup: eframe::egui_wgpu::WgpuSetup::CreateNew(
+				eframe::egui_wgpu::WgpuSetupCreateNew {
+					// Prefer the efficient adapter; retain the native diagnostic override.
+					power_preference: eframe::wgpu::PowerPreference::from_env()
+						.unwrap_or(eframe::wgpu::PowerPreference::LowPower),
+					..eframe::egui_wgpu::WgpuSetupCreateNew::without_display_handle()
+				},
+			),
 			// Keep cursor-driven redraws synchronized even where AutoVsync selects FifoRelaxed.
 			surface: eframe::egui_wgpu::SurfaceConfig {
 				present_mode: eframe::wgpu::PresentMode::Fifo,
@@ -865,6 +873,8 @@ impl Desktop {
 					test_support::friends_demo_state()
 				} else if std::env::args().any(|arg| arg == "--demo-system-messages") {
 					test_support::system_demo_state()
+				} else if std::env::args().any(|arg| arg == "--demo-code") {
+					test_support::code_demo_state()
 				} else if std::env::args().any(|arg| arg == "--demo-notifications") {
 					test_support::notification_demo_state()
 				} else if std::env::args().any(|arg| {

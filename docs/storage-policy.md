@@ -1,5 +1,17 @@
 # Local storage policy and audit
 
+## Last-viewed server channels (September 14, 2026)
+
+Server navigation remembers at most 1,024 guild/channel ID pairs in session RAM
+(16 KiB vector payload, plus its fixed header). Updating a visit replaces that
+server's entry; the oldest visit is evicted at capacity. There are no names,
+message contents, timers, disk writes, or schema changes. Logout releases the
+list; it is not restored across application restarts. Reopening a server checks
+current channel membership, supported kind, and view permission before selecting
+its remembered channel, otherwise preferring an accessible ordinary text/forum
+channel. Voice selection only opens its existing preview, never joins a call.
+With no accessible channel, the existing conversation remains intact.
+
 ## Friends-home derived UI caches (September 14, 2026)
 
 Friends Online/All retain one filtered, sorted boxed ID list: at most 4,000 IDs
@@ -276,6 +288,8 @@ GIF/WebP animations retain at most 80 frames with a 160-pixel edge, about 8 MiB 
 Two queued large stills can retain 32 MiB of decoded pixels; active decoding, image
 conversion and framework/driver allocations are additional. Shared textures are bounded
 by 256 entries / 64 MiB, with a separate four-animation / 16 MiB retained-pixel budget.
+Animation texture uploads are spaced at least 34 ms apart (under 30 FPS), with
+source timing preserved by skipping frames; unfocused windows do not advance clips.
 These are component ceilings, not measured whole-process RSS. Disk eviction retains only
 32 candidate paths at a time. Worker completion fences replacement and deletion, so
 logout/clear cannot race an older worker's writes. Picture-cache failures appear in
@@ -756,3 +770,11 @@ names, symlinks and special files are validated before writing to private stagin
 beside the installation. Staging records the app/helper owner and is reused or
 cleaned before another download; backups from interrupted replacements are kept
 for recovery and block another installation instead of being deleted.
+
+Linux AppImages reuse the same 512 MiB streamed download/checksum limit and private
+sibling staging. Their Type 2 ELF header and x86-64 architecture are checked without
+executing the download. The image is not unpacked; restart atomically replaces the
+original AppImage path and retains a hard-linked backup until the replacement
+survives its initial two-second launch check. This detects immediate launch failure,
+not application health or a successful login. Interrupted backups block subsequent
+updates for manual recovery. Native Linux packages remain package-manager managed.

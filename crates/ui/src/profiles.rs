@@ -26,7 +26,7 @@ pub enum Action {
 const WIDTH: f32 = 300.0;
 const PAD: f32 = 12.0;
 const AVATAR: f32 = 80.0;
-const RADIUS: u8 = 8;
+const RADIUS: u8 = 12;
 /// Diameter of the translucent action circles laid over the banner.
 const CIRCLE: f32 = 32.0;
 
@@ -119,7 +119,7 @@ fn friend_circle(ui: &mut egui::Ui, state: &State, user: &User) -> Option<Action
 		None
 	}
 }
-/// Overflow menu behind the three-dots circle: copy, notes, mute, block and friend removal.
+/// Overflow menu behind the three-dots circle: webhook copy, notes, mute, block and friend removal.
 fn more_menu(
 	ui: &mut egui::Ui,
 	state: &State,
@@ -131,28 +131,8 @@ fn more_menu(
 	ui.set_min_width(200.0);
 	ui.spacing_mut().button_padding = vec2(8.0, 6.0);
 	let own_profile = state.user.as_ref().is_some_and(|own| own.id == user.id);
-	if !user.webhook && !own_profile {
-		let message = ui.add_enabled(dm_channel.is_some(), egui::Button::new("Message"));
-		match dm_channel {
-			Some(channel) if message.clicked() => {
-				action = Some(Action::Message(channel));
-				ui.close();
-			}
-			Some(_) => {}
-			None => {
-				message.on_disabled_hover_text("No open direct message with this user.");
-			}
-		}
-		ui.separator();
-	}
-	if ui
-		.button(if user.webhook {
-			"Copy webhook ID"
-		} else {
-			"Copy user ID"
-		})
-		.clicked()
-	{
+	// Message is the card's own footer button, so the menu does not repeat it.
+	if user.webhook && ui.button("Copy webhook ID").clicked() {
 		ui.ctx().copy_text(user.id.to_string());
 		ui.close();
 	}
@@ -495,9 +475,11 @@ impl Theme {
 			// Rounded caps in the end colors, with the flat gradient band between them, so the
 			// corners stay round instead of being squared off by the mesh.
 			shapes.push(egui::Shape::rect_filled(rect, RADIUS, top));
+			// egui clamps corner radii to half the rectangle height. The gradient band
+			// covers this cap's upper half, leaving the full-radius bottom corners.
 			shapes.push(egui::Shape::rect_filled(
 				Rect::from_min_max(
-					pos2(rect.left(), rect.bottom() - radius),
+					pos2(rect.left(), rect.bottom() - 2.0 * radius),
 					rect.right_bottom(),
 				),
 				CornerRadius {
@@ -548,39 +530,6 @@ fn divider(ui: &mut egui::Ui, theme: &Theme) {
 		Stroke::new(1.0, theme.divider),
 	);
 	ui.add_space(4.0);
-}
-/// Display name and glyph for a connection `type`; unknown kinds keep their raw name.
-fn brand(kind: &str) -> (Option<&'static str>, Icon) {
-	match kind.to_ascii_lowercase().as_str() {
-		"github" => (Some("GitHub"), Icon::GitHub),
-		"twitch" => (Some("Twitch"), Icon::Twitch),
-		"steam" => (Some("Steam"), Icon::Steam),
-		"spotify" => (Some("Spotify"), Icon::Spotify),
-		"youtube" => (Some("YouTube"), Icon::YouTube),
-		"twitter" => (Some("X"), Icon::XLogo),
-		"reddit" => (Some("Reddit"), Icon::Reddit),
-		"facebook" => (Some("Facebook"), Icon::Facebook),
-		"instagram" => (Some("Instagram"), Icon::Instagram),
-		"tiktok" => (Some("TikTok"), Icon::TikTok),
-		"paypal" => (Some("PayPal"), Icon::PayPal),
-		"amazon-music" => (Some("Amazon Music"), Icon::Amazon),
-		"bluesky" => (Some("Bluesky"), Icon::Bluesky),
-		"mastodon" => (Some("Mastodon"), Icon::Mastodon),
-		"skype" => (Some("Skype"), Icon::Skype),
-		// Neither icon set ships an Xbox mark (Microsoft brand guidelines); keep the controller.
-		"xbox" => (Some("Xbox"), Icon::GameController),
-		"playstation" => (Some("PlayStation"), Icon::PlayStation),
-		"battlenet" => (Some("Battle.net"), Icon::BattleNet),
-		"epicgames" => (Some("Epic Games"), Icon::EpicGames),
-		"leagueoflegends" => (Some("League of Legends"), Icon::LeagueOfLegends),
-		"riotgames" => (Some("Riot Games"), Icon::RiotGames),
-		"bungie" => (Some("Bungie.net"), Icon::Bungie),
-		"roblox" => (Some("Roblox"), Icon::Roblox),
-		"crunchyroll" => (Some("Crunchyroll"), Icon::Crunchyroll),
-		"domain" => (Some("Domain"), Icon::Globe),
-		"ebay" => (Some("eBay"), Icon::Ebay),
-		_ => (None, Icon::Link),
-	}
 }
 fn creation_date(id: Id) -> Option<String> {
 	let seconds = ((id.0 >> 22) + 1_420_070_400_000) / 1000;
@@ -640,6 +589,8 @@ pub fn show(
 		.show(ui.ctx(), |ui| {
 			ui.set_width(WIDTH);
 			ui.set_max_width(WIDTH);
+			// Area remembers its previous size; let details grow beyond a short prior profile.
+			ui.set_max_height(bounds.height());
 			ui.spacing_mut().item_spacing = vec2(8.0, 4.0);
 			// Cross-label drag selection paints stray highlights in this dense card.
 			ui.style_mut().interaction.selectable_labels = false;
@@ -666,12 +617,8 @@ pub fn show(
 				widgets.active.weak_bg_fill = theme.chip_hover;
 			}
 
-			// Header: banner or accent strip, overlapping avatar with presence, badge pill.
-			let has_banner = data.is_some_and(|d| d.banner_key().is_some());
-			let (banner, _) = ui.allocate_exact_size(
-				vec2(WIDTH, if has_banner { 105.0 } else { 60.0 }),
-				egui::Sense::hover(),
-			);
+			// Header: banner, overlapping avatar with presence, badge pill.
+			let (banner, _) = ui.allocate_exact_size(vec2(WIDTH, 105.0), egui::Sense::hover());
 			let top_corners = CornerRadius {
 				nw: RADIUS,
 				ne: RADIUS,
@@ -782,15 +729,16 @@ pub fn show(
 				})
 				.show(ui, |ui| {
 					ui.spacing_mut().item_spacing.y = 8.0;
-					let footer = if state.user.as_ref().is_some_and(|own| own.id == user.id) {
-						40.0
-					} else {
-						0.0
-					} + if state.user_action_status().is_some() {
-						24.0
-					} else {
-						0.0
-					};
+					// Reserve space only for footer rows that are actually displayed.
+					let has_action = state.user.as_ref().is_some_and(|own| own.id == user.id)
+						|| dm_channel.is_some()
+						|| user.webhook;
+					let footer = if has_action { 40.0 } else { 0.0 }
+						+ if state.user_action_status().is_some() {
+							24.0
+						} else {
+							0.0
+						};
 					egui::Frame::new()
 						.fill(theme.panel)
 						.corner_radius(RADIUS)
@@ -1042,64 +990,6 @@ pub fn show(
 													);
 												}
 											});
-											if !data.connections.is_empty() {
-												section(ui, &theme, &mut sections, "CONNECTIONS");
-												for connection in &data.connections {
-													let (label, icon) = brand(&connection.kind);
-													let label = label
-														.map_or(connection.kind.as_str(), |l| l);
-													let mut hover = label.to_owned();
-													if connection.verified {
-														hover.push_str(" · Verified");
-													}
-													egui::Frame::new()
-														.fill(theme.chip)
-														.corner_radius(6)
-														.inner_margin(egui::Margin::symmetric(8, 6))
-														.show(ui, |ui| {
-															ui.set_width(ui.available_width());
-															ui.horizontal(|ui| {
-																ui.spacing_mut().item_spacing.x =
-																	8.0;
-																icons::inline(
-																	ui, icon, 18.0, theme.text,
-																);
-																ui.add(
-																	egui::Label::new(
-																		RichText::new(
-																			&connection.name,
-																		)
-																		.size(13.0)
-																		.strong(),
-																	)
-																	.truncate(),
-																);
-																if connection.verified {
-																	icons::inline(
-																		ui,
-																		Icon::Verified,
-																		14.0,
-																		theme.muted,
-																	);
-																}
-																ui.with_layout(
-																	egui::Layout::right_to_left(
-																		egui::Align::Center,
-																	),
-																	|ui| {
-																		ui.label(
-																			RichText::new(label)
-																				.size(12.0)
-																				.color(theme.muted),
-																		);
-																	},
-																);
-															});
-														})
-														.response
-														.on_hover_text(hover);
-												}
-											}
 											if !data.mutual_guilds.is_empty() {
 												ui.add_space(10.0);
 												let names: Vec<String> = data
@@ -1151,9 +1041,9 @@ pub fn show(
 									});
 							}
 						});
-					// Footer: only the own-profile edit action; Message moved into the overflow menu.
-					if state.user.as_ref().is_some_and(|own| own.id == user.id)
-						&& ui
+					// Footer: one full-width primary action when available.
+					if state.user.as_ref().is_some_and(|own| own.id == user.id) {
+						if ui
 							.add_sized(
 								[ui.available_width(), 32.0],
 								egui::Button::new(
@@ -1164,8 +1054,38 @@ pub fn show(
 								.corner_radius(RADIUS),
 							)
 							.clicked()
+						{
+							action = Some(Action::Edit);
+						}
+					} else if let Some(channel) = dm_channel {
+						if ui
+							.add_sized(
+								[ui.available_width(), 32.0],
+								egui::Button::new(
+									RichText::new(format!("Message @{}", user.name))
+										.color(colors.accent_text)
+										.strong(),
+								)
+								.fill(colors.accent)
+								.stroke(Stroke::NONE)
+								.corner_radius(RADIUS),
+							)
+							.clicked()
+						{
+							action = Some(Action::Message(channel));
+						}
+					} else if user.webhook
+						&& ui
+							.add_sized(
+								[ui.available_width(), 32.0],
+								egui::Button::new(
+									RichText::new("Copy webhook ID").size(13.0).strong(),
+								)
+								.corner_radius(RADIUS),
+							)
+							.clicked()
 					{
-						action = Some(Action::Edit);
+						ui.ctx().copy_text(user.id.to_string());
 					}
 					if let Some(status) = state.user_action_status() {
 						ui.add(
@@ -1442,7 +1362,9 @@ mod tests {
 					output.drop_without_applying_deltas();
 				}
 				assert_eq!(painted.contains("Webhook"), webhook);
-				assert!(!painted.contains("Copy"));
+				assert_eq!(painted.contains("Copy webhook ID"), webhook);
+				assert!(!painted.contains("Copy user ID"));
+				// No open DM in this fixture, so non-webhook profiles have no footer action.
 				assert!(!painted.contains("Message"));
 				assert_eq!(painted.contains("Unsupported service response"), !webhook);
 				assert_eq!(painted.contains("Retry profile"), !webhook);
