@@ -25,21 +25,47 @@ availability remains unverified.
 WebKit6 script-message callbacks lack trusted sender-frame metadata. The callback accepts
 only a boolean wake signal. A protected main-frame closure retains one ASCII candidate of at
 most 2113 bytes (65-byte capability plus 2048-byte token). A native main-frame query checks
-origin and result bounds before creating a Rust string; Rust checks URI, capability, lifetime
-and SessionSecret validation again. Linux WebKit also checks the temporary webview's bounded,
-same-origin Discord API requests for an Authorization header, without logging its value.
-Queries are at least 100 ms apart, with one cancellable evaluation and one secret slot. A child
-frame can only request a query of the main frame. The Linux login and verification webviews
-disable HTML media and Web Audio: a machine without a GStreamer audio sink otherwise crashes
-the web process right after login, which surfaces as a distinct "stopped unexpectedly" status.
-The Linux login webview presents the same browser identity as `client_core::fingerprint`;
-WebKitGTK's default "Safari on Linux" user agent made hCaptcha and Discord reject solved
-login challenges.
+origin and result bounds before creating a Rust string; Rust checks URI, capability, lifetime,
+document generation and SessionSecret validation again. Resource-load Authorization observation
+is not used: a request destination and current top-level URI do not prove its initiating frame.
+Queries are at least 100 ms apart, with one cancellable evaluation and one secret slot, whether
+or not a bridge wake arrives. Reads are repeatable until native acceptance and view teardown;
+an evaluation error or null result can retry without losing the candidate. Navigation rejects
+old-document results and clears unconsumed candidates; a fresh committed document can retry.
+Only one candidate can be forwarded to the desktop per login window. A child frame can only
+request a query of the main frame. The shared
+fetch/XHR observer preserves original calls, return values and exceptions; observer failures
+cannot escape into Discord's requests, and a failed bridge delivery does not latch capture.
+
+The existing Linux login and verification settings disable HTML media and Web Audio to avoid
+initializing an unnecessary GStreamer audio path in the login page. They do not change native
+voice or attachment playback. The Linux login user agent remains the existing
+`client_core::fingerprint` identity; neither challenge acceptance nor the reporter's failure
+cause is established by that setting. TLS, device permissions and challenge handling are unchanged.
 
 Close/drop invalidates pending results, clears the secret/scripts/handler, cancels evaluation,
 stops loading, terminates the ephemeral web process and destroys the GTK window. GLib pumping
 checks a 2-ms deadline between at most 16 callbacks; one native callback may exceed that time.
 These are implemented limits, not measured teardown/storage or live login compatibility.
+
+Login exit status distinguishes owner cancellation, the ten-minute lifetime and an unexpectedly
+stopped web process. Explicit cancellation discards even a candidate already queued in the same
+GTK pump; teardown cannot relabel cancellation as a crash. The failure card offers **Copy login
+diagnostics**. Only that click formats/copies a report (under 4 KiB): app/OS/display category,
+available GTK/WebKit versions, elapsed seconds, saturating counters, native-candidate acceptance
+and the exit reason. It contains no token, capability, account identifier, URL, page text or raw
+error. One fixed-size record stays in memory until a new attempt, connection, logout or exit;
+there is no automatic upload, log or credential-store/SQLite write.
+
+Issue #173 reports Arch/Wayland build `ee8c246` (`1.0.0-nightly.20260914.16`), which predates
+the login-media protection on main. The handoff retry and cancellation defects are separately
+reproducible with synthetic tests; this does not establish which failure occurred on that machine.
+The ignored Linux `native_login_webkit_retry_and_lifecycle` test uses inline synthetic HTML,
+not a Discord login. Run it in an isolated network namespace on a GTK/WebKit desktop:
+`cargo test --locked -p platform --features winit/wayland native_login_webkit_retry_and_lifecycle -- --ignored --test-threads=1`.
+For the visible failure fixture use `cargo run --locked -p serein --features demo -- --demo --demo-login-failed`.
+Packaged Arch/Wayland login with owner-controlled credentials and 2FA remains required before
+claiming the report resolved. Do not automate credentials or challenges.
 
 Serein uses Discord’s official login page in a temporary platform webview, not OAuth. The credential handoff is unofficial and live-unverified; see the compatibility matrix. Complete authentication yourself, in the application. Never send passwords, tokens, MFA codes, QR screenshots, or private message contents to the coding agent, issues, logs, or CI.
 

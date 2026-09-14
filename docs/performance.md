@@ -223,3 +223,48 @@ the Orca CLI is not installed. The egui warning-render test is not native visual
 No owner-account or live load test was performed. Account budgets are finite component
 allocation estimates (128 MiB navigation/permission and 64 MiB permission sub-budget),
 not whole-process memory guarantees; decoding and old/new state replacement add peak memory.
+
+## Linux hosted-login handoff - September 14, 2026
+
+Baseline: `810fe3647b82bdd94db043391c57d51da1e02e0a`. After: the isolated
+`fix/linux-login-173` implementation on that same baseline. Windows 11 Home 10.0.26200,
+Ryzen 7 7800X3D, 33,410,678,784 bytes RAM, Rust 1.98.1 x86_64-pc-windows-msvc.
+Both standard release packages used `cargo xtask package`, including voice, without
+demo/developer-session features. Separate worktrees kept separate `dist` directories;
+the shared Cargo target was serialized. No dependency or lockfile change is included.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Executable bytes | 70,472,192 | 70,490,112 | +17,920 (+0.0254%) |
+| Full portable package bytes | 74,535,743 | 74,553,663 | +17,920 (+0.0240%) |
+| ZIP bytes | 42,660,941 | 42,668,058 | +7,117 (+0.0167%) |
+
+One package per revision; matching 186-file lists. Installed size sums all files;
+ZIP uses `Compress-Archive -LiteralPath dist -CompressionLevel Optimal`.
+`makensis` is unavailable, so these are unsigned portable packages, not installers.
+Both release builds passed with the same nonfatal OpenH264 LNK4255 linker warning.
+This Windows package comparison does not measure Linux binary size or WebKit runtime cost.
+
+The Linux handoff now permits one evaluation at a time, at least 100 ms apart, for the
+existing 600-second lifetime. A protected candidate remains readable after failed evaluations;
+navigation/close invalidates old results and only one secret is forwarded to the desktop.
+An occupied pending slot or consumed handoff stops polling. These are enforced limits,
+not a CPU improvement claim. Existing GTK pumping and application repaint timers are unchanged.
+
+The actual GTK/WebKit synthetic test ran on Ubuntu WSLg (GTK 4.22.4, WebKitGTK 2.52.6,
+GStreamer 1.28.2) with an isolated network namespace, inline HTML and deny-all-network CSP.
+It exercises real XHR/fetch observation, a missing wake receiver, repeatable reads,
+an injected evaluation error followed by retry, one-shot consumption, cancellation,
+unexpected process termination and teardown. The final runs passed with normal plugins
+(1.21 s) and empty plugin paths/fresh registry (0.73 s); `autoaudiosink` was independently
+confirmed absent in the latter. These are correctness-test durations, not before/after
+latency samples. The media-enabled synthetic control produced missing-plugin warnings
+but did not crash here; this does not reproduce or establish the reporter's exact cause.
+
+Native before/after sign-in screenshots, idle process/child-process CPU, peak/settled memory,
+startup/handoff latency and p95 frame time remain unmeasured: the Windows Computer Use native
+pipe returned OS error 2 and Orca CLI is absent. The egui copy-button test is not native visual
+evidence. No packaged Arch/physical AMD GPU or owner-controlled Discord login was exercised.
+Full Linux platform tests hit an unchanged MOV decode test with missing H264/AAC decoder
+factories in this WSL environment; focused login tests and Linux platform strict Clippy passed.
+No reducer replay was used because this change does not alter the reducer or caches.

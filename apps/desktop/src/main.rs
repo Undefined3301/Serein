@@ -351,6 +351,7 @@ struct Desktop {
 	extensions: extension_bridge::Bridge,
 	extension_close_pending: bool,
 	login: Option<platform::LoginView>,
+	login_diagnostics: Option<platform::LoginDiagnostics>,
 	captcha: captcha::Captcha,
 	connection: Option<connection::Connection>,
 	state: State,
@@ -1205,11 +1206,27 @@ impl Desktop {
 			state.status = "Offline fixture · screen-share picker opened at startup";
 		}
 		#[cfg(feature = "demo")]
-		if demo && std::env::args().any(|arg| arg == "--demo-login") {
+		if demo
+			&& std::env::args()
+				.any(|arg| matches!(arg.as_str(), "--demo-login" | "--demo-login-failed"))
+		{
 			// Fixture-only: render the sign-in screen without a session.
 			state.user = None;
 			state.status = "Disconnected";
 		}
+		let login_diagnostics = None;
+		#[cfg(feature = "demo")]
+		let login_diagnostics = if demo && std::env::args().any(|arg| arg == "--demo-login-failed") {
+			let reason = platform::LoginTermination::WebProcessStopped;
+			login_ended(&mut state, reason);
+			Some(platform::LoginDiagnostics {
+				elapsed_seconds: 4,
+				termination: Some(reason),
+				..Default::default()
+			})
+		} else {
+			login_diagnostics
+		};
 		#[cfg(feature = "demo")]
 		if demo && std::env::args().any(|arg| arg == "--demo-server-settings") {
 			server_settings_demo::open(&mut state, &mut messaging);
@@ -1218,6 +1235,7 @@ impl Desktop {
 			extensions: extension_bridge::Bridge::default(),
 			extension_close_pending: false,
 			login: None,
+			login_diagnostics,
 			captcha: captcha::Captcha::default(),
 			connection: None,
 			state,
@@ -1315,6 +1333,7 @@ impl Desktop {
 			.disconnect_voice("Discord login session changed; start a new call");
 		self.uploads.cancel();
 		self.login = None;
+		self.login_diagnostics = None;
 		self.connection = None;
 		if let Some(worker) = self.avatars.take() {
 			self.avatar_cleanup = Some(worker.shutdown());
@@ -1365,6 +1384,7 @@ impl Desktop {
 		let was_demo = self.state.demo;
 		self.clear_avatars(ctx);
 		self.login = None;
+		self.login_diagnostics = None;
 		self.connection = None;
 		self.pending_save = None;
 		let old_account = self.state.user.as_ref().filter(|_| !was_demo).map(|u| u.id);
@@ -2737,6 +2757,14 @@ impl Desktop {
 					});
 			});
 	}
+	fn end_login(&mut self, reason: platform::LoginTermination) {
+		if let Some(login) = self.login.take() {
+			let mut diagnostics = login.diagnostics();
+			diagnostics.termination = Some(reason);
+			self.login_diagnostics = Some(diagnostics);
+		}
+		login_ended(&mut self.state, reason);
+	}
 	fn sign_in_card(&mut self, ui: &mut egui::Ui) {
 		let ctx = ui.ctx().clone();
 		let p = ui::design::palette(ui);
@@ -2772,6 +2800,7 @@ impl Desktop {
 					.inner;
 				if button.clicked() {
 					if let Some(store) = &mut self.store { store.cancel_load(); }
+					self.login_diagnostics = None;
 					self.credential_status = "Sign in through Discord; saved-login lookup stopped";
 					let wake = ctx.clone();
 					match platform::LoginView::open(self.window.clone(), move || wake.request_repaint()) {
@@ -2807,6 +2836,9 @@ impl Desktop {
 						if self.cache_error || self.cache_pending > 0 || self.cache_clears.pending() {
 							ui.label(egui::RichText::new(self.cache_status).size(12.0).color(p.muted));
 						}
+						if let Some(diagnostics) = self.login_diagnostics {
+							login_diagnostics_button(ui, diagnostics);
+						}
 					});
 				}
 				#[cfg(feature = "demo")]
@@ -2828,6 +2860,7 @@ impl Desktop {
 					if let Some(store) = &mut self.store { store.cancel_load(); }
 					self.connection = None;
 					self.pending_save = None;
+					self.login_diagnostics = None;
 					let generation = self.state.generation + 1;
 					self.state = test_support::demo_state();
 					self.state.generation = generation;
@@ -3453,15 +3486,8 @@ impl Desktop {
 			login.pump();
 			if let Some(secret) = login.token() {
 				self.connect(secret, true, ctx);
-			} else if login.expired() {
-				let crashed = login.crashed();
-				self.login = None;
-				self.state.auth = AuthState::Challenged;
-				self.state.status = if crashed {
-					"Login window stopped unexpectedly (web process ended); no session accepted"
-				} else {
-					"Login timed out or token handoff unavailable; no session accepted"
-				};
+			} else if let Some(reason) = login.termination_reason() {
+				self.end_login(reason);
 			}
 		}
 		// Network and store workers request repaint only when their outcomes change.
@@ -3891,8 +3917,7 @@ impl eframe::App for Desktop {
 								)
 								.clicked()
 							{
-								self.login = None;
-								self.state.auth = AuthState::Unauthenticated;
+								self.end_login(platform::LoginTermination::Cancelled);
 							}
 						});
 					});
@@ -4181,6 +4206,7 @@ impl eframe::App for Desktop {
 					store.cancel_load();
 				}
 				self.messaging.reconnect_requested = false;
+				self.login_diagnostics = None;
 				let wake = ctx.clone();
 				match platform::LoginView::open(self.window.clone(), move || wake.request_repaint())
 				{
@@ -4349,9 +4375,108 @@ impl eframe::App for Desktop {
 	}
 }
 
+fn login_diagnostics_button(
+	ui: &mut egui::Ui,
+	diagnostics: platform::LoginDiagnostics,
+) -> egui::Response {
+	let response = ui.button("Copy login diagnostics").on_hover_text(
+		"Copies only platform versions, timing, handoff counters and the exit reason. No account data or credentials.",
+	);
+	if response.clicked() {
+		ui.ctx().copy_text(diagnostics.summary());
+	}
+	response
+}
+
+fn login_ended(state: &mut State, reason: platform::LoginTermination) {
+	use platform::LoginTermination;
+	state.auth = if reason == LoginTermination::Cancelled {
+		AuthState::Unauthenticated
+	} else {
+		AuthState::Challenged
+	};
+	state.status = match reason {
+		LoginTermination::Cancelled => "Login cancelled; no session accepted",
+		LoginTermination::TimedOut => "Login timed out after 10 minutes; no session accepted",
+		LoginTermination::WebProcessStopped => {
+			"Login window stopped unexpectedly (web process ended); no session accepted"
+		}
+	};
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[test]
+	fn login_diagnostics_copy_requires_an_explicit_click() {
+		let ctx = egui::Context::default();
+		let diagnostics = platform::LoginDiagnostics {
+			termination: Some(platform::LoginTermination::TimedOut),
+			..Default::default()
+		};
+		let mut rect = egui::Rect::NOTHING;
+		let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+			rect = login_diagnostics_button(ui, diagnostics).rect;
+		});
+		output.textures_delta.clear();
+		assert!(output.platform_output.commands.is_empty());
+		let position = rect.center();
+		let mut output = ctx.run_ui(
+			egui::RawInput {
+				events: vec![
+					egui::Event::PointerMoved(position),
+					egui::Event::PointerButton {
+						pos: position,
+						button: egui::PointerButton::Primary,
+						pressed: true,
+						modifiers: Default::default(),
+					},
+					egui::Event::PointerButton {
+						pos: position,
+						button: egui::PointerButton::Primary,
+						pressed: false,
+						modifiers: Default::default(),
+					},
+				],
+				..Default::default()
+			},
+			|ui| {
+				login_diagnostics_button(ui, diagnostics);
+			},
+		);
+		output.textures_delta.clear();
+		assert_eq!(
+			output.platform_output.commands,
+			vec![egui::OutputCommand::CopyText(diagnostics.summary())]
+		);
+	}
+	#[test]
+	fn login_exit_reasons_do_not_confuse_cancel_with_failure() {
+		use platform::LoginTermination;
+		let mut state = State::default();
+		for (reason, auth, status) in [
+			(
+				LoginTermination::Cancelled,
+				AuthState::Unauthenticated,
+				"Login cancelled; no session accepted",
+			),
+			(
+				LoginTermination::TimedOut,
+				AuthState::Challenged,
+				"Login timed out after 10 minutes; no session accepted",
+			),
+			(
+				LoginTermination::WebProcessStopped,
+				AuthState::Challenged,
+				"Login window stopped unexpectedly (web process ended); no session accepted",
+			),
+		] {
+			login_ended(&mut state, reason);
+			assert_eq!(state.auth, auth);
+			assert_eq!(state.status, status);
+			assert!(state.user.is_none());
+		}
+	}
 	#[test]
 	fn disk_cache_does_not_replace_resident_previews_or_deleted_positions() {
 		for deleted in [false, true] {

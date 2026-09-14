@@ -1,5 +1,8 @@
 //! A separate ephemeral GTK4/WebKit6 window for owner-operated Discord login.
-use super::{Failure, SessionSecret, captcha::hcaptcha_origin, discord_origin};
+use super::{
+	Failure, LoginDiagnostics, LoginTermination, SessionSecret, captcha::hcaptcha_origin,
+	discord_origin,
+};
 use std::{
 	cell::{Cell, RefCell},
 	rc::Rc,
@@ -14,23 +17,100 @@ const HANDLER: &str = "sereinLogin";
 
 struct Handoff {
 	opened: Instant,
-	closed: Cell<bool>,
-	crashed: Cell<bool>,
-	pending: Cell<bool>,
+	termination: Cell<Option<LoginTermination>>,
 	querying: Cell<bool>,
-	delivered: Cell<bool>,
+	consumed: Cell<bool>,
+	document: Cell<u64>,
+	document_ready: Cell<bool>,
 	last_query: Cell<Instant>,
+	diagnostics: Cell<LoginDiagnostics>,
 	token: RefCell<Option<SessionSecret>>,
 	capability: String,
 }
 
 impl Handoff {
+	fn new(capability: String) -> Self {
+		let opened = Instant::now();
+		Self {
+			opened,
+			termination: Cell::new(None),
+			querying: Cell::new(false),
+			consumed: Cell::new(false),
+			document: Cell::new(0),
+			document_ready: Cell::new(false),
+			last_query: Cell::new(opened),
+			diagnostics: Cell::new(LoginDiagnostics::default()),
+			token: RefCell::new(None),
+			capability,
+		}
+	}
+
 	fn active(&self) -> bool {
-		!self.closed.get() && self.opened.elapsed() <= LIFETIME
+		self.termination_reason().is_none()
+	}
+
+	fn termination_reason(&self) -> Option<LoginTermination> {
+		if self.termination.get().is_none() && self.opened.elapsed() > LIFETIME {
+			self.stop(LoginTermination::TimedOut);
+		}
+		self.termination.get()
+	}
+
+	fn begin_query(&self, uri: &str, now: Instant) -> bool {
+		if !self.active()
+			|| !self.document_ready.get()
+			|| self.consumed.get()
+			|| self.token.borrow().is_some()
+			|| self.querying.get()
+			|| now.saturating_duration_since(self.last_query.get()) < QUERY_INTERVAL
+			|| !discord_origin(uri)
+		{
+			return false;
+		}
+		self.querying.set(true);
+		self.last_query.set(now);
+		let mut diagnostics = self.diagnostics.get();
+		diagnostics.query_attempts = diagnostics.query_attempts.saturating_add(1);
+		self.diagnostics.set(diagnostics);
+		true
+	}
+
+	fn navigation_started(&self) {
+		self.document.set(self.document.get().wrapping_add(1));
+		self.document_ready.set(false);
+		self.token.borrow_mut().take();
+	}
+
+	fn finish_query(
+		&self,
+		document: u64,
+		uri: Option<&str>,
+		body: Result<Option<&str>, ()>,
+	) -> bool {
+		self.querying.set(false);
+		if body.is_err() {
+			let mut diagnostics = self.diagnostics.get();
+			diagnostics.query_errors = diagnostics.query_errors.saturating_add(1);
+			self.diagnostics.set(diagnostics);
+		}
+		if document != self.document.get() {
+			return false;
+		}
+		if let (Some(uri), Ok(Some(body))) = (uri, body) {
+			self.accept(uri, body)
+		} else {
+			false
+		}
 	}
 
 	fn accept(&self, uri: &str, body: &str) -> bool {
-		if !self.active() || self.delivered.get() || !discord_origin(uri) || body.len() > 2113 {
+		if !self.active()
+			|| !self.document_ready.get()
+			|| self.consumed.get()
+			|| self.token.borrow().is_some()
+			|| !discord_origin(uri)
+			|| body.len() > 2113
+		{
 			return false;
 		}
 		let Some(value) = body.strip_prefix(&self.capability) else {
@@ -40,22 +120,31 @@ impl Handoff {
 			return false;
 		};
 		self.token.replace(Some(secret));
-		self.delivered.set(true);
-		self.pending.set(false);
+		let mut diagnostics = self.diagnostics.get();
+		diagnostics.candidate_accepted = true;
+		self.diagnostics.set(diagnostics);
 		true
 	}
 
-	fn accept_authorization(&self, uri: &str, value: &str) -> bool {
-		if value.len() > 2048 {
-			return false;
+	fn take_token(&self) -> Option<SessionSecret> {
+		if !self.active() || !self.document_ready.get() || self.consumed.get() {
+			return None;
 		}
-		let body = zeroize::Zeroizing::new(format!("{}{}", self.capability, value));
-		self.accept(uri, &body)
+		let token = self.token.borrow_mut().take();
+		if token.is_some() {
+			// Captures can be invalidated by navigation; only forwarding to Desktop is
+			// irreversible. Never permit a second handoff in this login window.
+			self.consumed.set(true);
+		}
+		token
 	}
 
-	fn close(&self) {
-		self.closed.set(true);
-		self.pending.set(false);
+	fn stop(&self, reason: LoginTermination) {
+		// An explicit cancellation always discards a candidate, including one accepted
+		// earlier in this GTK pump. Our own process teardown cannot turn it into a crash.
+		if reason == LoginTermination::Cancelled || self.termination.get().is_none() {
+			self.termination.set(Some(reason));
+		}
 		self.token.borrow_mut().take();
 	}
 }
@@ -66,7 +155,7 @@ pub struct LoginView {
 	manager: webkit6::UserContentManager,
 	state: Rc<Handoff>,
 	cancel: gio::Cancellable,
-	take_script: String,
+	peek_script: String,
 	wake: Arc<dyn Fn() + Send + Sync>,
 }
 
@@ -75,6 +164,15 @@ impl LoginView {
 		parent: Arc<winit::window::Window>,
 		wake: impl Fn() + Send + Sync + 'static,
 	) -> Result<Self, Failure> {
+		let login = Self::create(wake)?;
+		// GTK owns its standalone window; no foreign winit/raw-handle embedding.
+		let _ = parent;
+		login.view.load_uri("https://discord.com/login");
+		login.window.present();
+		Ok(login)
+	}
+
+	fn create(wake: impl Fn() + Send + Sync + 'static) -> Result<Self, Failure> {
 		gtk4::init().map_err(|_| Failure::ProtocolAt("Linux login window unavailable"))?;
 		let mut random = [0_u8; 32];
 		getrandom::fill(&mut random).map_err(|_| Failure::Protocol)?;
@@ -91,22 +189,11 @@ impl LoginView {
 		.replace("__SEREIN_LOGIN_CAPABILITY__", &capability);
 		// evaluate_javascript runs in the main frame. Restrict its result before it
 		// crosses into Rust: arbitrary child-frame IPC never supplies a token body.
-		let take_script = format!(
-			"(() => {{ if (window !== window.top || location.origin !== 'https://discord.com') return null; const take = window['__serein_login_take_{}']; if (typeof take !== 'function') return null; const value = take(); return typeof value === 'string' && value.length <= 2113 && /^[\\x21-\\x7e]+$/.test(value) ? value : null; }})()",
+		let peek_script = format!(
+			"(() => {{ if (window !== window.top || location.origin !== 'https://discord.com') return null; const peek = window['__serein_login_peek_{}']; if (typeof peek !== 'function') return null; const value = peek(); return typeof value === 'string' && value.length <= 2113 && /^[\\x21-\\x7e]+$/.test(value) ? value : null; }})()",
 			capability.trim_end_matches(':')
 		);
-		let opened = Instant::now();
-		let state = Rc::new(Handoff {
-			opened,
-			closed: Cell::new(false),
-			crashed: Cell::new(false),
-			pending: Cell::new(false),
-			querying: Cell::new(false),
-			delivered: Cell::new(false),
-			last_query: Cell::new(opened),
-			token: RefCell::new(None),
-			capability,
-		});
+		let state = Rc::new(Handoff::new(capability));
 		let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(wake);
 		let cancel = gio::Cancellable::new();
 		let session = webkit6::NetworkSession::new_ephemeral();
@@ -114,9 +201,8 @@ impl LoginView {
 		session.set_tls_errors_policy(webkit6::TLSErrorsPolicy::Fail);
 		session.connect_download_started(|_, download| download.cancel());
 		let settings = webkit6::Settings::new();
-		// WebKitGTK's default identity is "Safari on Linux", which no real browser presents;
-		// hCaptcha and Discord score it as automation and reject the solved login. Present the
-		// same browser identity as the REST client that will use the session afterwards.
+		// Retain the existing REST-client browser identity. This does not establish
+		// hosted-login or challenge compatibility.
 		settings.set_user_agent(Some(&client_core::fingerprint::user_agent()));
 		settings.set_enable_developer_extras(false);
 		settings.set_enable_write_console_messages_to_stdout(false);
@@ -128,8 +214,8 @@ impl LoginView {
 		settings.set_javascript_can_access_clipboard(false);
 		settings.set_enable_media_stream(false);
 		settings.set_enable_webrtc(false);
-		// The login page needs no audio/video. A missing GStreamer sink (autoaudiosink)
-		// otherwise crashes the web process as soon as Discord's app initialises audio.
+		// Login needs no audio/video. Avoid unnecessary GStreamer initialization on
+		// machines without optional audio sinks; native voice/playback is unaffected.
 		settings.set_enable_media(false);
 		settings.set_enable_webaudio(false);
 		let manager = webkit6::UserContentManager::new();
@@ -147,31 +233,18 @@ impl LoginView {
 			.build();
 		view.set_hexpand(true);
 		view.set_vexpand(true);
-		let resource_state = Rc::downgrade(&state);
-		let resource_view = view.downgrade();
-		let resource_notify = wake.clone();
-		view.connect_resource_load_started(move |_, _, request| {
-			let (Some(state), Some(view)) = (resource_state.upgrade(), resource_view.upgrade())
-			else {
-				return;
-			};
-			let Some(uri) = request.uri() else { return };
-			if !discord_api_uri(&uri) || !view.uri().is_some_and(|uri| discord_origin(&uri)) {
-				return;
-			}
-			let Some(headers) = request.http_headers() else {
-				return;
-			};
-			let Some(value) = headers.one("authorization") else {
-				return;
-			};
-			if value.len() > 2113 {
-				return;
-			}
-			if state.accept_authorization(&uri, &value) {
-				resource_notify();
+		let navigation_state = Rc::downgrade(&state);
+		view.connect_load_changed(move |_, event| {
+			if let Some(state) = navigation_state.upgrade() {
+				match event {
+					webkit6::LoadEvent::Started => state.navigation_started(),
+					webkit6::LoadEvent::Committed => state.document_ready.set(true),
+					_ => {}
+				}
 			}
 		});
+		// Resource-load signals do not identify the initiating frame. Only the bounded
+		// main-frame evaluation below can supply a token body; IPC carries a wake bit.
 		let weak_state = Rc::downgrade(&state);
 		let weak_view = view.downgrade();
 		let notify = wake.clone();
@@ -180,13 +253,19 @@ impl LoginView {
 				return;
 			};
 			if state.active()
-				&& !state.delivered.get()
+				&& !state.consumed.get()
+				&& state.token.borrow().is_none()
 				&& value.is_boolean()
 				&& value.to_boolean()
 				&& view.uri().is_some_and(|uri| discord_origin(&uri))
-				&& !state.pending.replace(true)
 			{
-				notify();
+				let mut diagnostics = state.diagnostics.get();
+				diagnostics.bridge_wakes = diagnostics.bridge_wakes.saturating_add(1);
+				state.diagnostics.set(diagnostics);
+				// Wake is only a hint: polling is bounded independently of frame IPC.
+				if diagnostics.bridge_wakes == 1 {
+					notify();
+				}
 			}
 		});
 		if !manager.register_script_message_handler(HANDLER, None) {
@@ -275,7 +354,7 @@ impl LoginView {
 		let notify = wake.clone();
 		window.connect_close_request(move |_| {
 			if let Some(state) = weak_state.upgrade() {
-				state.close();
+				state.stop(LoginTermination::Cancelled);
 			}
 			close_cancel.cancel();
 			if let Some(view) = weak_view.upgrade() {
@@ -289,32 +368,23 @@ impl LoginView {
 		let notify = wake.clone();
 		view.connect_web_process_terminated(move |_, _| {
 			if let Some(state) = weak_state.upgrade() {
-				state.crashed.set(true);
-				state.close();
+				state.stop(LoginTermination::WebProcessStopped);
 			}
 			notify();
 		});
-		// GTK owns its standalone window; no foreign winit/raw-handle embedding.
-		let _ = parent;
-		view.load_uri("https://discord.com/login");
-		window.present();
 		Ok(Self {
 			view,
 			window,
 			manager,
 			state,
 			cancel,
-			take_script,
+			peek_script,
 			wake,
 		})
 	}
 
 	pub fn token(&self) -> Option<SessionSecret> {
-		if !self.state.active() {
-			self.state.close();
-			return None;
-		}
-		self.state.token.borrow_mut().take()
+		self.state.take_token()
 	}
 
 	pub fn expired(&self) -> bool {
@@ -323,7 +393,29 @@ impl LoginView {
 
 	/// The WebKit web process ended on its own (crash or kill) rather than by timeout or close.
 	pub fn crashed(&self) -> bool {
-		self.state.crashed.get()
+		self.termination_reason() == Some(LoginTermination::WebProcessStopped)
+	}
+
+	pub fn termination_reason(&self) -> Option<LoginTermination> {
+		self.state.termination_reason()
+	}
+
+	pub fn diagnostics(&self) -> LoginDiagnostics {
+		let mut diagnostics = self.state.diagnostics.get();
+		diagnostics.elapsed_seconds =
+			self.state.opened.elapsed().as_secs().min(u16::MAX.into()) as u16;
+		diagnostics.termination = self.termination_reason();
+		diagnostics.webkit_version = Some((
+			webkit6::functions::major_version(),
+			webkit6::functions::minor_version(),
+			webkit6::functions::micro_version(),
+		));
+		diagnostics.gtk_version = Some((
+			gtk4::major_version(),
+			gtk4::minor_version(),
+			gtk4::micro_version(),
+		));
+		diagnostics
 	}
 
 	pub fn resize(&self, _parent: &winit::window::Window) {}
@@ -337,23 +429,21 @@ impl LoginView {
 			}
 			context.iteration(false);
 		}
-		if !self.state.active()
-			|| self.state.delivered.get()
-			|| !self.state.pending.get()
-			|| self.state.querying.get()
-			|| self.state.last_query.get().elapsed() < QUERY_INTERVAL
-			|| !self.view.uri().is_some_and(|uri| discord_origin(&uri))
+		// Query only after the main document commits, without waiting on subresources.
+		// A generation check also rejects results serialized before a later navigation.
+		if !self
+			.view
+			.uri()
+			.is_some_and(|uri| self.state.begin_query(&uri, Instant::now()))
 		{
 			return;
 		}
-		self.state.pending.set(false);
-		self.state.querying.set(true);
-		self.state.last_query.set(Instant::now());
 		let weak_state = Rc::downgrade(&self.state);
 		let weak_view = self.view.downgrade();
 		let notify = self.wake.clone();
+		let document = self.state.document.get();
 		self.view.evaluate_javascript(
-			&self.take_script,
+			&self.peek_script,
 			None,
 			None,
 			Some(&self.cancel),
@@ -361,20 +451,19 @@ impl LoginView {
 				let (Some(state), Some(view)) = (weak_state.upgrade(), weak_view.upgrade()) else {
 					return;
 				};
-				state.querying.set(false);
-				if !state.active() {
-					return;
-				}
-				if let Ok(value) = result
-					&& value.is_string()
-					&& let Some(uri) = view.uri()
-					&& discord_origin(&uri)
-				{
-					let body: zeroize::Zeroizing<String> =
-						zeroize::Zeroizing::new(value.to_str().into());
-					if state.accept(&uri, &body) {
-						notify();
-					}
+				let body = result.map(|value| {
+					value
+						.is_string()
+						.then(|| zeroize::Zeroizing::new(String::from(value.to_str())))
+				});
+				if state.finish_query(
+					document,
+					view.uri().as_deref(),
+					body.as_ref()
+						.map(|body| body.as_ref().map(|body| body.as_str()))
+						.map_err(|_| ()),
+				) {
+					notify();
 				}
 			},
 		);
@@ -383,7 +472,7 @@ impl LoginView {
 
 impl Drop for LoginView {
 	fn drop(&mut self) {
-		self.state.close();
+		self.state.stop(LoginTermination::Cancelled);
 		self.cancel.cancel();
 		self.manager
 			.unregister_script_message_handler(HANDLER, None);
@@ -399,23 +488,6 @@ fn verification_storage_domains(current: Option<&str>, requesting: Option<&str>)
 	current == Some("discord.com")
 		&& requesting
 			.is_some_and(|domain| domain == "hcaptcha.com" || domain.ends_with(".hcaptcha.com"))
-}
-
-fn discord_api_uri(value: &str) -> bool {
-	let Ok(url) = url::Url::parse(value) else {
-		return false;
-	};
-	if !discord_origin(value) {
-		return false;
-	}
-	let mut segments = url.path_segments().into_iter().flatten();
-	segments.next() == Some("api")
-		&& segments.next().is_some_and(|version| {
-			let Some(version) = version.strip_prefix('v') else {
-				return false;
-			};
-			!version.is_empty() && version.bytes().all(|byte| byte.is_ascii_digit())
-		}) && segments.next().is_some()
 }
 
 #[cfg(test)]
@@ -444,40 +516,9 @@ mod tests {
 	}
 
 	#[test]
-	fn discord_api_uri_requires_the_exact_https_api_origin() {
-		for uri in [
-			"https://discord.com/api/v9/users/@me",
-			"https://discord.com/api/v10/science?x=1",
-		] {
-			assert!(discord_api_uri(uri));
-		}
-		for uri in [
-			"https://discord.com/login",
-			"https://discord.com/api/x/endpoint",
-			"https://discord.com/api/vx/endpoint",
-			"https://discord.com/api/v9",
-			"http://discord.com/api/v9/users/@me",
-			"https://discord.com.evil.test/api/v9/users/@me",
-			"https://discord.com:444/api/v9/users/@me",
-		] {
-			assert!(!discord_api_uri(uri));
-		}
-	}
-
-	#[test]
 	fn handoff_is_scoped_bounded_single_use_and_closed_before_late_results() {
-		let opened = Instant::now();
-		let mut state = Handoff {
-			opened,
-			closed: Cell::new(false),
-			crashed: Cell::new(false),
-			pending: Cell::new(false),
-			querying: Cell::new(false),
-			delivered: Cell::new(false),
-			last_query: Cell::new(opened),
-			token: RefCell::new(None),
-			capability: "a".repeat(64) + ":",
-		};
+		let state = Handoff::new("a".repeat(64) + ":");
+		state.document_ready.set(true);
 		let valid = state.capability.clone() + &"T".repeat(2048);
 		assert_eq!(valid.len(), 2113);
 		assert!(!state.accept("https://evil.test/", &valid));
@@ -490,27 +531,272 @@ mod tests {
 			"https://discord.com/login",
 			&(state.capability.clone() + "invalid token value")
 		));
-		assert!(
-			state.accept_authorization("https://discord.com/api/v9/users/@me", &"T".repeat(2048))
-		);
-		assert_eq!(state.token.borrow().as_ref().unwrap().expose().len(), 2048);
-		state.token.borrow_mut().take();
-		state.delivered.set(false);
-		assert!(state.token.borrow().is_none());
 		assert!(state.accept("https://discord.com/login", &valid));
 		assert_eq!(state.token.borrow().as_ref().unwrap().expose().len(), 2048);
-		state.token.borrow_mut().take();
+		assert!(state.take_token().is_some());
+		assert!(state.take_token().is_none());
 		assert!(!state.accept("https://discord.com/login", &valid));
-		state.delivered.set(false);
-		state.opened = opened - LIFETIME - Duration::from_secs(1);
-		assert!(!state.accept("https://discord.com/login", &valid));
-		state.opened = opened;
-		assert!(state.accept("https://discord.com/login", &valid));
 		state.querying.set(true);
-		state.pending.set(true);
-		state.close();
+		state.stop(LoginTermination::Cancelled);
 		assert!(state.token.borrow().is_none());
-		assert!(!state.pending.get());
-		assert!(!state.accept("https://discord.com/login", &valid));
+		assert!(!state.finish_query(0, Some("https://discord.com/login"), Ok(Some(&valid))));
+		assert!(!state.querying.get());
+	}
+
+	#[test]
+	fn handoff_queries_retry_without_wakes_and_stay_bounded() {
+		let state = Handoff::new("a".repeat(64) + ":");
+		state.document_ready.set(true);
+		let uri = "https://discord.com/login";
+		let now = state.last_query.get();
+		assert!(!state.begin_query(uri, now));
+		assert!(!state.begin_query("https://evil.test/", now + QUERY_INTERVAL));
+		assert!(state.begin_query(uri, now + QUERY_INTERVAL));
+		assert!(!state.begin_query(uri, now + QUERY_INTERVAL * 2));
+		assert!(!state.finish_query(0, Some(uri), Err(())));
+		assert!(!state.begin_query(uri, now + QUERY_INTERVAL + Duration::from_millis(99)));
+		assert!(state.begin_query(uri, now + QUERY_INTERVAL * 2));
+		assert!(!state.finish_query(0, Some(uri), Ok(None)));
+		assert!(state.begin_query(uri, now + QUERY_INTERVAL * 3));
+		let body = state.capability.clone() + "synthetic-login-candidate";
+		assert!(state.finish_query(0, Some(uri), Ok(Some(&body))));
+		assert!(!state.begin_query(uri, now + QUERY_INTERVAL * 4));
+		let diagnostics = state.diagnostics.get();
+		assert_eq!(diagnostics.bridge_wakes, 0);
+		assert_eq!(diagnostics.query_attempts, 3);
+		assert_eq!(diagnostics.query_errors, 1);
+		assert!(diagnostics.candidate_accepted);
+
+		let state = Handoff::new("b".repeat(64) + ":");
+		state.document_ready.set(true);
+		let mut diagnostics = state.diagnostics.get();
+		diagnostics.query_attempts = u16::MAX;
+		diagnostics.query_errors = u16::MAX;
+		state.diagnostics.set(diagnostics);
+		assert!(state.begin_query(uri, state.last_query.get() + QUERY_INTERVAL));
+		assert!(!state.finish_query(0, Some(uri), Err(())));
+		assert_eq!(state.diagnostics.get().query_attempts, u16::MAX);
+		assert_eq!(state.diagnostics.get().query_errors, u16::MAX);
+	}
+
+	#[test]
+	fn handoff_navigation_rejects_late_results_and_clears_unconsumed_candidates() {
+		let state = Handoff::new("a".repeat(64) + ":");
+		state.document_ready.set(true);
+		assert!(state.take_token().is_none());
+		assert!(!state.consumed.get());
+		let uri = "https://discord.com/login";
+		let now = state.last_query.get();
+		let body = state.capability.clone() + "synthetic-login-candidate";
+		assert!(state.begin_query(uri, now + QUERY_INTERVAL));
+		let document = state.document.get();
+		state.navigation_started();
+		assert!(!state.begin_query(uri, now + QUERY_INTERVAL * 2));
+		assert!(!state.finish_query(document, Some(uri), Ok(Some(&body))));
+		assert!(!state.querying.get());
+		assert!(!state.diagnostics.get().candidate_accepted);
+		assert!(!state.begin_query(uri, now + QUERY_INTERVAL * 2));
+		// Committing the new main document is sufficient; no Finished event is needed.
+		state.document_ready.set(true);
+		assert!(state.begin_query(uri, now + QUERY_INTERVAL * 2));
+		assert!(state.finish_query(state.document.get(), Some(uri), Ok(Some(&body))));
+		assert!(state.token.borrow().is_some());
+		state.navigation_started();
+		assert!(state.token.borrow().is_none());
+		assert!(state.diagnostics.get().candidate_accepted);
+		assert!(!state.begin_query(uri, now + QUERY_INTERVAL * 3));
+		assert!(!state.accept(uri, &body));
+		// The old candidate was never consumed; the fresh committed document may retry.
+		state.document_ready.set(true);
+		assert!(state.begin_query(uri, now + QUERY_INTERVAL * 3));
+		let fresh = state.capability.clone() + "synthetic-fresh-candidate";
+		assert!(state.finish_query(state.document.get(), Some(uri), Ok(Some(&fresh))));
+		assert!(!state.accept(uri, &body));
+		let token = state.take_token().unwrap();
+		assert!(token.expose() == "synthetic-fresh-candidate");
+		assert!(state.take_token().is_none());
+		state.navigation_started();
+		state.document_ready.set(true);
+		assert!(!state.begin_query(uri, now + QUERY_INTERVAL * 4));
+		assert!(!state.accept(uri, &body));
+		assert!(state.take_token().is_none());
+	}
+
+	#[test]
+	fn handoff_cancellation_wins_and_timeout_is_distinct_from_process_stop() {
+		let uri = "https://discord.com/login";
+		for reason in [
+			LoginTermination::Cancelled,
+			LoginTermination::WebProcessStopped,
+		] {
+			let state = Handoff::new("a".repeat(64) + ":");
+			state.document_ready.set(true);
+			let body = state.capability.clone() + "synthetic-login-candidate";
+			assert!(state.accept(uri, &body));
+			state.stop(reason);
+			assert_eq!(state.termination_reason(), Some(reason));
+			assert!(state.token.borrow().is_none());
+			state.stop(LoginTermination::Cancelled);
+			state.stop(LoginTermination::WebProcessStopped);
+			assert_eq!(
+				state.termination_reason(),
+				Some(LoginTermination::Cancelled)
+			);
+			assert!(!state.accept(uri, &body));
+		}
+		let mut state = Handoff::new("a".repeat(64) + ":");
+		state.document_ready.set(true);
+		let body = state.capability.clone() + "synthetic-login-candidate";
+		assert!(state.accept(uri, &body));
+		state.opened -= LIFETIME + Duration::from_secs(1);
+		assert_eq!(state.termination_reason(), Some(LoginTermination::TimedOut));
+		assert!(state.token.borrow().is_none());
+		state.stop(LoginTermination::WebProcessStopped);
+		assert_eq!(state.termination_reason(), Some(LoginTermination::TimedOut));
+		assert!(!state.accept(uri, &body));
+	}
+
+	// This fixture uses WebKit's in-memory HTML loader, not a local HTTP server or
+	// Discord. CSP rejects every network subresource; only synthetic strings enter it.
+	fn native_fixture() -> LoginView {
+		let login = LoginView::create(|| {}).expect("GTK/WebKit login fixture unavailable");
+		login.view.load_html(
+			"<!doctype html><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; connect-src 'none'; form-action 'none'; base-uri 'none'\"><title>Synthetic Serein login test</title>",
+			Some("https://discord.com/login"),
+		);
+		login.window.present();
+		native_until(|| {
+			login.view.uri().is_some_and(|uri| discord_origin(&uri)) && !login.view.is_loading()
+		});
+		login
+	}
+
+	fn native_until(mut ready: impl FnMut() -> bool) {
+		let context = glib::MainContext::default();
+		let started = Instant::now();
+		while !ready() {
+			assert!(
+				started.elapsed() < Duration::from_secs(10),
+				"native login fixture timed out"
+			);
+			for _ in 0..16 {
+				if !context.pending() {
+					break;
+				}
+				context.iteration(false);
+			}
+			std::thread::sleep(Duration::from_millis(5));
+		}
+	}
+
+	fn native_assert_script(view: &webkit6::WebView, script: &str) {
+		let result = Rc::new(Cell::new(None));
+		let reply = result.clone();
+		view.evaluate_javascript(
+			script,
+			None,
+			None,
+			None::<&gio::Cancellable>,
+			move |value| {
+				reply.set(Some(
+					value.is_ok_and(|value| value.is_boolean() && value.to_boolean()),
+				));
+			},
+		);
+		native_until(|| result.get().is_some());
+		assert_eq!(
+			result.get(),
+			Some(true),
+			"synthetic WebKit assertion failed"
+		);
+	}
+
+	#[test]
+	#[ignore = "requires an explicitly selected Linux GTK/WebKit desktop; synthetic and offline"]
+	fn native_login_webkit_retry_and_lifecycle() {
+		let mut login = native_fixture();
+		// Remove the native wake receiver: the protected candidate must still survive.
+		login
+			.manager
+			.unregister_script_message_handler(HANDLER, None);
+		native_assert_script(
+			&login.view,
+			// Real XHR interception, without send(): this cannot start a network request.
+			"(() => { const request = new XMLHttpRequest(); const opened = request.open('GET', 'https://discord.com/api/v9/users/@me'); const header = request.setRequestHeader('Authorization', 'synthetic-login-candidate'); return opened === undefined && header === undefined; })()",
+		);
+		native_assert_script(
+			&login.view,
+			&format!(
+				"(() => {{ const read = () => ({}); const first = read(); return first !== null && first === read(); }})()",
+				login.peek_script,
+			),
+		);
+		let peek = std::mem::replace(
+			&mut login.peek_script,
+			"throw new Error('synthetic evaluation failure')".into(),
+		);
+		native_until(|| {
+			login.pump();
+			login.diagnostics().query_errors > 0
+		});
+		login.peek_script = peek;
+		native_until(|| {
+			login.pump();
+			login.diagnostics().candidate_accepted
+		});
+		assert_eq!(login.diagnostics().bridge_wakes, 0);
+		assert!(login.diagnostics().query_attempts >= 2);
+		assert!(login.state.token.borrow().is_some());
+		login.window.close();
+		native_until(|| login.termination_reason().is_some());
+		assert_eq!(
+			login.termination_reason(),
+			Some(LoginTermination::Cancelled)
+		);
+		assert!(login.token().is_none());
+		assert!(!login.crashed());
+		drop(login);
+
+		let login = native_fixture();
+		native_assert_script(
+			&login.view,
+			// CSP denies this fetch. Observe the real Promise without an unhandled rejection.
+			"(() => { const result = fetch('https://discord.com/api/v9/users/@me', { headers: { Authorization: 'synthetic-login-candidate' } }); result.catch(() => {}); return result instanceof Promise && Promise.resolve(result) === result; })()",
+		);
+		native_until(|| {
+			login.pump();
+			login.state.token.borrow().is_some()
+		});
+		assert!(login.token().is_some());
+		assert!(login.token().is_none());
+		assert!(login.state.consumed.get());
+		assert!(
+			!login
+				.state
+				.begin_query("https://discord.com/login", Instant::now() + QUERY_INTERVAL,)
+		);
+		login.view.terminate_web_process();
+		native_until(|| login.termination_reason().is_some());
+		assert_eq!(
+			login.termination_reason(),
+			Some(LoginTermination::WebProcessStopped)
+		);
+		assert!(login.crashed());
+		assert!(login.token().is_none());
+		drop(login);
+
+		let login = native_fixture();
+		let view = login.view.clone();
+		let stopped = Rc::new(Cell::new(false));
+		let observed = stopped.clone();
+		view.connect_web_process_terminated(move |_, _| observed.set(true));
+		let state = login.state.clone();
+		drop(login);
+		native_until(|| stopped.get());
+		assert_eq!(
+			state.termination_reason(),
+			Some(LoginTermination::Cancelled)
+		);
+		assert!(state.token.borrow().is_none());
 	}
 }

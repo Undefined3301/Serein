@@ -10,6 +10,7 @@ pub mod video;
 use client_core::auth::{Failure, SessionSecret};
 #[cfg(not(target_os = "linux"))]
 use std::{
+	cell::Cell,
 	sync::{
 		Arc,
 		mpsc::{self, Receiver},
@@ -25,6 +26,56 @@ pub use login_linux::LoginView;
 
 /// Logical height of the native header the desktop app draws above the login webview.
 pub const LOGIN_HEADER_HEIGHT: f32 = 56.0;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoginTermination {
+	Cancelled,
+	TimedOut,
+	WebProcessStopped,
+}
+
+/// Allowlisted, session-only facts. Never store page text, URLs or credentials here.
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LoginDiagnostics {
+	pub elapsed_seconds: u16,
+	pub bridge_wakes: u16,
+	pub query_attempts: u16,
+	pub query_errors: u16,
+	pub candidate_accepted: bool,
+	pub termination: Option<LoginTermination>,
+	pub webkit_version: Option<(u32, u32, u32)>,
+	pub gtk_version: Option<(u32, u32, u32)>,
+}
+impl LoginDiagnostics {
+	/// Created only for an explicit copy action; fixed fields keep the report under 4 KiB.
+	pub fn summary(&self) -> String {
+		let display = if cfg!(target_os = "linux") {
+			if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+				"wayland"
+			} else if std::env::var_os("DISPLAY").is_some() {
+				"x11"
+			} else {
+				"unknown"
+			}
+		} else {
+			"native"
+		};
+		format!(
+			"Serein login diagnostics v1\napp_version={}\nos={}\ndisplay={}\nwebkit={:?}\ngtk={:?}\nelapsed_seconds={}\nbridge_wakes={}\nquery_attempts={}\nquery_errors={}\ncandidate_accepted={}\ntermination={:?}\n",
+			env!("CARGO_PKG_VERSION"),
+			std::env::consts::OS,
+			display,
+			self.webkit_version,
+			self.gtk_version,
+			self.elapsed_seconds,
+			self.bridge_wakes,
+			self.query_attempts,
+			self.query_errors,
+			self.candidate_accepted,
+			self.termination,
+		)
+	}
+}
 const SERVICE: &str = "org.serein.desktop";
 const ACCOUNT: &str = "discord-session";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,6 +121,7 @@ pub struct LoginView {
 	view: WebView,
 	tokens: Receiver<SessionSecret>,
 	opened: Instant,
+	accepted: Cell<bool>,
 }
 #[cfg(not(target_os = "linux"))]
 impl LoginView {
@@ -116,16 +168,33 @@ impl LoginView {
 			view,
 			tokens,
 			opened: Instant::now(),
+			accepted: Cell::new(false),
 		})
 	}
 	pub fn token(&self) -> Option<SessionSecret> {
-		self.tokens.try_recv().ok()
+		if self.expired() || self.accepted.get() {
+			return None;
+		}
+		let token = self.tokens.try_recv().ok()?;
+		self.accepted.set(true);
+		Some(token)
 	}
 	pub fn expired(&self) -> bool {
 		self.opened.elapsed() > Duration::from_secs(600)
 	}
 	pub fn crashed(&self) -> bool {
 		false
+	}
+	pub fn termination_reason(&self) -> Option<LoginTermination> {
+		self.expired().then_some(LoginTermination::TimedOut)
+	}
+	pub fn diagnostics(&self) -> LoginDiagnostics {
+		LoginDiagnostics {
+			elapsed_seconds: self.opened.elapsed().as_secs().min(600) as u16,
+			candidate_accepted: self.accepted.get(),
+			termination: self.termination_reason(),
+			..Default::default()
+		}
 	}
 	pub fn resize(&self, parent: &winit::window::Window) {
 		let _ = self.view.set_bounds(bounds(parent));
@@ -144,6 +213,24 @@ fn bounds(parent: &winit::window::Window) -> wry::Rect {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[test]
+	fn login_diagnostics_are_bounded_allowlisted_facts() {
+		let report = LoginDiagnostics {
+			elapsed_seconds: u16::MAX,
+			bridge_wakes: u16::MAX,
+			query_attempts: u16::MAX,
+			query_errors: u16::MAX,
+			candidate_accepted: true,
+			termination: Some(LoginTermination::WebProcessStopped),
+			webkit_version: Some((u32::MAX, u32::MAX, u32::MAX)),
+			gtk_version: Some((u32::MAX, u32::MAX, u32::MAX)),
+		}
+		.summary();
+		assert!(report.len() < 4096);
+		assert_eq!(report.lines().count(), 12);
+		assert!(report.contains("termination=Some(WebProcessStopped)"));
+		assert!(report.lines().all(|line| line.len() < 128));
+	}
 	#[test]
 	fn handoff_accepts_only_our_discord_origin() {
 		assert!(discord_origin("https://discord.com/login"));

@@ -390,6 +390,15 @@ Schema 7 adds one checked integer `message_kind` (0..255) per cached message, wi
 
 ### Opt-in synchronization and compatibility diagnostics
 
+Hosted login retains one fixed-size numeric/enum diagnostic record in session memory. Its
+**Copy login diagnostics** action alone formats a report under 4 KiB and sends it to the OS
+clipboard. Allowlisted fields are app/OS/display category, available GTK/WebKit versions,
+elapsed seconds, saturating wake/query/error counters, candidate-acceptance flag and exit reason.
+No token, capability, URL, account identifier, page content or raw error enters the record.
+New login, successful handoff/connection, logout or exit clears it; no SQLite entry, log file,
+automatic clipboard write or upload is added. Once explicitly copied, clipboard retention is
+managed by the OS/user rather than by Serein. See [authentication](authentication.md).
+
 Voice performance diagnostics (`SEREIN_VOICE_DIAGNOSTICS=1`) are also off by default.
 They retain at most eight fixed-size numeric reports in a worker queue (under 2 KiB),
 plus one report per producer and one being written. One background writer formats

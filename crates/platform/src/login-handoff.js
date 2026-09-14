@@ -13,27 +13,37 @@
     } catch { return false; }
   };
   const deliver = value => {
-    if (delivered || Date.now() - opened > 600000 || typeof value !== "string" || value.length < 16 || value.length > 2048 || /\s/.test(value)) return;
-    delivered = true;
-    window.ipc.postMessage(capability + value);
+    if (delivered || window !== window.top || location.origin !== "https://discord.com" || Date.now() - opened > 600000 || typeof value !== "string" || value.length < 16 || value.length > 2048 || !/^[\x21-\x7e]+$/.test(value)) return;
+    const bridge = window.ipc;
+    if (typeof bridge?.postMessage !== "function") return;
+    // Linux reports whether its bounded slot stored the candidate. Other native bridges
+    // return undefined on success. A missing/throwing/rejecting bridge may be retried.
+    if (bridge.postMessage(capability + value) !== false) delivered = true;
   };
   const destinations = new WeakMap();
   const open = XMLHttpRequest.prototype.open;
   const setHeader = XMLHttpRequest.prototype.setRequestHeader;
-  XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-    destinations.set(this, allowed(url));
-    return open.call(this, method, url, ...rest);
+  XMLHttpRequest.prototype.open = function() {
+    const result = open.apply(this, arguments);
+    try { destinations.set(this, allowed(arguments[1])); } catch {}
+    return result;
   };
   XMLHttpRequest.prototype.setRequestHeader = function(name, value) {
-    if (destinations.get(this) && String(name).toLowerCase() === "authorization") deliver(value);
-    return setHeader.call(this, name, value);
+    const result = setHeader.apply(this, arguments);
+    try {
+      if (destinations.get(this) && typeof name === "string" && name.toLowerCase() === "authorization") deliver(value);
+    } catch {}
+    return result;
   };
   const originalFetch = window.fetch;
   window.fetch = function(input, init) {
-    if (allowed(input instanceof Request ? input.url : input)) {
-      const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
-      deliver(headers.get("authorization"));
-    }
-    return originalFetch.apply(this, arguments);
+    const result = originalFetch.apply(this, arguments);
+    try {
+      if (allowed(input instanceof Request ? input.url : input)) {
+        const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+        deliver(headers.get("authorization"));
+      }
+    } catch {}
+    return result;
   };
 })();
