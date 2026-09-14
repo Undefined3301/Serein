@@ -1,3 +1,25 @@
+# QR diagnostic report v2 - September 15, 2026
+
+Windows standard voice-inclusive package comparison: verified earlier `84476da`
+package preserved under `target/qr-diagnostics-v1-baseline`, versus diagnostic code
+`3c4b0fe`. One build/archive each, same pinned Rust and Windows machine as below;
+`cargo xtask package` and `Compress-Archive -CompressionLevel Optimal`.
+This is not a Linux runtime or QR latency measurement. The baseline predates the
+intervening README identity-documentation cleanup, which is included in the delta.
+
+| Metric | Before | After | Delta |
+| --- | ---: | ---: | ---: |
+| Executable bytes | 70,630,912 | 70,630,912 | 0 |
+| Portable package bytes (186 files) | 74,695,950 | 74,696,058 | +108 (README only) |
+| ZIP bytes | 42,721,845 | 42,722,178 | +333 |
+
+Both packages are unsigned; NSIS is unavailable, so no installer was built.
+The existing nonfatal OpenH264 linker warning remains. ZIP differences include
+compression/build noise; no performance improvement is claimed. Linux package size,
+native screenshots, process CPU/RSS and live exchange latency remain unmeasured.
+Diagnostics retain seven additional u16 fields and observe at most 64 QR resources
+per login window; those are implementation bounds, not measured process memory.
+
 # Last-viewed server channel - September 14, 2026
 
 Baseline: `ff3d711a91e0b3ae6de4c6aadbcce156264152fb`. After:
