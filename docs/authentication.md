@@ -43,14 +43,11 @@ voice or attachment playback. The Linux login user agent remains the existing
 `client_core::fingerprint` identity; neither challenge acceptance nor the reporter's failure
 cause is established by that setting. TLS, device permissions and challenge handling are unchanged.
 
-The Linux login top frame additionally reports `navigator.vendor` as `Google Inc.` and
-provides an empty `window.chrome` namespace when absent, matching two identity hints of
-the existing Chrome user agent. These are explicit identity overrides, not a Chromium
-engine or proof of detection avoidance. Existing namespaces are preserved; failures do
-not interrupt the login bridge. The namespace can select Chromium-specific page code
-that WebKit cannot run, so this can also regress compatibility. No Chrome APIs, User-Agent Client Hints, plugins,
-WebGL/canvas results or automation flags are fabricated. The separate invite-verification
-window and native REST/Gateway identity are unchanged. Live QR success remains unverified.
+The experimental `navigator.vendor` and empty `window.chrome` overrides were removed
+after the owner reported continued CAPTCHA retries and QR resets. The existing Chrome
+user-agent remains, but JavaScript browser properties are no longer overridden.
+This result does not establish why Discord restarts the challenge or QR session.
+Live QR success remains unverified.
 
 Close/drop invalidates pending results, clears the secret/scripts/handler, cancels evaluation,
 stops loading, terminates the ephemeral web process and destroys the GTK window. GLib pumping

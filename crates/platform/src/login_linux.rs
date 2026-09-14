@@ -182,7 +182,6 @@ impl LoginView {
 			.collect::<String>()
 			+ ":";
 		let script = [
-			include_str!("login-linux-identity.js"),
 			include_str!("login-linux-bridge.js"),
 			include_str!("login-handoff.js"),
 		]
@@ -718,10 +717,6 @@ mod tests {
 	#[ignore = "requires an explicitly selected Linux GTK/WebKit desktop; synthetic and offline"]
 	fn native_login_webkit_retry_and_lifecycle() {
 		let mut login = native_fixture();
-		native_assert_script(
-			&login.view,
-			"navigator.vendor === 'Google Inc.' && typeof window.chrome === 'object' && navigator.webdriver === false",
-		);
 		// Remove the native wake receiver: the protected candidate must still survive.
 		login
 			.manager
