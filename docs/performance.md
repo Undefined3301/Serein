@@ -375,3 +375,9 @@ again; the real WebKit test also passed with normal plugins (1.38 s) and empty p
 (1.97 s). No renderer or sandbox overrides were applied; actual hardware acceleration
 was not measured. The user/network namespace showed only a down loopback interface.
 No reducer replay was used because this change does not alter the reducer or caches.
+
+Integrated revision `db7f2c9` also passed Windows `cargo xtask check`, demo compilation and
+`cargo xtask package`. Its final unsigned portable output is 70,522,368 executable bytes,
+74,585,919 total bytes across 186 files, and 42,681,098 optimal-ZIP bytes. These absolute
+sizes include the concurrent Friends/rustls changes and must not be attributed solely to
+the login fix. This measurement-only documentation update is not bundled in the package.
