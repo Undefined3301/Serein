@@ -41,6 +41,13 @@ pub struct LoginDiagnostics {
 	pub bridge_wakes: u16,
 	pub query_attempts: u16,
 	pub query_errors: u16,
+	pub qr_requests: u16,
+	pub qr_responses: u16,
+	pub qr_last_status: u16,
+	pub qr_network_failures: u16,
+	pub blocked_navigations: u16,
+	pub storage_allowed: u16,
+	pub storage_denied: u16,
 	pub candidate_accepted: bool,
 	pub termination: Option<LoginTermination>,
 	pub webkit_version: Option<(u32, u32, u32)>,
@@ -61,7 +68,7 @@ impl LoginDiagnostics {
 			"native"
 		};
 		format!(
-			"Serein login diagnostics v1\napp_version={}\nos={}\ndisplay={}\nwebkit={:?}\ngtk={:?}\nelapsed_seconds={}\nbridge_wakes={}\nquery_attempts={}\nquery_errors={}\ncandidate_accepted={}\ntermination={:?}\n",
+			"Serein login diagnostics v2\napp_version={}\nos={}\ndisplay={}\nwebkit={:?}\ngtk={:?}\nelapsed_seconds={}\nbridge_wakes={}\nquery_attempts={}\nquery_errors={}\nqr_requests={}\nqr_responses={}\nqr_last_status={}\nqr_network_failures={}\nblocked_navigations={}\nstorage_allowed={}\nstorage_denied={}\ncandidate_accepted={}\ntermination={:?}\n",
 			env!("CARGO_PKG_VERSION"),
 			std::env::consts::OS,
 			display,
@@ -71,6 +78,13 @@ impl LoginDiagnostics {
 			self.bridge_wakes,
 			self.query_attempts,
 			self.query_errors,
+			self.qr_requests,
+			self.qr_responses,
+			self.qr_last_status,
+			self.qr_network_failures,
+			self.blocked_navigations,
+			self.storage_allowed,
+			self.storage_denied,
 			self.candidate_accepted,
 			self.termination,
 		)
@@ -220,6 +234,13 @@ mod tests {
 			bridge_wakes: u16::MAX,
 			query_attempts: u16::MAX,
 			query_errors: u16::MAX,
+			qr_requests: u16::MAX,
+			qr_responses: u16::MAX,
+			qr_last_status: u16::MAX,
+			qr_network_failures: u16::MAX,
+			blocked_navigations: u16::MAX,
+			storage_allowed: u16::MAX,
+			storage_denied: u16::MAX,
 			candidate_accepted: true,
 			termination: Some(LoginTermination::WebProcessStopped),
 			webkit_version: Some((u32::MAX, u32::MAX, u32::MAX)),
@@ -227,7 +248,25 @@ mod tests {
 		}
 		.summary();
 		assert!(report.len() < 4096);
-		assert_eq!(report.lines().count(), 12);
+		assert_eq!(report.lines().count(), 19);
+		assert!(report.starts_with("Serein login diagnostics v2\n"));
+		for field in [
+			"qr_requests",
+			"qr_responses",
+			"qr_last_status",
+			"qr_network_failures",
+			"blocked_navigations",
+			"storage_allowed",
+			"storage_denied",
+		] {
+			assert!(report.lines().any(|line| line == format!("{field}=65535")));
+			assert!(
+				LoginDiagnostics::default()
+					.summary()
+					.lines()
+					.any(|line| line == format!("{field}=0"))
+			);
+		}
 		assert!(report.contains("termination=Some(WebProcessStopped)"));
 		assert!(report.lines().all(|line| line.len() < 128));
 	}

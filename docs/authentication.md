@@ -63,6 +63,18 @@ and the exit reason. It contains no token, capability, account identifier, URL, 
 error. One fixed-size record stays in memory until a new attempt, connection, logout or exit;
 there is no automatic upload, log or credential-store/SQLite write.
 
+Diagnostics v2 additionally counts QR ticket-exchange requests, observed HTTP response statuses,
+network failures, policy-denied navigation decisions (including child frames/responses),
+and allowed/denied website-storage permission requests. `qr_last_status` is the last
+observed response status, or zero when none was observed. Response and failure counts can
+overlap: WebKit can supply a status and subsequently fail reading the response. Only the exact Discord
+`/api/vN/users/@me/remote-auth/login` route is monitored, up to 64 requests per window;
+no headers or bodies are read and URLs are not retained. Counters saturate and late
+events after cancellation/expiry are ignored. Resource events are diagnostic hints,
+not trusted authentication signals. A 400 does not establish a CAPTCHA rejection;
+zero storage requests does not prove cookies work. These counters do not change
+cookie, navigation, permission, TLS or challenge policy.
+
 Issue #173 reports Arch/Wayland build `ee8c246` (`1.0.0-nightly.20260914.16`), which predates
 the login-media protection on main. The handoff retry and cancellation defects are separately
 reproducible with synthetic tests; this does not establish which failure occurred on that machine.

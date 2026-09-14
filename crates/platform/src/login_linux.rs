@@ -29,6 +29,14 @@ struct Handoff {
 }
 
 impl Handoff {
+	fn record(&self, update: impl FnOnce(&mut LoginDiagnostics)) {
+		if self.active() {
+			let mut diagnostics = self.diagnostics.get();
+			update(&mut diagnostics);
+			self.diagnostics.set(diagnostics);
+		}
+	}
+
 	fn new(capability: String) -> Self {
 		let opened = Instant::now();
 		Self {
@@ -235,6 +243,45 @@ impl LoginView {
 			.build();
 		view.set_hexpand(true);
 		view.set_vexpand(true);
+		let resource_state = Rc::downgrade(&state);
+		view.connect_resource_load_started(move |_, resource, request| {
+			let Some(state) = resource_state.upgrade() else {
+				return;
+			};
+			if !state.active() || !request.uri().is_some_and(|uri| qr_exchange_uri(&uri)) {
+				return;
+			}
+			// Bound diagnostic callback registration as well as retained counters.
+			if state.diagnostics.get().qr_requests >= 64 {
+				return;
+			}
+			state.record(|d| d.qr_requests += 1);
+			let failed_state = Rc::downgrade(&state);
+			resource.connect_failed(move |_, _| {
+				if let Some(state) = failed_state.upgrade() {
+					state.record(|d| {
+						d.qr_network_failures = d.qr_network_failures.saturating_add(1)
+					});
+				}
+			});
+			let finished_state = Rc::downgrade(&state);
+			resource.connect_finished(move |resource| {
+				let (Some(state), Some(response)) = (finished_state.upgrade(), resource.response())
+				else {
+					return;
+				};
+				if !response.uri().is_some_and(|uri| qr_exchange_uri(&uri)) {
+					return;
+				}
+				let status = response.status_code();
+				if (100..=599).contains(&status) {
+					state.record(|d| {
+						d.qr_responses = d.qr_responses.saturating_add(1);
+						d.qr_last_status = status as u16;
+					});
+				}
+			});
+		});
 		let navigation_state = Rc::downgrade(&state);
 		view.connect_load_changed(move |_, event| {
 			if let Some(state) = navigation_state.upgrade() {
@@ -273,7 +320,8 @@ impl LoginView {
 		if !manager.register_script_message_handler(HANDLER, None) {
 			return Err(Failure::ProtocolAt("Linux login bridge unavailable"));
 		}
-		view.connect_decide_policy(|_, decision, kind| {
+		let policy_state = Rc::downgrade(&state);
+		view.connect_decide_policy(move |_, decision, kind| {
 			let allowed = match kind {
 				webkit6::PolicyDecisionType::NavigationAction => decision
 					.downcast_ref::<webkit6::NavigationPolicyDecision>()
@@ -298,12 +346,18 @@ impl LoginView {
 			if allowed {
 				decision.use_();
 			} else {
+				if let Some(state) = policy_state.upgrade() {
+					state.record(|d| {
+						d.blocked_navigations = d.blocked_navigations.saturating_add(1)
+					});
+				}
 				decision.ignore();
 			}
 			true
 		});
 		view.connect_create(|_, _| None);
-		view.connect_permission_request(|view, request| {
+		let permission_state = Rc::downgrade(&state);
+		view.connect_permission_request(move |view, request| {
 			// Embedded verification's cookie access is separate from device permissions.
 			// This exception grants no device permissions or persistent storage.
 			let verification_storage = view.uri().is_some_and(|uri| discord_origin(&uri))
@@ -315,6 +369,18 @@ impl LoginView {
 							request.requesting_domain().as_deref(),
 						)
 					});
+			if request.is::<webkit6::WebsiteDataAccessPermissionRequest>()
+				&& let Some(state) = permission_state.upgrade()
+			{
+				state.record(|d| {
+					let count = if verification_storage {
+						&mut d.storage_allowed
+					} else {
+						&mut d.storage_denied
+					};
+					*count = count.saturating_add(1);
+				});
+			}
 			if verification_storage {
 				request.allow();
 			} else {
@@ -492,9 +558,57 @@ fn verification_storage_domains(current: Option<&str>, requesting: Option<&str>)
 			.is_some_and(|domain| domain == "hcaptcha.com" || domain.ends_with(".hcaptcha.com"))
 }
 
+fn qr_exchange_uri(value: &str) -> bool {
+	if value.len() > 2048 || !discord_origin(value) {
+		return false;
+	}
+	let Ok(url) = url::Url::parse(value) else {
+		return false;
+	};
+	let Some(path) = url.path().strip_prefix("/api/v") else {
+		return false;
+	};
+	let Some((version, route)) = path.split_once('/') else {
+		return false;
+	};
+	!version.is_empty()
+		&& version.bytes().all(|b| b.is_ascii_digit())
+		&& route == "users/@me/remote-auth/login"
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn qr_diagnostics_scope_and_cancellation() {
+		assert!(qr_exchange_uri(
+			"https://discord.com/api/v9/users/@me/remote-auth/login"
+		));
+		assert!(qr_exchange_uri(
+			"https://discord.com/api/v10/users/@me/remote-auth/login?ignored=1"
+		));
+		for uri in [
+			"http://discord.com/api/v9/users/@me/remote-auth/login",
+			"https://discord.com.evil.test/api/v9/users/@me/remote-auth/login",
+			"https://discord.com:444/api/v9/users/@me/remote-auth/login",
+			"https://user@discord.com/api/v9/users/@me/remote-auth/login",
+			"https://discord.com/api/vx/users/@me/remote-auth/login",
+			"https://discord.com/api/v9/users/@me",
+		] {
+			assert!(!qr_exchange_uri(uri));
+		}
+		assert!(!qr_exchange_uri(&format!(
+			"https://discord.com/api/v9/users/@me/remote-auth/login?{}",
+			"x".repeat(2048)
+		)));
+		let state = Handoff::new("synthetic".into());
+		state.record(|d| d.qr_last_status = 400);
+		assert_eq!(state.diagnostics.get().qr_last_status, 400);
+		state.stop(LoginTermination::Cancelled);
+		state.record(|d| d.qr_last_status = 200);
+		assert_eq!(state.diagnostics.get().qr_last_status, 400);
+	}
 
 	#[test]
 	fn verification_storage_is_limited_to_hcaptcha_embedded_in_discord() {
