@@ -219,3 +219,24 @@ for (const invalidate of ['expiry', 'origin', 'frame', 'pagehide']) {
   assert.equal(messages.length, 0);
 }
 console.log('Authentication handoff: request preservation, observer/bridge failures, repeatable bounded Linux slot, optional wakes, origin/frame/expiry/navigation checks passed (synthetic only).');
+
+const identity = fs.readFileSync('crates/platform/src/login-linux-identity.js', 'utf8');
+for (const [origin, frame, active] of [
+  ['https://discord.com', false, true], ['https://evil.test', false, false],
+  ['https://discord.com', true, false],
+]) {
+  const context = { navigator: { vendor: 'Apple Computer, Inc.', webdriver: false }, location: { origin } };
+  context.window = context; context.top = frame ? {} : context;
+  vm.runInNewContext(identity, context);
+  assert.equal(context.navigator.vendor, active ? 'Google Inc.' : 'Apple Computer, Inc.');
+  assert.equal(typeof context.chrome, active ? 'object' : 'undefined');
+  assert.equal(context.navigator.webdriver, false);
+  assert.equal(context.navigator.userAgentData, undefined);
+  if (active) {
+    const existing = context.chrome;
+    Object.freeze(context.navigator);
+    assert.doesNotThrow(() => vm.runInNewContext(identity, context));
+    assert.equal(context.chrome, existing);
+  }
+}
+console.log('Linux login identity: top-frame scope, existing namespace preservation and failure isolation passed.');

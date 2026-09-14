@@ -284,7 +284,7 @@ rustcord/
 - **Local Cache Bounds:** SQLite databases store recent channel history, drafts, settings, diagnostics, and image preview metadata within bounded byte and count limits. The local SQLite store is **not** encrypted by the application.
 - **Sanitary Logout:** Executing an explicit logout destroys active network sessions, purges active secrets from memory, deletes the token from the OS credential store, and erases that account's local cache and drafts.
 - **Zero Telemetry:** Serein contains no analytics, telemetry, background crash collectors, or tracking beacons.
-- **Platform Integrity:** No fingerprint spoofing, CAPTCHA/MFA bypasses, bot substitutions, token scrapers, or third-party relays.
+- **Platform Integrity:** No CAPTCHA/MFA bypasses, bot substitutions, token scrapers, or third-party relays. Linux login browser-identity overrides and their limitations are documented in the [authentication guide](docs/authentication.md).
 
 For full details, review the [Storage Policy](docs/storage-policy.md) and [Threat Model](docs/threat-model.md).
 
