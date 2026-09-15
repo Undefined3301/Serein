@@ -234,19 +234,28 @@ fn eyebrow_row(ui: &mut egui::Ui, label: &str, row_height: f32) -> egui::Rect {
 	.rect
 }
 
-fn shelf_row(row: CachedRow) -> bool {
-	match row {
-		CachedRow::Heading(heading) => heading.shelf(),
-		CachedRow::Channel(_, Slot::Roster(_), _) => true,
+fn shelf_row(rows: &[CachedRow], index: usize) -> bool {
+	match rows.get(index).copied() {
+		Some(CachedRow::Heading(heading)) => heading.shelf(),
+		Some(CachedRow::Channel(_, Slot::Roster(_), _)) => true,
+		Some(CachedRow::Participant(_)) => rows[..index]
+			.iter()
+			.rev()
+			.find_map(|row| match row {
+				CachedRow::Participant(_) => None,
+				CachedRow::Channel(_, slot, _) => Some(matches!(slot, Slot::Roster(_))),
+				_ => Some(false),
+			})
+			.unwrap_or(false),
 		_ => false,
 	}
 }
 
 fn paint_shelf_rule(ui: &egui::Ui, rect: egui::Rect, rows: &[CachedRow], index: usize) {
-	let Some(next) = rows.get(index + 1).copied() else {
+	if rows.get(index + 1).is_none() {
 		return;
-	};
-	if !shelf_row(rows[index]) || shelf_row(next) {
+	}
+	if !shelf_row(rows, index) || shelf_row(rows, index + 1) {
 		return;
 	}
 	let colors = design::palette(ui);
@@ -337,7 +346,7 @@ impl MessagingUi {
 			let mut rows = Vec::with_capacity(channel_rows.len() + state.voice.roster.len());
 			for row in channel_rows {
 				let channel = match &row {
-					Row::Channel(channel, Slot::Tree, _) if channel.kind == 2 => Some(channel.id),
+					Row::Channel(channel, _, _) if channel.kind == 2 => Some(channel.id),
 					_ => None,
 				};
 				rows.push(row);
@@ -401,10 +410,16 @@ impl MessagingUi {
 						}
 						CachedRow::Participant(entry) => {
 							let entry = &state.voice.roster[entry];
-							ui.horizontal(|ui| {
+							let response = ui.horizontal(|ui| {
 								ui.add_space(28.0);
 								self.voice_participant(ui, state, entry);
 							});
+							paint_shelf_rule(
+								ui,
+								response.response.rect,
+								&self.channel_cache.rows,
+								index,
+							);
 						}
 						CachedRow::Category(category, count) => {
 							let category = &state.channels[category];
