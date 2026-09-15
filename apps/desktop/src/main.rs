@@ -1045,16 +1045,13 @@ impl Desktop {
 		#[cfg(feature = "demo")]
 		if demo {
 			// Robin stays pinned on home. #getting-started is the guild Favorites row.
-			let _ = messaging.channel_preferences.set(
-				model::Shortcut::Pinned,
-				model::Id(22),
-				true,
-			);
-			let _ = messaging.channel_preferences.set(
-				model::Shortcut::Favorite,
-				model::Id(20),
-				true,
-			);
+			let _ = messaging
+				.channel_preferences
+				.set(model::Shortcut::Pinned, model::Id(22), true);
+			let _ =
+				messaging
+					.channel_preferences
+					.set(model::Shortcut::Favorite, model::Id(20), true);
 		}
 		#[cfg(feature = "demo")]
 		if frame_sample.is_some() {

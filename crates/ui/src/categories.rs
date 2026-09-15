@@ -468,7 +468,12 @@ impl MessagingUi {
 								if response.clicked() {
 									selected = Some(channel.id);
 								}
-								paint_shelf_rule(ui, response.rect, &self.channel_cache.rows, index);
+								paint_shelf_rule(
+									ui,
+									response.rect,
+									&self.channel_cache.rows,
+									index,
+								);
 								continue;
 							}
 							let visible = state.can_view(channel.id);
