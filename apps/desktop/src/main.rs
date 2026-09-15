@@ -901,7 +901,9 @@ impl Desktop {
 				} else if std::env::args().any(|arg| arg == "--demo-chat") {
 					test_support::chat_demo_state()
 				} else {
-					test_support::demo_state()
+					let mut state = test_support::demo_state();
+					test_support::seed_demo_folder_mosaic(&mut state);
+					state
 				}
 			};
 		}
@@ -2975,6 +2977,7 @@ impl Desktop {
 					self.pending_save = None;
 					let generation = self.state.generation + 1;
 					self.state = test_support::demo_state();
+					test_support::seed_demo_folder_mosaic(&mut self.state);
 					self.state.generation = generation;
 					self.messaging.clear();
 				}
