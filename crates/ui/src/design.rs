@@ -663,8 +663,6 @@ pub fn apply(ctx: &egui::Context) {
 			egui::vec2(f32::from(button_padding[0]), f32::from(button_padding[1]));
 		style.spacing.interact_size.y = f32::from(metrics.control_height.unwrap_or(32));
 		style.spacing.menu_margin = egui::Margin::same(8);
-		style.interaction.tooltip_delay = 0.0;
-		style.interaction.show_tooltips_only_when_still = false;
 		style.visuals.panel_fill = p.chat;
 		// Sub-pixel binning rasterizes each glyph at up to four fractional x offsets, so
 		// stems land between physical pixels and read as blurry at 1x — where most Windows
