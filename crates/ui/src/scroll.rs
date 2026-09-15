@@ -160,7 +160,7 @@ impl Session {
 				wandered,
 			} => {
 				let wandered = wandered || hover.is_some_and(|pos| (pos.y - origin.y).abs() > 8.0);
-				if !focused || escape {
+				if !focused || escape || wheel {
 					self.idle();
 					return false;
 				}
