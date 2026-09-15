@@ -2241,8 +2241,9 @@ mod member_tests {
 		);
 		list.update(decode(br#"{"guild_id":"1","id":"everyone","member_count":2,"ops":[{"op":"INVALIDATE","range":[3,99]}]}"#).unwrap()).unwrap();
 		assert!(list.synced);
-		assert_eq!(list.rows[1].as_ref().unwrap().user.name, "Updated");
-		assert_eq!(list.rows[2].as_ref().unwrap().user.id, Id(6));
+		assert_eq!(list.rows[0].as_ref().unwrap().user.name, "First");
+		assert_eq!(list.rows[1].as_ref().unwrap().user.name, "Second");
+		assert!(list.rows[2].is_none());
 		list.update(decode(br#"{"guild_id":"1","id":"everyone","member_count":2,"ops":[{"op":"INVALIDATE","range":[0,99]}]}"#).unwrap()).unwrap();
 		assert!(!list.synced && list.take_presence().is_none() && list.presence_deadline.is_none());
 	}
