@@ -18,7 +18,6 @@ pub(super) struct FolderUi {
 	editor: Option<(u64, String, [u8; 3])>,
 	generation: u64,
 	key: Option<(u64, u64)>,
-	// Fixed-size rows: bounded to (MAX_NAV + MAX_FOLDERS) * size_of::<Row>() bytes.
 	rows: Box<[Row]>,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -73,7 +72,6 @@ impl FolderUi {
 				.filter(|g| !seen.contains(&g.id))
 				.map(|g| (Item::Server(g.id), None)),
 		);
-		// Validated settings contain each guild only once, plus at most MAX_FOLDERS headers.
 		self.rows = rows
 			.into_iter()
 			.take(client_core::MAX_NAV + model::guild_folders::MAX_FOLDERS)
@@ -140,7 +138,6 @@ fn edit(settings: &mut Settings, edit: Edit) {
 		}
 		Edit::Shift(item, down) => {
 			if let Some(i) = entry(settings, item) {
-				// Servers inside a folder reorder within that folder.
 				if let Item::Server(id) = item
 					&& settings.folders[i].id.is_some()
 				{
@@ -300,7 +297,6 @@ impl MessagingUi {
 		commands: &mut Vec<Command>,
 	) {
 		if self.folder_ui.generation != state.generation {
-			// Folders the owner left open survive a restart and a session change.
 			self.folder_ui = FolderUi {
 				generation: state.generation,
 				expanded: self.expanded_folders.iter().copied().collect(),
@@ -461,7 +457,6 @@ impl MessagingUi {
 							});
 							if response.clicked() {
 								self.folder_ui.toggle(id);
-								// Bounded mirror of the open set, saved as a device preference.
 								self.expanded_folders =
 									self.folder_ui.expanded.iter().copied().take(256).collect();
 							}
@@ -618,7 +613,6 @@ impl MessagingUi {
 				}
 			}
 		}
-		// Keep the moving icon in the rail; its original slot stays available for layout.
 		if let Some(item) = egui::DragAndDrop::payload::<Item>(ui.ctx())
 			&& let Some(pointer) = ui.ctx().pointer_hover_pos()
 		{

@@ -703,7 +703,6 @@ pub fn empty_channel_demo_state(long_name: bool) -> State {
 	state
 }
 
-/// Extra synthetic servers plus one collapsed folder so `--demo` can show the 2x2 mosaic.
 pub fn seed_demo_folder_mosaic(state: &mut State) {
 	const EXTRA: [(u64, &str, &str); 4] = [
 		(11, "North lab", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
