@@ -678,6 +678,7 @@ impl TimelineView {
 		self.applied_hide_media_links = self.hide_media_links;
 		let changed = self.revision != state.revision || dimensions_changed;
 		let mut offset = None;
+		let mut lead_rows = None;
 		if changed {
 			if content_dimensions_changed {
 				self.heights.clear();
@@ -702,6 +703,7 @@ impl TimelineView {
 			self.revealed
 				.retain(|id, content| state.timeline.get(*id).is_some_and(|m| content.matches(m)));
 			let mut previous = None;
+			let mut lead_basis = 0.0;
 			self.rows = state
 				.timeline
 				.display_iter()
@@ -732,9 +734,15 @@ impl TimelineView {
 						.get(&m.id)
 						.filter(|(old_key, _)| *old_key == key)
 						.map_or(estimate, |(_, height)| *height);
+					lead_basis += if height * 8.0 < estimate {
+						estimate
+					} else {
+						height
+					};
 					(m.id, height)
 				})
 				.collect();
+			lead_rows = Some(lead_basis);
 			self.revision = state.revision;
 			if !self.following
 				&& let Some((id, inset)) = self.anchor
@@ -849,8 +857,9 @@ impl TimelineView {
 				(p, height)
 			})
 			.collect();
-		let packed =
-			total + pending_rows.iter().map(|(_, height)| *height).sum::<f32>() + end_padding;
+		let pending_height = pending_rows.iter().map(|(_, height)| *height).sum::<f32>();
+		let packed = total + pending_height + end_padding;
+		let lead_packed = lead_rows.unwrap_or(total) + pending_height + end_padding;
 		if std::mem::take(&mut self.jump) {
 			offset = Some(
 				(total + end_padding + pending_rows.iter().map(|(_, height)| height).sum::<f32>()
@@ -890,7 +899,7 @@ impl TimelineView {
 			let lead = if welcome {
 				0.0
 			} else {
-				(viewport.height() - packed).max(0.0)
+				(viewport.height() - lead_packed).max(0.0)
 			};
 			ui.add_space(lead);
 			// Initial bottom alignment can expose more rows after estimates shrink.
@@ -1759,11 +1768,12 @@ impl TimelineView {
 		self.scroll_offset = output.state.offset.y;
 		// ScrollArea applies wheel input after laying out its contents. Preserve that
 		// movement when new row measurements rebuild the timeline on the next pass.
-		let lead = if welcome {
+		let spare = if welcome {
 			0.0
 		} else {
-			(output.inner_rect.height() - packed).max(0.0)
+			(output.inner_rect.height() - lead_packed).max(0.0)
 		};
+		let lead = spare;
 		let (anchor, _, anchor_top) = visible_range(
 			&self.rows,
 			(output.state.offset.y - lead).max(0.0),
@@ -1779,7 +1789,9 @@ impl TimelineView {
 		}
 		let distance_from_bottom =
 			(output.content_size.y - output.state.offset.y - output.inner_rect.height()).max(0.0);
-		let at_bottom = distance_from_bottom <= 3.0;
+		let whole_conversation_visible =
+			state.older_exhausted && packed <= output.inner_rect.height() + 3.0;
+		let at_bottom = distance_from_bottom <= 3.0 || whole_conversation_visible;
 		// The live edge counts even when service latest metadata outlived a deleted message;
 		// otherwise the unread banners could never resolve for that channel.
 		self.at_current_latest = state.live_edge_latest().is_some()
@@ -1788,9 +1800,6 @@ impl TimelineView {
 					Some(channel.id) == state.selected && channel.last_message == Some(message.id)
 				})
 			});
-
-		let whole_conversation_visible =
-			state.older_exhausted && output.content_size.y <= output.inner_rect.height() + 3.0;
 		if initial_unread_gap
 			&& !state.history_targeted
 			&& state.history_before.is_none()
@@ -1874,7 +1883,7 @@ impl TimelineView {
 		}
 		// A user scroll near the top requests one page; a short initial view never drains history.
 		self.load_older = !self.following
-			&& lead == 0.0
+			&& spare == 0.0
 			&& output.state.offset.y < 160.0
 			&& ui.input(|i| {
 				scroll_delta > 0.0
