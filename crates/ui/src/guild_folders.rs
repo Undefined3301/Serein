@@ -1,4 +1,3 @@
-use crate::design::LazyHover;
 use crate::{
 	MessagingUi, design,
 	icons::{self, Icon},
@@ -304,7 +303,7 @@ impl MessagingUi {
 							let Some(guild) = state.guilds.iter().find(|g| g.id == id) else {
 								return;
 							};
-							let response = self.avatars.show_guild(
+							let response = self.avatars.show_guild_rail(
 								ui,
 								guild,
 								self.guild == Some(id),
@@ -326,6 +325,7 @@ impl MessagingUi {
 									colors.base,
 								);
 							}
+							design::rail_name(&response, &guild.name);
 							if response.clicked() {
 								self.guild = Some(id);
 								if let Some(command) = state.select_guild(id) {
@@ -403,9 +403,11 @@ impl MessagingUi {
 								self.expanded_folders =
 									self.folder_ui.expanded.iter().copied().take(256).collect();
 							}
-							response.on_hover_text_with(|| {
-								format!("{name} · {} servers", folder.guild_ids.len())
-							})
+							design::rail_name(
+								&response,
+								format!("{name} · {} servers", folder.guild_ids.len()),
+							);
+							response
 						}
 					};
 					response.context_menu(|ui| {
