@@ -49,8 +49,6 @@ pub struct TimelineView {
 	revision: u64,
 	channel: Option<Id>,
 	anchor: Option<(Id, f32)>,
-	autoscroll_origin: Option<egui::Pos2>,
-	autoscroll_frame: Option<u64>,
 	scroll_offset: f32,
 	following: bool,
 	formatted: FormatCache,
@@ -555,6 +553,7 @@ impl TimelineView {
 		self.jump = true;
 		self.anchor = None;
 	}
+	#[cfg(test)]
 	pub fn show(
 		&mut self,
 		ui: &mut egui::Ui,
@@ -563,6 +562,29 @@ impl TimelineView {
 		deleting: &mut Option<(Id, Id)>,
 		(avatars, profile): (&mut crate::avatars::Avatars, &mut Option<model::User>),
 		upload: Option<&crate::pending::Upload>,
+	) {
+		let mut scroll = crate::scroll::Session::default();
+		self.show_with_scroll(
+			ui,
+			state,
+			editing,
+			deleting,
+			(avatars, profile),
+			upload,
+			&mut scroll,
+		);
+	}
+
+	#[allow(clippy::too_many_arguments)]
+	pub fn show_with_scroll(
+		&mut self,
+		ui: &mut egui::Ui,
+		state: &mut State,
+		editing: &mut Option<(Id, Id, String)>,
+		deleting: &mut Option<(Id, Id)>,
+		(avatars, profile): (&mut crate::avatars::Avatars, &mut Option<model::User>),
+		upload: Option<&crate::pending::Upload>,
+		session: &mut crate::scroll::Session,
 	) {
 		let width = ui.available_width();
 		let channel_changed = self.channel != state.selected;
@@ -785,36 +807,7 @@ impl TimelineView {
 			}
 		}
 		let area = ui.available_rect_before_wrap().intersect(ui.clip_rect());
-		let hovered = ui.rect_contains_pointer(area);
-		let frame = ui.ctx().cumulative_frame_nr();
-		let autoscroll_delta = ui.input(|input| {
-			// Layout retries reuse input: toggle and advance only once per displayed frame.
-			if self.autoscroll_frame == Some(frame) {
-				return 0.0;
-			}
-			self.autoscroll_frame = Some(frame);
-			let pointer = &input.pointer;
-			if self.autoscroll_origin.is_some() {
-				if !input.focused
-					|| pointer.hover_pos().is_none()
-					|| pointer.any_pressed()
-					|| input.key_pressed(egui::Key::Escape)
-					|| input.smooth_scroll_delta().y != 0.0
-				{
-					self.autoscroll_origin = None;
-				}
-			} else if pointer.button_pressed(egui::PointerButton::Middle) && hovered {
-				self.autoscroll_origin = pointer.hover_pos();
-			}
-			self.autoscroll_origin
-				.zip(pointer.hover_pos())
-				.map_or(0.0, |(origin, pos)| {
-					let distance = pos.y - origin.y;
-					let travel = (distance.abs() - 8.0).max(0.0);
-					let speed = (travel * 12.0 + travel * travel * 0.12).min(12000.0);
-					-distance.signum() * speed * input.stable_dt.min(0.05)
-				})
-		});
+		let autoscroll_delta = session.bind(ui, ui.id().with(("timeline", state.selected)), area);
 		if autoscroll_delta > 0.0 {
 			self.following = false;
 		}
@@ -886,7 +879,7 @@ impl TimelineView {
 		let mut selected_reply = None;
 		// ScrollArea consumes wheel input while applying it; retain the viewing gesture.
 		let scroll_delta = ui.input(|input| input.smooth_scroll_delta().y) + autoscroll_delta;
-		let allow_hover = self.autoscroll_origin.is_none()
+		let allow_hover = !session.holding()
 			&& !ui.input(|input| input.is_scrolling())
 			&& ui.ctx().dragged_id().is_none();
 		let output = scroll.show_viewport(ui, |ui, viewport| {
@@ -1764,20 +1757,6 @@ impl TimelineView {
 			viewport.min.y
 		});
 		self.scroll_offset = output.state.offset.y;
-		if let Some(origin) = self.autoscroll_origin {
-			let colors = crate::design::palette(ui);
-			let painter = ui.painter().with_clip_rect(output.inner_rect);
-			painter.circle_filled(origin, 12.0, colors.raised);
-			painter.circle_stroke(origin, 12.0, egui::Stroke::new(1.0, colors.muted));
-			painter.text(
-				origin,
-				egui::Align2::CENTER_CENTER,
-				"↕",
-				egui::FontId::proportional(18.0),
-				colors.text,
-			);
-			ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
-		}
 		// ScrollArea applies wheel input after laying out its contents. Preserve that
 		// movement when new row measurements rebuild the timeline on the next pass.
 		let lead = if welcome {
@@ -1883,7 +1862,7 @@ impl TimelineView {
 				// Settle a newly selected chat before presenting estimated row positions.
 				// Keep resize and active scrolling on their existing anchored path.
 				if !dimensions_changed
-					|| (channel_changed && scroll_delta == 0.0 && self.autoscroll_origin.is_none())
+					|| (channel_changed && scroll_delta == 0.0 && !session.holding())
 				{
 					ui.ctx().request_discard("Timeline message heights settled");
 				}

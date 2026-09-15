@@ -1048,6 +1048,17 @@ impl Desktop {
 			.map_or(10_000, |m| m.id.0.max(10_000));
 		let mut messaging = ui::MessagingUi::default();
 		#[cfg(feature = "demo")]
+		if demo {
+			// Robin stays pinned on home. #getting-started is the guild Favorites row.
+			let _ = messaging
+				.channel_preferences
+				.set(model::Shortcut::Pinned, model::Id(22), true);
+			let _ =
+				messaging
+					.channel_preferences
+					.set(model::Shortcut::Favorite, model::Id(20), true);
+		}
+		#[cfg(feature = "demo")]
 		if frame_sample.is_some() {
 			messaging.prepare_friends_sample();
 		}
@@ -3492,12 +3503,8 @@ impl Desktop {
 			removed_channels.retain(|id| !self.state.can_read_history(*id));
 			for channel in removed_channels.iter().copied().chain(deleted_shortcut) {
 				if self.state.channel(channel).is_none() {
-					let preferences = &mut self.messaging.channel_preferences;
-					let previous = preferences.favorites.len() + preferences.pinned.len();
-					preferences.favorites.retain(|id| *id != channel);
-					preferences.pinned.retain(|id| *id != channel);
 					self.messaging.channel_preferences_changed |=
-						previous != preferences.favorites.len() + preferences.pinned.len();
+						self.messaging.channel_preferences.forget(channel);
 				}
 			}
 			if let Some(error) = voice_failure
@@ -4538,6 +4545,7 @@ impl eframe::App for Desktop {
 				None => {}
 			}
 		}
+		ui::design::window_resize(&ctx);
 		self.frame_metrics.reflows = self.messaging.timeline_reflows();
 		self.frame_metrics.finish();
 	}

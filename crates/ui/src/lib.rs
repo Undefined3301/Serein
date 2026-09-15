@@ -53,6 +53,7 @@ mod profile_edit;
 mod reactions;
 mod reading;
 pub mod screen;
+mod scroll;
 mod search;
 mod server_admin;
 mod server_audit_log;
@@ -63,6 +64,7 @@ mod server_menu;
 mod server_roles;
 mod server_settings;
 mod settings;
+mod shortcuts;
 mod switcher;
 mod thumbhash;
 mod timeline;
@@ -143,6 +145,7 @@ pub struct MessagingUi {
 	archives: archives::ArchivesUi,
 	archive_parent: Option<Id>,
 	forum: forum::ForumUi,
+	scroll: scroll::Session,
 	timeline: timeline::TimelineView,
 	edit_modified: Option<(Id, Id, bool)>,
 	edit_undo_cleared: bool,
@@ -828,9 +831,12 @@ impl MessagingUi {
 		};
 		let row_spacing = ui.spacing().item_spacing.y;
 		ui.spacing_mut().item_spacing.y = 0.0;
-		egui::ScrollArea::vertical()
-			.id_salt(("people", list.channel))
-			.auto_shrink([false, false])
+		self.scroll
+			.attach(
+				ui,
+				("people", list.channel),
+				egui::ScrollArea::vertical().auto_shrink([false, false]),
+			)
 			.show_rows(ui, 42.0, self.member_cache.len(), |ui, range| {
 				for index in range {
 					match &self.member_cache[index] {
@@ -1330,12 +1336,21 @@ impl MessagingUi {
 				let dm = channel
 					.as_ref()
 					.is_some_and(|c| c.kind == 1 && c.guild.is_none());
+				let shortcuts_available = self.shortcuts_available(state);
 				ui.horizontal_centered(|ui| {
 					ui.spacing_mut().item_spacing.x = 8.0;
 					match channel.as_ref() {
 						Some(c) if c.guild.is_none() && c.kind == 3 => {
 							let avatar = self.avatars.show_group(ui, c, 24.0, state.demo);
-							self.group_menu.context(&avatar, state, c);
+							self.group_menu.context(
+								&avatar,
+								state,
+								c,
+								shortcuts::ShortcutView::new(
+									&self.channel_preferences,
+									shortcuts_available,
+								),
+							);
 						}
 						Some(c) if c.guild.is_none() => {
 							if let Some(user) = c.recipients.first() {
@@ -1343,12 +1358,16 @@ impl MessagingUi {
 								// context-menu action, not a click target.
 								let avatar = self.avatars.show_plain(ui, user, 24.0, state.demo);
 								if dm {
-									user_menu::show(
+									user_menu::show_with_pin(
 										&avatar,
 										state,
 										user,
 										&mut self.profile,
 										&mut self.user_action,
+										Some(shortcuts::ShortcutView::new(
+											&self.channel_preferences,
+											shortcuts_available,
+										)),
 									);
 								}
 								if dm
@@ -1382,7 +1401,15 @@ impl MessagingUi {
 							.as_ref()
 							.filter(|c| c.guild.is_none() && c.kind == 3)
 						{
-							self.group_menu.dropdown(ui, state, c);
+							self.group_menu.dropdown(
+								ui,
+								state,
+								c,
+								shortcuts::ShortcutView::new(
+									&self.channel_preferences,
+									shortcuts_available,
+								),
+							);
 						}
 						if state.selected.is_some() && !selected_voice {
 							if self.search.open && !self.search.pins() {
@@ -2741,7 +2768,8 @@ impl MessagingUi {
 					return;
 				}
 				if selected_forum {
-					self.forum.show(ui, state, channel, &mut commands);
+					self.forum
+						.show(ui, state, channel, &mut commands, &mut self.scroll);
 					return;
 				}
 				egui::Panel::bottom("composer")
@@ -2804,13 +2832,14 @@ impl MessagingUi {
 					.show(ui, |ui| {
 						self.timeline.hide_media_links = self.reading_preferences.hide_media_links;
 						self.timeline.extension_actions = self.extensions.message_actions();
-						self.timeline.show(
+						self.timeline.show_with_scroll(
 							ui,
 							state,
 							&mut self.editing,
 							&mut self.deleting,
 							(&mut self.avatars, &mut self.profile),
 							self.pending_upload.as_ref(),
+							&mut self.scroll,
 						);
 						if let Some((action, text)) = self.timeline.extension_request.take() {
 							self.extensions
@@ -2983,6 +3012,15 @@ impl MessagingUi {
 		}
 		self.group_menu
 			.show(&ctx, state, &mut self.avatars, &mut commands);
+		for intent in self
+			.channel_menu
+			.shortcut_requested
+			.take()
+			.into_iter()
+			.chain(self.group_menu.pin_requested.take())
+		{
+			self.apply_shortcut(state, intent);
+		}
 		if let Some(action) = self.user_action.take().or(self.timeline.user_action.take()) {
 			let command = match action {
 				user_menu::Action::Note(user) => {
@@ -2992,6 +3030,10 @@ impl MessagingUi {
 				user_menu::Action::Nickname(user) => {
 					self.profile = None;
 					self.contact_editor.open(user, true, state)
+				}
+				user_menu::Action::Shortcut(intent) => {
+					self.apply_shortcut(state, intent);
+					None
 				}
 				action => user_menu::prepare(action, state),
 			};
@@ -3166,6 +3208,8 @@ impl MessagingUi {
 			&& !state.demo
 			&& !ctx.egui_wants_keyboard_input()
 			&& ctx.input(|input| input.focused && input.key_down(egui::Key::V));
+		self.scroll.clear_if_unbound(&ctx);
+		self.scroll.paint(&ctx);
 		if !commands.is_empty() {
 			ctx.request_repaint();
 		}

@@ -39,6 +39,10 @@ fn main() {
 		.last_message = Some(model::Id(500));
 	let ctx = egui::Context::default();
 	ui::design::apply(&ctx);
+	assert_eq!(
+		ctx.options(|options| options.input_options.line_scroll_speed),
+		120.0
+	);
 	let mut view = ui::MessagingUi::default();
 	let mut number = 0;
 	let repaint_delay = std::cell::Cell::new(std::time::Duration::ZERO);
@@ -78,7 +82,6 @@ fn main() {
 	};
 	frame(vec![egui::Event::PointerMoved(origin)]);
 	frame(vec![button(true)]);
-	frame(vec![button(false)]);
 	for (y, upward) in [(250.0, true), (450.0, false)] {
 		let start = frame(vec![egui::Event::PointerMoved(egui::pos2(600.0, y))]);
 		let mut previous = start;
@@ -117,7 +120,79 @@ fn main() {
 			"autoscroll must stop scheduling animation frames at the boundary (pointer y={y})"
 		);
 	}
+	frame(vec![egui::Event::PointerMoved(egui::pos2(600.0, 250.0))]);
+	let before_release = frame(vec![]);
+	let held = frame(vec![]);
+	assert!(held < before_release, "autoscroll must move before release");
+	frame(vec![button(false)]);
+	let released = frame(vec![]);
+	for _ in 0..30 {
+		assert_eq!(
+			frame(vec![]),
+			released,
+			"releasing mouse3 must stop autoscroll (held from {held})"
+		);
+	}
+	frame(vec![egui::Event::PointerMoved(origin)]);
+	frame(vec![button(true)]);
+	frame(vec![egui::Event::PointerMoved(egui::pos2(600.0, 250.0))]);
+	let before_wheel = frame(vec![]);
+	let moving = frame(vec![]);
+	assert!(
+		moving < before_wheel,
+		"autoscroll must move before a wheel tick"
+	);
+	frame(vec![egui::Event::MouseWheel {
+		unit: egui::MouseWheelUnit::Point,
+		delta: egui::vec2(0.0, 40.0),
+		modifiers: egui::Modifiers::NONE,
+		phase: egui::TouchPhase::Move,
+	}]);
+	let after_wheel = frame(vec![]);
+	for _ in 0..30 {
+		assert_eq!(
+			frame(vec![]),
+			after_wheel,
+			"a wheel tick must stop held autoscroll"
+		);
+	}
+	frame(vec![button(false)]);
+	frame(vec![egui::Event::PointerMoved(origin)]);
+	frame(vec![button(true)]);
+	frame(vec![button(false)]);
+	let latched = frame(vec![egui::Event::PointerMoved(egui::pos2(600.0, 250.0))]);
+	let mut previous = latched;
+	for _ in 0..60 {
+		let current = frame(vec![]);
+		assert!(
+			current <= previous,
+			"latched chat reversed: {previous} -> {current}"
+		);
+		previous = current;
+	}
+	assert!(
+		previous < latched,
+		"a mouse3 click must keep scrolling after release"
+	);
+	let off = egui::pos2(600.0, 250.0);
+	let click = |pressed| egui::Event::PointerButton {
+		pos: off,
+		button: egui::PointerButton::Middle,
+		pressed,
+		modifiers: egui::Modifiers::NONE,
+	};
+	frame(vec![egui::Event::PointerMoved(off), click(true)]);
+	frame(vec![click(false)]);
+	frame(vec![egui::Event::PointerMoved(egui::pos2(600.0, 150.0))]);
+	let clicked_off = frame(vec![]);
+	for _ in 0..30 {
+		assert_eq!(
+			frame(vec![]),
+			clicked_off,
+			"a second click must stop latched autoscroll, not start a new origin"
+		);
+	}
 	println!(
-		"PASS: synthetic chat scrolls continuously in both directions without reversing or jumping; no animation loop at either boundary."
+		"PASS: synthetic chat scrolls while mouse3 is held and stops on release; a wheel tick stops a hold; a click latches until the next click; no animation loop at either boundary."
 	);
 }

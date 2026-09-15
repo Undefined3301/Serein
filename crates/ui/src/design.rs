@@ -668,6 +668,9 @@ pub fn apply(ctx: &egui::Context) {
 		style.visuals.widgets.open.fg_stroke = Stroke::new(1.0, p.text_strong);
 		ctx.set_style_of(theme, style);
 	}
+	ctx.options_mut(|options| {
+		options.input_options.line_scroll_speed = crate::scroll::DISCORD_LINE_SCROLL_SPEED;
+	});
 }
 /// Space reserved at the left of window strips for macOS traffic lights.
 pub const TRAFFIC_LIGHT_INSET: f32 = if cfg!(target_os = "macos") { 72.0 } else { 0.0 };
@@ -693,6 +696,91 @@ pub fn window_drag(ui: &mut egui::Ui, rect: egui::Rect) {
 		let maximized = ui.input(|i| i.viewport().maximized.unwrap_or(false));
 		ui.ctx()
 			.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+	}
+}
+
+/// Native resize handles for the undecorated Windows viewport, including sign-in.
+pub fn window_resize(ctx: &egui::Context) {
+	if !cfg!(target_os = "windows")
+		|| ctx.input(|i| {
+			i.viewport().maximized.unwrap_or(false) || i.viewport().fullscreen.unwrap_or(false)
+		}) {
+		return;
+	}
+	use egui::{CursorIcon as C, ResizeDirection as D};
+	let rect = ctx.viewport_rect();
+	let (l, r, t, b) = (rect.left(), rect.right(), rect.top(), rect.bottom());
+	let edge = 5.0;
+	let corner = 12.0;
+	for (index, (min, max, direction, cursor)) in [
+		(
+			[l, t],
+			[l + corner, t + corner],
+			D::NorthWest,
+			C::ResizeNwSe,
+		),
+		(
+			[r - corner, t],
+			[r, t + corner],
+			D::NorthEast,
+			C::ResizeNeSw,
+		),
+		(
+			[l, b - corner],
+			[l + corner, b],
+			D::SouthWest,
+			C::ResizeNeSw,
+		),
+		(
+			[r - corner, b - corner],
+			[r, b],
+			D::SouthEast,
+			C::ResizeNwSe,
+		),
+		(
+			[l + corner, t],
+			[r - corner, t + edge],
+			D::North,
+			C::ResizeVertical,
+		),
+		(
+			[l + corner, b - edge],
+			[r - corner, b],
+			D::South,
+			C::ResizeVertical,
+		),
+		(
+			[l, t + corner],
+			[l + edge, b - corner],
+			D::West,
+			C::ResizeHorizontal,
+		),
+		(
+			[r - edge, t + corner],
+			[r, b - corner],
+			D::East,
+			C::ResizeHorizontal,
+		),
+	]
+	.into_iter()
+	.enumerate()
+	{
+		let handle = egui::Rect::from_min_max(min.into(), max.into());
+		egui::Area::new(egui::Id::unique(("window-resize", index)))
+			.order(egui::Order::Foreground)
+			.fixed_pos(handle.min)
+			.constrain(false)
+			.default_size(handle.size())
+			.movable(false)
+			.show(ctx, |ui| {
+				let (_, response) = ui.allocate_exact_size(handle.size(), egui::Sense::click());
+				let response = response.on_hover_cursor(cursor);
+				if response.is_pointer_button_down_on()
+					&& ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary))
+				{
+					ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(direction));
+				}
+			});
 	}
 }
 

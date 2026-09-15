@@ -233,9 +233,12 @@ impl MessagingUi {
 				});
 			}
 			ui.spacing_mut().item_spacing.y = 0.0;
-			egui::ScrollArea::vertical()
-				.id_salt("friend-requests")
-				.auto_shrink([false, false])
+			self.scroll
+				.attach(
+					ui,
+					"friend-requests",
+					egui::ScrollArea::vertical().auto_shrink([false, false]),
+				)
 				.show_rows(ui, 72.0, rows.len(), |ui, range| {
 					for (user, name, incoming) in &rows[range] {
 						ui.push_id(user.id.0, |ui| {
@@ -426,9 +429,12 @@ impl MessagingUi {
 					);
 					return;
 				}
-				egui::ScrollArea::vertical()
-					.id_salt("friends-list")
-					.auto_shrink([false, false])
+				self.scroll
+					.attach(
+						ui,
+						"friends-list",
+						egui::ScrollArea::vertical().auto_shrink([false, false]),
+					)
 					.show_rows(ui, 64.0, self.friends.list.len(), |ui, range| {
 						for index in range {
 							let Some(user) = state.friend(self.friends.list[index]) else {
@@ -559,6 +565,7 @@ impl MessagingUi {
 										user,
 										&mut self.profile,
 										&mut self.user_action,
+										None,
 									)
 								});
 							});
