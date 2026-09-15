@@ -25,6 +25,7 @@ pub struct Session {
 	frame: Option<u64>,
 	bound: bool,
 	last_offset: Option<(egui::Id, f32)>,
+	ignore_press: bool,
 }
 
 impl Session {
@@ -34,13 +35,12 @@ impl Session {
 
 	pub fn bind(&mut self, ui: &egui::Ui, target: egui::Id, area: Rect) -> f32 {
 		let frame = ui.ctx().cumulative_frame_nr();
-		let mut consume_press = false;
 		if self.frame != Some(frame) {
 			self.frame = Some(frame);
 			self.bound = false;
-			consume_press = self.step(ui);
+			self.ignore_press = self.step(ui);
 		}
-		if !consume_press {
+		if !self.ignore_press {
 			self.try_start(ui, target, area);
 		}
 		match self.drive {
