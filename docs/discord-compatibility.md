@@ -41,7 +41,9 @@ has not been tested by the agent.
 Guild channel rows support right-click and Shift+F10 actions. Mark As Read uses
 the existing acknowledgement adapter without changing the selected conversation;
 Invite to Channel opens the existing invite dialog for that channel. Favorites
-and pins are account-isolated local shortcuts, not Discord-synchronized favorites.
+and pinned DMs are account-isolated local shortcuts, not Discord-synchronized
+favorites. Pinned DMs sit above the home list. Guild channels use the existing
+Favorites shelf. Neither uses an unverified settings-proto field.
 
 The empty channel-list area also has a server-scoped right-click menu. Hide Muted
 Channels is a bounded, session-only per-server view preference; the selected channel

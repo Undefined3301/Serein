@@ -5,7 +5,7 @@ mod channel_preferences;
 pub mod messaging_permissions;
 pub mod notification_preferences;
 pub mod notification_settings;
-pub use channel_preferences::ChannelPreferences;
+pub use channel_preferences::{ChannelPreferences, PreferenceEdit, Shortcut};
 pub mod forum;
 pub mod gifs;
 pub mod guild_folders;

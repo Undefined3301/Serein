@@ -1,10 +1,11 @@
 //! Guild channel actions share one context menu and a session-scoped editor.
+use crate::shortcuts::ShortcutView;
 use crate::{design, dialog, icons, user_menu};
 use client_core::{
 	Command, State,
 	channel_actions::{Action, Edit, Mute},
 };
-use model::{Channel, ChannelPreferences, Id};
+use model::{Channel, Id, Shortcut};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
@@ -36,6 +37,7 @@ struct Dialog {
 #[derive(Default)]
 pub(super) struct ChannelMenu {
 	pub invite_requested: Option<(Id, Id)>,
+	pub shortcut_requested: Option<crate::shortcuts::Intent>,
 	requested: Option<(Id, Intent)>,
 	dialog: Option<Dialog>,
 	feedback: Option<Id>,
@@ -44,14 +46,18 @@ pub(super) struct ChannelMenu {
 }
 
 impl ChannelMenu {
+	/// Shows the shared "full" feedback so DM, group and guild pins report capacity alike.
+	pub fn report_capacity(&mut self, generation: u64) {
+		self.preference_error = true;
+		self.generation = generation;
+	}
+
 	pub fn context(
 		&mut self,
 		response: &egui::Response,
 		state: &State,
 		channel: &Channel,
-		prefs: &mut ChannelPreferences,
-		prefs_changed: &mut bool,
-		preferences_available: bool,
+		view: ShortcutView<'_>,
 	) {
 		let Some(guild) = channel.guild else { return };
 		let colors = design::palette_for(&response.ctx);
@@ -83,24 +89,21 @@ impl ChannelMenu {
 				intent = Some(Intent::Read);
 			}
 			ui.separator();
-			let favorite = prefs.is_favorite(channel.id);
 			if channel.kind != 4
 				&& row(
 					ui,
-					if favorite {
+					if view.contains(Shortcut::Favorite, channel.id) {
 						"Remove From Favorites"
 					} else {
 						"Add To Favorites"
 					},
-					preferences_available,
+					view.available(),
 					false,
 				)
 				.on_hover_text("Favorites are saved on this device.")
 				.clicked()
 			{
-				let changed = prefs.toggle_favorite(channel.id);
-				*prefs_changed |= changed;
-				self.preference_error = !changed;
+				self.shortcut_requested = Some(view.toggle(Shortcut::Favorite, channel.id));
 				self.generation = state.generation;
 				ui.close();
 			}
@@ -115,27 +118,6 @@ impl ChannelMenu {
 				.clicked()
 			{
 				self.invite_requested = Some((guild, channel.id));
-				self.generation = state.generation;
-				ui.close();
-			}
-			let pinned = prefs.is_pinned(channel.id);
-			if channel.kind != 4
-				&& row(
-					ui,
-					if pinned {
-						"Unpin Channel From Top"
-					} else {
-						"Pin Channel to Top"
-					},
-					preferences_available,
-					false,
-				)
-				.on_hover_text("Pinned channels are saved on this device.")
-				.clicked()
-			{
-				let changed = prefs.toggle_pinned(channel.id);
-				*prefs_changed |= changed;
-				self.preference_error = !changed;
 				self.generation = state.generation;
 				ui.close();
 			}
@@ -799,6 +781,7 @@ fn row(ui: &mut egui::Ui, label: &str, enabled: bool, danger: bool) -> egui::Res
 mod tests {
 	use super::*;
 	use egui::{Event, Modifiers, PointerButton, Pos2, Rect};
+	use model::ChannelPreferences;
 
 	fn labels(shape: &egui::Shape, output: &mut Vec<(String, Rect)>) {
 		match shape {
@@ -825,7 +808,6 @@ mod tests {
 		state: State,
 		menu: ChannelMenu,
 		prefs: ChannelPreferences,
-		changed: bool,
 		commands: Vec<Command>,
 		copied: Vec<String>,
 		width: f32,
@@ -852,9 +834,7 @@ mod tests {
 						&response,
 						&self.state,
 						self.state.channel(Id(20)).unwrap(),
-						&mut self.prefs,
-						&mut self.changed,
-						true,
+						ShortcutView::new(&self.prefs, true),
 					);
 					row = Some(response);
 					self.menu
@@ -902,7 +882,6 @@ mod tests {
 				state,
 				menu: ChannelMenu::default(),
 				prefs: Default::default(),
-				changed: false,
 				commands: vec![],
 				copied: vec![],
 				width,
@@ -1043,7 +1022,6 @@ mod tests {
 					state,
 					menu: ChannelMenu::default(),
 					prefs: ChannelPreferences::default(),
-					changed: false,
 					commands: vec![],
 					copied: vec![],
 					width: 320.0,
@@ -1069,7 +1047,6 @@ mod tests {
 					"Mark As Read",
 					"Add To Favorites",
 					"Invite to Channel",
-					"Pin Channel to Top",
 					"Copy Link",
 					"Mute Channel",
 					"Notification Settings",
@@ -1105,7 +1082,14 @@ mod tests {
 					"Opening a dialog does not send a destructive action"
 				);
 				match action {
-					"Add To Favorites" => assert!(h.prefs.is_favorite(Id(20)) && h.changed),
+					"Add To Favorites" => assert_eq!(
+						h.menu.shortcut_requested,
+						Some(crate::shortcuts::Intent {
+							channel: Id(20),
+							kind: Shortcut::Favorite,
+							on: true,
+						})
+					),
 					"Copy Channel ID" => assert_eq!(h.copied, ["20"]),
 					"Invite to Channel" => {
 						assert_eq!(h.menu.invite_requested, Some((Id(10), Id(20))))

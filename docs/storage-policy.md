@@ -90,7 +90,8 @@ their content and default to ordinary messages until refreshed. Schema-15 binari
 cannot reopen this upgraded cache.
 
 Channel shortcuts (September 12, schema 15): favorites and pins are device-local,
-account-isolated SQLite preferences. Both lists together contain at most 256 IDs,
+account-isolated SQLite preferences. Pins cover home DMs. Favorites cover guild
+channels. Both lists together contain at most 256 IDs,
 with at most 4 KiB retained vector storage and an 8 KiB serialized record. Loading
 and saving run on the existing bounded cache worker; corrupt/oversized records and
 save failures are shown. Shortcuts survive restart and are removed on account

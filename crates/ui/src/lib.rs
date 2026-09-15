@@ -63,6 +63,7 @@ mod server_menu;
 mod server_roles;
 mod server_settings;
 mod settings;
+mod shortcuts;
 mod switcher;
 mod thumbhash;
 mod timeline;
@@ -1330,12 +1331,21 @@ impl MessagingUi {
 				let dm = channel
 					.as_ref()
 					.is_some_and(|c| c.kind == 1 && c.guild.is_none());
+				let shortcuts_available = self.shortcuts_available(state);
 				ui.horizontal_centered(|ui| {
 					ui.spacing_mut().item_spacing.x = 8.0;
 					match channel.as_ref() {
 						Some(c) if c.guild.is_none() && c.kind == 3 => {
 							let avatar = self.avatars.show_group(ui, c, 24.0, state.demo);
-							self.group_menu.context(&avatar, state, c);
+							self.group_menu.context(
+								&avatar,
+								state,
+								c,
+								shortcuts::ShortcutView::new(
+									&self.channel_preferences,
+									shortcuts_available,
+								),
+							);
 						}
 						Some(c) if c.guild.is_none() => {
 							if let Some(user) = c.recipients.first() {
@@ -1343,12 +1353,16 @@ impl MessagingUi {
 								// context-menu action, not a click target.
 								let avatar = self.avatars.show_plain(ui, user, 24.0, state.demo);
 								if dm {
-									user_menu::show(
+									user_menu::show_with_pin(
 										&avatar,
 										state,
 										user,
 										&mut self.profile,
 										&mut self.user_action,
+										Some(shortcuts::ShortcutView::new(
+											&self.channel_preferences,
+											shortcuts_available,
+										)),
 									);
 								}
 								if dm
@@ -1382,7 +1396,15 @@ impl MessagingUi {
 							.as_ref()
 							.filter(|c| c.guild.is_none() && c.kind == 3)
 						{
-							self.group_menu.dropdown(ui, state, c);
+							self.group_menu.dropdown(
+								ui,
+								state,
+								c,
+								shortcuts::ShortcutView::new(
+									&self.channel_preferences,
+									shortcuts_available,
+								),
+							);
 						}
 						if state.selected.is_some() && !selected_voice {
 							if self.search.open && !self.search.pins() {
@@ -2983,6 +3005,15 @@ impl MessagingUi {
 		}
 		self.group_menu
 			.show(&ctx, state, &mut self.avatars, &mut commands);
+		for intent in self
+			.channel_menu
+			.shortcut_requested
+			.take()
+			.into_iter()
+			.chain(self.group_menu.pin_requested.take())
+		{
+			self.apply_shortcut(state, intent);
+		}
 		if let Some(action) = self.user_action.take().or(self.timeline.user_action.take()) {
 			let command = match action {
 				user_menu::Action::Note(user) => {
@@ -2992,6 +3023,10 @@ impl MessagingUi {
 				user_menu::Action::Nickname(user) => {
 					self.profile = None;
 					self.contact_editor.open(user, true, state)
+				}
+				user_menu::Action::Shortcut(intent) => {
+					self.apply_shortcut(state, intent);
+					None
 				}
 				action => user_menu::prepare(action, state),
 			};
