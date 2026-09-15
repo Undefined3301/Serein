@@ -1,4 +1,3 @@
-//! Shared wheel-speed and hold-to-scroll autoscroll for the main lists.
 use crate::design;
 use egui::{AsIdSalt, IdSalt, PointerButton, Pos2, Rect, ScrollArea, Shape, Stroke, pos2};
 
@@ -19,8 +18,8 @@ enum Drive {
 pub struct Session {
 	drive: Drive,
 	frame: Option<u64>,
-	armed: bool,
-	applied: Option<(egui::Id, f32)>,
+	bound: bool,
+	last_offset: Option<(egui::Id, f32)>,
 }
 
 impl Session {
@@ -32,7 +31,7 @@ impl Session {
 		let frame = ui.ctx().cumulative_frame_nr();
 		if self.frame != Some(frame) {
 			self.frame = Some(frame);
-			self.armed = false;
+			self.bound = false;
 			self.stop_if_needed(ui);
 		}
 		self.try_start(ui, target, area);
@@ -41,7 +40,7 @@ impl Session {
 				origin,
 				target: held,
 			} if held == target => {
-				self.armed = true;
+				self.bound = true;
 				let pointer = ui
 					.input(|input| input.pointer.hover_pos())
 					.unwrap_or(origin);
@@ -64,7 +63,7 @@ impl Session {
 		let delta = self.bind(ui, target, area);
 		if delta == 0.0 {
 			if !self.holding() {
-				self.applied = None;
+				self.last_offset = None;
 			}
 			return builder;
 		}
@@ -75,14 +74,13 @@ impl Session {
 		if (next - state.offset.y).abs() < f32::EPSILON {
 			return builder;
 		}
-		if let Some((id, last)) = self.applied
+		if let Some((id, last)) = self.last_offset
 			&& id == target
-			&& (last - state.offset.y).abs() > 0.5
-			&& (next - state.offset.y).signum() == (last - state.offset.y).signum()
+			&& clamped_away(last, state.offset.y, next)
 		{
 			return builder;
 		}
-		self.applied = Some((target, next));
+		self.last_offset = Some((target, next));
 		ui.ctx().request_repaint();
 		builder.vertical_scroll_offset(next)
 	}
@@ -121,10 +119,10 @@ impl Session {
 		ctx.set_cursor_icon(egui::CursorIcon::ResizeVertical);
 	}
 
-	pub fn reap(&mut self, ctx: &egui::Context) {
-		if self.frame != Some(ctx.cumulative_frame_nr()) || !self.armed {
+	pub fn clear_if_unbound(&mut self, ctx: &egui::Context) {
+		if self.frame != Some(ctx.cumulative_frame_nr()) || !self.bound {
 			self.drive = Drive::Idle;
-			self.applied = None;
+			self.last_offset = None;
 		}
 	}
 
@@ -139,7 +137,7 @@ impl Session {
 		});
 		if stop {
 			self.drive = Drive::Idle;
-			self.applied = None;
+			self.last_offset = None;
 		}
 	}
 
@@ -161,9 +159,13 @@ impl Session {
 				origin: pos,
 				target,
 			};
-			self.armed = true;
+			self.bound = true;
 		}
 	}
+}
+
+fn clamped_away(requested: f32, current: f32, next: f32) -> bool {
+	(requested - current).abs() > 0.5 && (next - current).signum() == (requested - current).signum()
 }
 
 fn velocity(origin: Pos2, pointer: Pos2, dt: f32) -> f32 {

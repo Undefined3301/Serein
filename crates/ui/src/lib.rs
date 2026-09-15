@@ -3173,7 +3173,7 @@ impl MessagingUi {
 			&& !state.demo
 			&& !ctx.egui_wants_keyboard_input()
 			&& ctx.input(|input| input.focused && input.key_down(egui::Key::V));
-		self.scroll.reap(&ctx);
+		self.scroll.clear_if_unbound(&ctx);
 		self.scroll.paint(&ctx);
 		if !commands.is_empty() {
 			ctx.request_repaint();
