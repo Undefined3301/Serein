@@ -1,16 +1,22 @@
 # Local storage policy and audit
 
-## Last-viewed server channels (September 14, 2026)
+## Last-viewed server channels (September 15, 2026)
 
-Server navigation remembers at most 1,024 guild/channel ID pairs in session RAM
-(16 KiB vector payload, plus its fixed header). Updating a visit replaces that
-server's entry; the oldest visit is evicted at capacity. There are no names,
-message contents, timers, disk writes, or schema changes. Logout releases the
-list; it is not restored across application restarts. Reopening a server checks
-current channel membership, supported kind, and view permission before selecting
-its remembered channel, otherwise preferring an accessible ordinary text/forum
-channel. Voice selection only opens its existing preview, never joins a call.
-With no accessible channel, the existing conversation remains intact.
+Server navigation remembers at most 1,024 guild/channel ID pairs in RAM
+(16 KiB vector payload, plus its fixed header) and persists the same map in an
+account-isolated SQLite row (`last_viewed_channels`, JSON at most 64 KiB).
+Updating a visit replaces that server's entry; the oldest visit is evicted at
+capacity. There are no names, message contents, or Discord settings-proto writes.
+Logout clears the RAM map and queues `Forget`, which deletes the disk row with
+the other account-isolated tables. An authenticated restart that does not
+logout restores the map after READY, before the next server click. A click
+that lands before the load finishes keeps the session visits and fills the
+other guilds from disk, then writes the merged map. Reopening a server checks
+current channel membership, supported kind, and view permission before
+selecting its remembered channel, otherwise preferring an accessible ordinary
+text/forum channel. Voice selection only opens its existing preview, never
+joins a call. With no accessible channel, the existing conversation remains
+intact. `--demo` does not open SQLite, so demo last-viewed stays in RAM.
 
 ## Friends-home derived UI caches (September 14, 2026)
 

@@ -67,6 +67,8 @@ pub enum Operation {
 	SaveGifFavorites(Vec<model::Gif>),
 	LoadChannelPreferences,
 	SaveChannelPreferences(model::ChannelPreferences),
+	LoadLastViewedChannels,
+	SaveLastViewedChannels(model::LastViewedChannels),
 	LoadChannel {
 		channel: Id,
 		request: u64,
@@ -106,6 +108,8 @@ pub enum Outcome {
 	GifFavorites(Vec<model::Gif>),
 	ChannelPreferences(Result<model::ChannelPreferences, StoreError>),
 	ChannelPreferencesSaved(Result<(), StoreError>),
+	LastViewedChannels(Result<model::LastViewedChannels, StoreError>),
+	LastViewedChannelsSaved(Result<(), StoreError>),
 	Channel {
 		channel: Id,
 		request: u64,
@@ -210,7 +214,9 @@ impl Cache {
 		}
 	}
 	pub fn queue(&self, generation: u64, account: Id, operation: Operation) -> bool {
-		if matches!(&operation, Operation::SaveChannelPreferences(value) if !value.is_valid()) {
+		if matches!(&operation, Operation::SaveChannelPreferences(value) if !value.is_valid())
+			|| matches!(&operation, Operation::SaveLastViewedChannels(value) if !value.is_valid())
+		{
 			return false;
 		}
 		let payload = match &operation {
@@ -342,6 +348,18 @@ fn execute(
 				Err(error) => Err(*error),
 			});
 		}
+		Operation::LoadLastViewedChannels => {
+			return Outcome::LastViewedChannels(match store {
+				Ok(store) => store.last_viewed_channels(account),
+				Err(error) => Err(*error),
+			});
+		}
+		Operation::SaveLastViewedChannels(value) => {
+			return Outcome::LastViewedChannelsSaved(match store {
+				Ok(store) => store.save_last_viewed_channels(account, value),
+				Err(error) => Err(*error),
+			});
+		}
 		Operation::LoadAppPreferences => {
 			return Outcome::AppPreferences(match store {
 				Ok(store) => store.app_preferences(),
@@ -436,6 +454,8 @@ fn execute(
 		Operation::LoadAppPreferences
 		| Operation::LoadChannelPreferences
 		| Operation::SaveChannelPreferences(_)
+		| Operation::LoadLastViewedChannels
+		| Operation::SaveLastViewedChannels(_)
 		| Operation::SaveAppPreferences(_)
 		| Operation::LoadReadingPreferences
 		| Operation::SaveReadingPreferences(_)
@@ -449,6 +469,8 @@ fn execute(
 			Operation::LoadAppPreferences
 			| Operation::LoadChannelPreferences
 			| Operation::SaveChannelPreferences(_)
+			| Operation::LoadLastViewedChannels
+			| Operation::SaveLastViewedChannels(_)
 			| Operation::SaveAppPreferences(_)
 			| Operation::LoadReadingPreferences
 			| Operation::SaveReadingPreferences(_)

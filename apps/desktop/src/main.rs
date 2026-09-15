@@ -511,6 +511,11 @@ struct Desktop {
 	cache_clears: cache::HistoryClears,
 	cache_error: bool,
 	cache_status: &'static str,
+	last_viewed_loaded: bool,
+	last_viewed_load_pending: bool,
+	last_viewed_save_pending: bool,
+	last_viewed_saved_epoch: u64,
+	last_viewed_queued_epoch: u64,
 	appearance: egui::ThemePreference,
 	appearance_changed: bool,
 	reading: reading_settings::ReadingSettings,
@@ -1398,6 +1403,11 @@ impl Desktop {
 			cache_clears: Default::default(),
 			cache_error: false,
 			cache_status: "Loading local appearance…",
+			last_viewed_loaded: false,
+			last_viewed_load_pending: false,
+			last_viewed_save_pending: false,
+			last_viewed_saved_epoch: 0,
+			last_viewed_queued_epoch: 0,
 			appearance: egui::ThemePreference::System,
 			appearance_changed: false,
 			reading,
@@ -1463,6 +1473,11 @@ impl Desktop {
 		self.messaging.channel_preferences_reload = false;
 		self.messaging.channel_preferences_save_pending = false;
 		self.messaging.channel_preferences_status = "";
+		self.last_viewed_loaded = false;
+		self.last_viewed_load_pending = false;
+		self.last_viewed_save_pending = false;
+		self.last_viewed_saved_epoch = 0;
+		self.last_viewed_queued_epoch = 0;
 		self.messaging.own_presence = model::OwnPresence::default();
 		self.messaging.own_presence_changed = false;
 		self.messaging.draft_restore_pending = false;
@@ -1503,6 +1518,11 @@ impl Desktop {
 		self.pending_save = None;
 		let old_account = self.state.user.as_ref().filter(|_| !was_demo).map(|u| u.id);
 		self.state.logout();
+		self.last_viewed_loaded = false;
+		self.last_viewed_load_pending = false;
+		self.last_viewed_save_pending = false;
+		self.last_viewed_saved_epoch = 0;
+		self.last_viewed_queued_epoch = 0;
 		if let (Some(cache), Some(account)) = (&self.cache, old_account) {
 			if cache.queue(self.state.generation, account, cache::Operation::Forget) {
 				self.cache_pending += 1;
@@ -3256,6 +3276,19 @@ impl Desktop {
 						"Could not save channel shortcuts."
 					};
 				}
+				cache::Outcome::LastViewedChannels(result) => {
+					self.last_viewed_load_pending = false;
+					self.last_viewed_loaded = true;
+					if let Ok(value) = result {
+						self.state.restore_last_viewed(value);
+					}
+				}
+				cache::Outcome::LastViewedChannelsSaved(result) => {
+					self.last_viewed_save_pending = false;
+					if result.is_ok() {
+						self.last_viewed_saved_epoch = self.last_viewed_queued_epoch;
+					}
+				}
 				cache::Outcome::GifFavorites(favorites) => {
 					self.state.restore_gif_favorites(favorites);
 				}
@@ -3500,6 +3533,10 @@ impl Desktop {
 					&& !self.messaging.channel_preferences_load_pending
 				{
 					self.messaging.channel_preferences_reload = true;
+				}
+				if !self.last_viewed_loaded && !self.last_viewed_load_pending {
+					self.last_viewed_load_pending =
+						self.queue_cache(cache::Operation::LoadLastViewedChannels);
 				}
 				if let Some(secret) = self.pending_save.take()
 					&& let Some(store) = &self.store
@@ -4404,6 +4441,19 @@ impl eframe::App for Desktop {
 				self.state.generation,
 				user.id,
 			));
+		}
+		if self.last_viewed_loaded
+			&& self.state.last_viewed_epoch != self.last_viewed_saved_epoch
+			&& !self.last_viewed_save_pending
+			&& !self.state.demo
+			&& !self.fixture_only
+		{
+			self.last_viewed_queued_epoch = self.state.last_viewed_epoch;
+			self.last_viewed_save_pending = self.queue_cache(
+				cache::Operation::SaveLastViewedChannels(model::LastViewedChannels {
+					pairs: self.state.last_viewed_channels.clone(),
+				}),
+			);
 		}
 		if self.messaging.channel_preferences_changed
 			&& !self.messaging.channel_preferences_save_pending

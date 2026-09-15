@@ -6,6 +6,8 @@ pub mod messaging_permissions;
 pub mod notification_preferences;
 pub mod notification_settings;
 pub use channel_preferences::ChannelPreferences;
+mod last_viewed;
+pub use last_viewed::LastViewedChannels;
 pub mod forum;
 pub mod gifs;
 pub mod guild_folders;

@@ -856,6 +856,8 @@ impl TimelineView {
 				(p, height)
 			})
 			.collect();
+		let packed =
+			total + pending_rows.iter().map(|(_, height)| *height).sum::<f32>() + end_padding;
 		if std::mem::take(&mut self.jump) {
 			offset = Some(
 				(total + end_padding + pending_rows.iter().map(|(_, height)| height).sum::<f32>()
@@ -892,6 +894,12 @@ impl TimelineView {
 			if welcome && let Some(channel) = state.selected.and_then(|id| state.channel(id)) {
 				channel_welcome(ui, channel, viewport.height() - end_padding);
 			}
+			let lead = if welcome {
+				0.0
+			} else {
+				(viewport.height() - packed).max(0.0)
+			};
+			ui.add_space(lead);
 			// Initial bottom alignment can expose more rows after estimates shrink.
 			let overscan = if channel_changed && self.following {
 				viewport.height().max(100.0)
@@ -900,10 +908,14 @@ impl TimelineView {
 			};
 			let (first, _, top) = visible_range(
 				&self.rows,
-				(viewport.min.y - overscan).max(0.0),
-				viewport.max.y + 100.0,
+				(viewport.min.y - overscan - lead).max(0.0),
+				(viewport.max.y + 100.0 - lead).max(0.0),
 			);
-			let (anchor, _, anchor_top) = visible_range(&self.rows, viewport.min.y, viewport.max.y);
+			let (anchor, _, anchor_top) = visible_range(
+				&self.rows,
+				(viewport.min.y - lead).max(0.0),
+				(viewport.max.y - lead).max(0.0),
+			);
 			let content_top = ui.cursor().top();
 			let clip = ui.clip_rect();
 			// Measure leading overscan without changing the visible rows or parent bounds.
@@ -1768,15 +1780,20 @@ impl TimelineView {
 		}
 		// ScrollArea applies wheel input after laying out its contents. Preserve that
 		// movement when new row measurements rebuild the timeline on the next pass.
+		let lead = if welcome {
+			0.0
+		} else {
+			(output.inner_rect.height() - packed).max(0.0)
+		};
 		let (anchor, _, anchor_top) = visible_range(
 			&self.rows,
-			output.state.offset.y,
-			output.state.offset.y + output.inner_rect.height(),
+			(output.state.offset.y - lead).max(0.0),
+			(output.state.offset.y + output.inner_rect.height() - lead).max(0.0),
 		);
 		self.anchor = self
 			.rows
 			.get(anchor)
-			.map(|(id, _)| (*id, output.state.offset.y - anchor_top));
+			.map(|(id, _)| (*id, output.state.offset.y - lead - anchor_top));
 		if selected_reply.is_some() {
 			state.reply = selected_reply;
 			self.reply_started = true;
@@ -1878,7 +1895,8 @@ impl TimelineView {
 		}
 		// A user scroll near the top requests one page; a short initial view never drains history.
 		self.load_older = !self.following
-			&& output.state.offset.y < 160.0
+			&& output.state.offset.y + 160.0 >= lead
+			&& output.state.offset.y < lead + 160.0
 			&& ui.input(|i| {
 				scroll_delta > 0.0
 					&& i.pointer
