@@ -53,6 +53,7 @@ mod profile_edit;
 mod reactions;
 mod reading;
 pub mod screen;
+mod scroll;
 mod search;
 mod server_admin;
 mod server_audit_log;
@@ -143,6 +144,7 @@ pub struct MessagingUi {
 	archives: archives::ArchivesUi,
 	archive_parent: Option<Id>,
 	forum: forum::ForumUi,
+	scroll: scroll::Session,
 	timeline: timeline::TimelineView,
 	edit_modified: Option<(Id, Id, bool)>,
 	edit_undo_cleared: bool,
@@ -828,9 +830,12 @@ impl MessagingUi {
 		};
 		let row_spacing = ui.spacing().item_spacing.y;
 		ui.spacing_mut().item_spacing.y = 0.0;
-		egui::ScrollArea::vertical()
-			.id_salt(("people", list.channel))
-			.auto_shrink([false, false])
+		self.scroll
+			.attach(
+				ui,
+				("people", list.channel),
+				egui::ScrollArea::vertical().auto_shrink([false, false]),
+			)
 			.show_rows(ui, 42.0, self.member_cache.len(), |ui, range| {
 				for index in range {
 					match &self.member_cache[index] {
@@ -2741,7 +2746,8 @@ impl MessagingUi {
 					return;
 				}
 				if selected_forum {
-					self.forum.show(ui, state, channel, &mut commands);
+					self.forum
+						.show(ui, state, channel, &mut commands, &mut self.scroll);
 					return;
 				}
 				egui::Panel::bottom("composer")
@@ -2804,13 +2810,14 @@ impl MessagingUi {
 					.show(ui, |ui| {
 						self.timeline.hide_media_links = self.reading_preferences.hide_media_links;
 						self.timeline.extension_actions = self.extensions.message_actions();
-						self.timeline.show(
+						self.timeline.show_with_scroll(
 							ui,
 							state,
 							&mut self.editing,
 							&mut self.deleting,
 							(&mut self.avatars, &mut self.profile),
 							self.pending_upload.as_ref(),
+							&mut self.scroll,
 						);
 						if let Some((action, text)) = self.timeline.extension_request.take() {
 							self.extensions
@@ -3166,6 +3173,8 @@ impl MessagingUi {
 			&& !state.demo
 			&& !ctx.egui_wants_keyboard_input()
 			&& ctx.input(|input| input.focused && input.key_down(egui::Key::V));
+		self.scroll.reap(&ctx);
+		self.scroll.paint(&ctx);
 		if !commands.is_empty() {
 			ctx.request_repaint();
 		}

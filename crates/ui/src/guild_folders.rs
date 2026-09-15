@@ -482,7 +482,7 @@ impl MessagingUi {
 							}
 						});
 					});
-					if enabled {
+					if enabled && response.drag_started_by(egui::PointerButton::Primary) {
 						response.dnd_set_drag_payload(item);
 					}
 				},

@@ -297,9 +297,13 @@ impl MessagingUi {
 		let row_count = self.channel_cache.rows.len().max(usize::from(dm_list)) + prefix;
 		let previous_spacing = ui.spacing().item_spacing.y;
 		ui.spacing_mut().item_spacing.y = 0.0;
-		let output = egui::ScrollArea::vertical()
-			.id_salt(("channel-list", self.guild))
-			.auto_shrink([false, false])
+		let output = self
+			.scroll
+			.attach(
+				ui,
+				("channel-list", self.guild),
+				egui::ScrollArea::vertical().auto_shrink([false, false]),
+			)
 			.show_rows(ui, row_height, row_count, |ui, range| {
 				for index in range {
 					if index < prefix {

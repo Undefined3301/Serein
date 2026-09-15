@@ -201,9 +201,14 @@ impl MessagingUi {
 				if response.on_hover_text("Direct Messages").clicked() {
 					self.guild = None;
 				}
-				egui::ScrollArea::vertical()
-					.id_salt("guild-list")
-					.scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+				self.scroll
+					.attach(
+						ui,
+						"guild-list",
+						egui::ScrollArea::vertical().scroll_bar_visibility(
+							egui::scroll_area::ScrollBarVisibility::AlwaysHidden,
+						),
+					)
 					.show(ui, |ui| {
 						ui.spacing_mut().item_spacing.y = 12.0;
 						// Your own call keeps its conversation on the rail, like Discord's.

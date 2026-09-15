@@ -39,6 +39,10 @@ fn main() {
 		.last_message = Some(model::Id(500));
 	let ctx = egui::Context::default();
 	ui::design::apply(&ctx);
+	assert_eq!(
+		ctx.options(|options| options.input_options.line_scroll_speed),
+		120.0
+	);
 	let mut view = ui::MessagingUi::default();
 	let mut number = 0;
 	let repaint_delay = std::cell::Cell::new(std::time::Duration::ZERO);
@@ -78,7 +82,6 @@ fn main() {
 	};
 	frame(vec![egui::Event::PointerMoved(origin)]);
 	frame(vec![button(true)]);
-	frame(vec![button(false)]);
 	for (y, upward) in [(250.0, true), (450.0, false)] {
 		let start = frame(vec![egui::Event::PointerMoved(egui::pos2(600.0, y))]);
 		let mut previous = start;
@@ -117,7 +120,17 @@ fn main() {
 			"autoscroll must stop scheduling animation frames at the boundary (pointer y={y})"
 		);
 	}
+	let held = frame(vec![]);
+	frame(vec![button(false)]);
+	let released = frame(vec![]);
+	for _ in 0..30 {
+		assert_eq!(
+			frame(vec![]),
+			released,
+			"releasing mouse3 must stop autoscroll (held from {held})"
+		);
+	}
 	println!(
-		"PASS: synthetic chat scrolls continuously in both directions without reversing or jumping; no animation loop at either boundary."
+		"PASS: synthetic chat scrolls while mouse3 is held and stops on release; no animation loop at either boundary."
 	);
 }

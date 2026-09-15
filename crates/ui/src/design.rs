@@ -668,6 +668,9 @@ pub fn apply(ctx: &egui::Context) {
 		style.visuals.widgets.open.fg_stroke = Stroke::new(1.0, p.text_strong);
 		ctx.set_style_of(theme, style);
 	}
+	ctx.options_mut(|options| {
+		options.input_options.line_scroll_speed = crate::scroll::DISCORD_LINE_SCROLL_SPEED;
+	});
 }
 /// Space reserved at the left of window strips for macOS traffic lights.
 pub const TRAFFIC_LIGHT_INSET: f32 = if cfg!(target_os = "macos") { 72.0 } else { 0.0 };
