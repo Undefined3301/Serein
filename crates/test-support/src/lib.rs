@@ -702,6 +702,42 @@ pub fn empty_channel_demo_state(long_name: bool) -> State {
 	});
 	state
 }
+
+/// Extra synthetic servers plus one collapsed folder so `--demo` can show the 2x2 mosaic.
+pub fn seed_demo_folder_mosaic(state: &mut State) {
+	const EXTRA: [(u64, &str, &str); 4] = [
+		(11, "North lab", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+		(12, "Ops desk", "cccccccccccccccccccccccccccccccc"),
+		(13, "Night shift", "dddddddddddddddddddddddddddddddd"),
+		(14, "Archive", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
+	];
+	for (id, name, hash) in EXTRA {
+		state.guilds.push(Guild {
+			emojis: None,
+			id: Id(id),
+			name: name.into(),
+			icon: Some(hash.into()),
+		});
+	}
+	state.guild_folders = Some(model::guild_folders::Settings {
+		folders: vec![
+			model::guild_folders::Folder {
+				id: Some(1),
+				guild_ids: vec![Id(11), Id(12), Id(13), Id(14)],
+				name: Some("Synthetic folder".into()),
+				color: Some(0x5865f2),
+			},
+			model::guild_folders::Folder {
+				id: None,
+				guild_ids: vec![Id(10)],
+				name: None,
+				color: None,
+			},
+		],
+		version: 0,
+	});
+}
+
 /// Additional native chat scenario: fixed dates, grouped authors and unread events.
 pub fn chat_demo_state() -> State {
 	let mut state = demo_state();
