@@ -1,6 +1,6 @@
 use eframe::egui;
 use local_store::{Appearance, LocalStore, StoreError};
-use model::{Id, Message};
+use model::{Id, LastViewedChannels, Message};
 use std::{
 	collections::{BTreeMap, BTreeSet},
 	sync::{
@@ -250,6 +250,10 @@ impl Cache {
 					+ value.expanded_folders.capacity() * size_of::<u64>()
 			}
 			Operation::SaveThemeVariant(value) => value.as_ref().map_or(0, String::capacity),
+			Operation::SaveLastViewedChannels(value) => {
+				value.pairs.capacity() * size_of::<(Id, Id)>()
+					+ LastViewedChannels::MAX_JSON_BYTES
+			}
 			_ => 0,
 		};
 		let ids = match &operation {

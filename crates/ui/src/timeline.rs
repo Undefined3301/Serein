@@ -1895,8 +1895,8 @@ impl TimelineView {
 		}
 		// A user scroll near the top requests one page; a short initial view never drains history.
 		self.load_older = !self.following
-			&& output.state.offset.y + 160.0 >= lead
-			&& output.state.offset.y < lead + 160.0
+			&& lead == 0.0
+			&& output.state.offset.y < 160.0
 			&& ui.input(|i| {
 				scroll_delta > 0.0
 					&& i.pointer

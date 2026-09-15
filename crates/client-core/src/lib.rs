@@ -561,10 +561,8 @@ pub struct State {
 	#[doc(hidden)]
 	pub navigation_index: NavigationIndex,
 	pub selected: Option<Id>,
-	/// Account-local guild/channel ID pairs, oldest visit first; at most 16 KiB.
 	#[doc(hidden)]
 	pub last_viewed_channels: Vec<(Id, Id)>,
-	/// Bumped when this session writes the last-viewed map.
 	#[doc(hidden)]
 	pub last_viewed_epoch: u64,
 	pub timeline: Timeline,

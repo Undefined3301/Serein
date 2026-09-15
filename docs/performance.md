@@ -41,7 +41,7 @@ and coalesced saves reuse the existing SQLite worker. There is no new network
 endpoint or Discord proto write for this memory.
 Focused reducer and synthetic egui pointer tests cover restoration, repeated
 click no-op, revoked/deleted fallback, voice preview, logout and memory bounds.
-`cargo xtask check` passed. Native screenshots and interaction CPU/memory/p95
+This persist update did not rerun `cargo xtask check`. Native screenshots and interaction CPU/memory/p95
 were unavailable: Orca CLI is absent and the Windows Computer Use native pipe
 fails with OS error 2. These tests are not native visual or live Discord proof.
 
