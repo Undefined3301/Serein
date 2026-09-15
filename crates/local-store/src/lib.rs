@@ -129,7 +129,7 @@ impl LocalStore {
 	fn initialize(mut connection: Connection) -> Result<Self> {
 		connection.busy_timeout(std::time::Duration::from_secs(2))?;
 		let version: u32 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
-		if version > 16 {
+		if version > 17 {
 			return Err(StoreError::Incompatible);
 		}
 		connection.execute_batch("PRAGMA page_size=4096; PRAGMA max_page_count=16384; PRAGMA cache_size=-2048; PRAGMA temp_store=MEMORY; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA wal_autocheckpoint=256; PRAGMA journal_size_limit=8388608; PRAGMA secure_delete=ON; PRAGMA auto_vacuum=INCREMENTAL;
@@ -247,7 +247,12 @@ impl LocalStore {
             CREATE TABLE IF NOT EXISTS channel_preferences(
                 account TEXT PRIMARY KEY NOT NULL,
                 value TEXT NOT NULL CHECK(typeof(value)='text' AND length(CAST(value AS BLOB))<=8192)
-            ); PRAGMA user_version=16;")?;
+            );")?;
+		transaction.pragma_update(
+			None,
+			"user_version",
+			if version > 16 { version } else { 16 },
+		)?;
 		let has_animate_gifs: bool = transaction.query_row(
 			"SELECT EXISTS(SELECT 1 FROM pragma_table_info('reading_preferences') WHERE name='animate_gifs')",
 			[],

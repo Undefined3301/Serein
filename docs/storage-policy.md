@@ -95,7 +95,8 @@ channels. Both lists together contain at most 256 IDs,
 with at most 4 KiB retained vector storage and an 8 KiB serialized record. Loading
 and saving run on the existing bounded cache worker; corrupt/oversized records and
 save failures are shown. Shortcuts survive restart and are removed on account
-logout. They do not sync to Discord. Channel edit drafts, authoritative settings,
+logout. They do not sync to Discord. This opener reads a schema-17 file
+that only added `last_viewed_channels` and leaves `user_version` at 17. Channel edit drafts, authoritative settings,
 pending actions and locally observed mute expiry times remain bounded session RAM.
 Each category/channel settings snapshot retains at most 1000 overwrites (48 KiB),
 a 400-byte name and a 16 KiB topic, under 64 KiB total heap allocation. The UI holds
