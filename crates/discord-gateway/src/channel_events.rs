@@ -110,8 +110,6 @@ pub(super) fn update(bytes: &[u8]) -> Result<Update, Failure> {
 			spam_direct: None,
 		});
 	}
-	// Optional fields may be omitted even on visibility restoration. Core admits this
-	// candidate only when absent; the patch below updates existing channels losslessly.
 	let message_request = patch
 		.pending_message_request()
 		.map(|pending| (patch.id, pending));

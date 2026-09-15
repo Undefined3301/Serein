@@ -325,7 +325,6 @@ impl State {
 			.max(channel.last_message)
 			.unwrap_or(channel.id)
 	}
-	/// Unread and in-call private text channels, newest activity first, active call pinned.
 	pub fn unread_directs(&self, call: Option<Id>) -> Vec<Id> {
 		let mut rows: Vec<(Id, Id)> = self
 			.channels

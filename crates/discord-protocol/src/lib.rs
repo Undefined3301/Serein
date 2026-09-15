@@ -137,10 +137,8 @@ pub struct ChannelDto {
 	pub permission_overwrites: Option<Vec<Overwrite>>,
 	#[serde(default)]
 	pub message_count: Option<u32>,
-	/// Unofficial private-channel flag. Not copied onto `model::Channel`.
 	#[serde(default)]
 	pub is_message_request: bool,
-	/// Unofficial spam-folder flag. Not copied onto `model::Channel`.
 	#[serde(default)]
 	pub is_spam: bool,
 }
