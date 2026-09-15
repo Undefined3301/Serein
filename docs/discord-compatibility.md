@@ -1001,8 +1001,10 @@ the unread rail or the Direct Messages sidebar. The unofficial relationship fiel
 The unofficial channel fields `is_message_request` and `is_spam`, plus channel
 flag `IS_SPAM` (`1 << 5`), come from the
 [docs.discord.food channel object](https://docs.discord.food/resources/channel#channel-object).
-READY, CHANNEL_CREATE, and CHANNEL_UPDATE fill bounded session sets. This change
-does not add a Message Requests or Spam inbox.
+READY, CHANNEL_CREATE, and CHANNEL_UPDATE fill the channel inbox sets.
+RELATIONSHIP_ADD, RELATIONSHIP_UPDATE, and RELATIONSHIP_REMOVE update the
+incoming friend-request spam set. This change does not add a Message Requests
+or Spam inbox.
 
 Unread private conversations on the rail sort by latest known activity, newest first.
 An active DM call stays visible and pinned at the top. The rail keeps at most 15 rows

@@ -634,6 +634,7 @@ async fn run_inner(
 		);
 		timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 		let mut ready_at: Option<Instant> = None;
+		let mut inbox = channel_events::Inbox::default();
 		let ready_deadline = Instant::now() + Duration::from_secs(30);
 		let mut active_members: Option<ActiveMembers> = None;
 		let mut direct_presence = presence::Pending::default();
@@ -844,7 +845,9 @@ async fn run_inner(
 										}
 										let mut message_requests = Vec::new();
 										let mut message_spams = Vec::new();
+										inbox.reset();
 										for channel in &ready.private_channels {
+											inbox.observe(channel);
 											if channel.is_obfuscated() {
 												continue;
 											}
@@ -1006,10 +1009,10 @@ async fn run_inner(
 									"MESSAGE_DELETE" => { let d: Deleted = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?; emit(Event::Delete { channel:d.channel_id, id:d.id })?; }
 									"MESSAGE_DELETE_BULK" => { let d: BulkDeleted = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?; if d.ids.len() > 100 { return Err(Failure::Capacity); } emit(Event::DeleteBulk { channel:d.channel_id, ids: d.ids })?; }
 									"AUTH_SESSION_CHANGE" => return Err(Failure::Expired),
-									"CHANNEL_DELETE" => { let c: ChannelDto = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?; calls.invalidate(c.id); emit(Event::Unavailable(c.id))?; }
+									"CHANNEL_DELETE" => { let c: ChannelDto = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?; inbox.forget(c.id); calls.invalidate(c.id); emit(Event::Unavailable(c.id))?; }
 									"CHANNEL_CREATE" => {
 										let permissions=owner_id.map(|owner|channel_events::permission_metadata(packet.d.get().as_bytes(),owner)).transpose()?.flatten();
-										let (event, request, spam)=channel_events::create(packet.d.get().as_bytes())?;
+										let (event, request, spam)=channel_events::create(packet.d.get().as_bytes(),&mut inbox)?;
 										match &event {
 											Event::ChannelCreated(c) => channel_events::admit_call(c,&known_guilds,&mut calls),
 											Event::Unavailable(id) => calls.invalidate(*id),
@@ -1026,7 +1029,7 @@ async fn run_inner(
 									}
 									"CHANNEL_UPDATE" => {
 										let permissions=owner_id.map(|owner|channel_events::permission_metadata(packet.d.get().as_bytes(),owner)).transpose()?.flatten();
-										let update=channel_events::update(packet.d.get().as_bytes())?;
+										let update=channel_events::update(packet.d.get().as_bytes(),&mut inbox)?;
 										if let Some(channel)=update.restored {channel_events::admit_call(&channel,&known_guilds,&mut calls);emit(Event::ChannelRestored(channel))?;}
 										if let Event::Unavailable(id)=&update.event {calls.invalidate(*id);}
 										if let Event::ChannelChanged(patch)=&update.event && let model::Patch::Value(kind)=patch.kind && kind != 2 && kind != 1 {calls.invalidate(patch.id);}

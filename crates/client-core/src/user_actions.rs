@@ -10,6 +10,37 @@ pub const MAX_RELATIONSHIPS: usize = 4000;
 pub const MAX_RELATIONSHIP_BYTES: usize = 128 * 1024;
 pub const MAX_FRIEND_BYTES: usize = 2 * 1024 * 1024;
 
+fn replace_id_set(
+	dest: &mut BTreeSet<Id>,
+	entries: Option<Vec<Id>>,
+	exclusive: Option<&mut BTreeSet<Id>>,
+	capacity: &'static str,
+	invalid: &'static str,
+) -> Result<(), &'static str> {
+	let Some(entries) = entries else {
+		dest.clear();
+		return Ok(());
+	};
+	if entries.len() > MAX_RELATIONSHIPS
+		|| entries.capacity() * size_of::<Id>() > MAX_RELATIONSHIP_BYTES
+	{
+		return Err(capacity);
+	}
+	let mut next = BTreeSet::new();
+	for id in entries {
+		if id.0 == 0 || !next.insert(id) {
+			return Err(invalid);
+		}
+	}
+	if let Some(exclusive) = exclusive {
+		for id in &next {
+			exclusive.remove(id);
+		}
+	}
+	*dest = next;
+	Ok(())
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub enum Action {
 	LoadNote(Id),
@@ -820,60 +851,37 @@ impl State {
 				}
 			}
 			Event::MessageRequests(entries) => {
-				self.user_actions.message_requests.clear();
-				if let Some(entries) = entries {
-					if entries.len() > MAX_RELATIONSHIPS
-						|| entries.capacity() * size_of::<Id>() > MAX_RELATIONSHIP_BYTES
-					{
-						return Err("Message requests exceed safe capacity");
-					}
-					for channel in entries {
-						if channel.0 == 0 || !self.user_actions.message_requests.insert(channel) {
-							self.user_actions.message_requests.clear();
-							return Err("Message requests contain invalid or duplicate channels");
-						}
-						self.user_actions.spam_directs.remove(&channel);
-					}
-				}
+				replace_id_set(
+					&mut self.user_actions.message_requests,
+					entries,
+					Some(&mut self.user_actions.spam_directs),
+					"Message requests exceed safe capacity",
+					"Message requests contain invalid or duplicate channels",
+				)?;
 			}
 			Event::MessageRequest { channel, pending } => {
 				self.set_message_request(channel, pending)?;
 			}
 			Event::MessageSpams(entries) => {
-				self.user_actions.spam_directs.clear();
-				if let Some(entries) = entries {
-					if entries.len() > MAX_RELATIONSHIPS
-						|| entries.capacity() * size_of::<Id>() > MAX_RELATIONSHIP_BYTES
-					{
-						return Err("Message requests exceed safe capacity");
-					}
-					for channel in entries {
-						if channel.0 == 0 || !self.user_actions.spam_directs.insert(channel) {
-							self.user_actions.spam_directs.clear();
-							return Err("Message requests contain invalid or duplicate channels");
-						}
-						self.user_actions.message_requests.remove(&channel);
-					}
-				}
+				replace_id_set(
+					&mut self.user_actions.spam_directs,
+					entries,
+					Some(&mut self.user_actions.message_requests),
+					"Message requests exceed safe capacity",
+					"Message requests contain invalid or duplicate channels",
+				)?;
 			}
 			Event::MessageSpam { channel, spam } => {
 				self.set_spam_direct(channel, spam)?;
 			}
 			Event::RequestSpams(entries) => {
-				self.user_actions.spam_requests.clear();
-				if let Some(entries) = entries {
-					if entries.len() > MAX_RELATIONSHIPS
-						|| entries.capacity() * size_of::<Id>() > MAX_RELATIONSHIP_BYTES
-					{
-						return Err("Friend requests exceed safe capacity");
-					}
-					for user in entries {
-						if user.0 == 0 || !self.user_actions.spam_requests.insert(user) {
-							self.user_actions.spam_requests.clear();
-							return Err("Friend requests contain invalid or duplicate users");
-						}
-					}
-				}
+				replace_id_set(
+					&mut self.user_actions.spam_requests,
+					entries,
+					None,
+					"Friend requests exceed safe capacity",
+					"Friend requests contain invalid or duplicate users",
+				)?;
 			}
 			Event::RequestSpam { user, spam } => {
 				self.set_spam_request(user, spam)?;

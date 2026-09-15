@@ -251,6 +251,18 @@ impl ChannelPatchDto {
 		}
 	}
 
+	pub fn merged_inbox(&self, prior: (bool, bool)) -> (bool, bool) {
+		if matches!(self.kind, Patch::Value(kind) if kind != 1) {
+			return (false, false);
+		}
+		let request = match self.is_message_request {
+			Patch::Value(v) => v,
+			Patch::Null => false,
+			Patch::Absent => prior.0,
+		};
+		(request, self.spam_folder().unwrap_or(prior.1))
+	}
+
 	pub fn pending_spam_direct(&self) -> Option<bool> {
 		match self.is_spam {
 			Patch::Value(_) | Patch::Null => self.spam_folder(),
