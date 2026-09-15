@@ -405,10 +405,7 @@ mod tests {
 		assert!(state.channel(Id(44)).is_some());
 		assert_eq!(state.home_request_parts(), (2, 2));
 		assert_eq!(state.home_request_count(), 4);
-		let robin = state
-			.friend(Id(1001))
-			.cloned()
-			.expect("demo friend Robin");
+		let robin = state.friend(Id(1001)).cloned().expect("demo friend Robin");
 		apply(
 			&mut state,
 			Event::ChannelCreated(model::Channel {
