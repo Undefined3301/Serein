@@ -842,6 +842,15 @@ async fn run_inner(
 												participants.append(&mut rows);
 											}
 										}
+										let message_requests: Vec<Id> = ready
+											.private_channels
+											.iter()
+											.filter(|channel| {
+												!channel.is_obfuscated()
+													&& channel.pending_message_request()
+											})
+											.map(|channel| channel.id)
+											.collect();
 										let (guilds, channels) = ready.navigation().map_err(|_| Failure::ProtocolAt("Gateway login: invalid or oversized channel/thread navigation"))?;
 										let (read_entries,read_version,partial)=ready.read_state.take().map_or((None,None,false),|snapshot|(Some(snapshot.entries.into_iter().filter(|e|e.kind==0).map(|e|(e.id,e.last_message_id,e.mention_count)).collect()),snapshot.version,snapshot.partial));
 										if guilds.len() + channels.len() > MAX_NAV { return Err(Failure::CapacityAt("Account navigation exceeds 131,072 entries; connection stopped")); }
@@ -862,6 +871,7 @@ async fn run_inner(
 										emit(Event::UserAction(client_core::user_actions::Event::Relationships(ready.relationships.take().map(|s| s.entries()))))?;
 										emit(Event::UserAction(client_core::user_actions::Event::Friends(friends)))?;
 										emit(Event::UserAction(client_core::user_actions::Event::Requests(requests)))?;
+										emit(Event::UserAction(client_core::user_actions::Event::MessageRequests(Some(message_requests))))?;
 										if let Some(nicknames) = nicknames { emit(Event::UserAction(client_core::user_actions::Event::Nicknames(nicknames)))?; }
 										if let Some(friends) = ready.merged_presences.as_ref().and_then(|m| m.friends.as_deref()).or(ready.presences.as_deref()) {
 											direct_presence.friends(friends, Instant::now(), &emit)?;
@@ -992,13 +1002,16 @@ async fn run_inner(
 									"CHANNEL_DELETE" => { let c: ChannelDto = decode(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?; calls.invalidate(c.id); emit(Event::Unavailable(c.id))?; }
 									"CHANNEL_CREATE" => {
 										let permissions=owner_id.map(|owner|channel_events::permission_metadata(packet.d.get().as_bytes(),owner)).transpose()?.flatten();
-										let event=channel_events::create(packet.d.get().as_bytes())?;
+										let (event, pending)=channel_events::create(packet.d.get().as_bytes())?;
 										match &event {
 											Event::ChannelCreated(c) => channel_events::admit_call(c,&known_guilds,&mut calls),
 											Event::Unavailable(id) => calls.invalidate(*id),
 											_=>{}
 										}
 										emit(event)?;
+										if let Some(channel) = pending {
+											emit(Event::UserAction(client_core::user_actions::Event::MessageRequest { channel, pending: true }))?;
+										}
 										if let Some(permissions)=permissions {emit(permissions)?;}
 									}
 									"CHANNEL_UPDATE" => {
@@ -1008,6 +1021,9 @@ async fn run_inner(
 										if let Event::Unavailable(id)=&update.event {calls.invalidate(*id);}
 										if let Event::ChannelChanged(patch)=&update.event && let model::Patch::Value(kind)=patch.kind && kind != 2 && kind != 1 {calls.invalidate(patch.id);}
 										emit(update.event)?;
+										if let Some((channel, pending)) = update.message_request {
+											emit(Event::UserAction(client_core::user_actions::Event::MessageRequest { channel, pending }))?;
+										}
 										if let Some(permissions)=permissions {emit(permissions)?;}
 									}
 									"THREAD_CREATE" | "THREAD_UPDATE" | "THREAD_DELETE" | "THREAD_LIST_SYNC" | "THREAD_MEMBERS_UPDATE" => {
@@ -1767,7 +1783,8 @@ mod tests {
 						Event::UserAction(
 							client_core::user_actions::Event::Relationships(None)
 							| client_core::user_actions::Event::Requests(None)
-							| client_core::user_actions::Event::Friends(None),
+							| client_core::user_actions::Event::Friends(None)
+							| client_core::user_actions::Event::MessageRequests(_),
 						) => return Ok(()),
 						_ => return Err(Failure::Protocol),
 					};

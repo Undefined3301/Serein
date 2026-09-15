@@ -137,10 +137,20 @@ pub struct ChannelDto {
 	pub permission_overwrites: Option<Vec<Overwrite>>,
 	#[serde(default)]
 	pub message_count: Option<u32>,
+	/// Unofficial private-channel flag. Not copied onto `model::Channel`.
+	#[serde(default)]
+	pub is_message_request: bool,
+	/// Unofficial spam-folder flag. Not copied onto `model::Channel`.
+	#[serde(default)]
+	pub is_spam: bool,
 }
 impl ChannelDto {
 	pub fn is_obfuscated(&self) -> bool {
 		self.flags & (1 << 17) != 0
+	}
+
+	pub fn pending_message_request(&self) -> bool {
+		self.guild_id.is_none() && self.kind == 1 && self.is_message_request && !self.is_spam
 	}
 
 	pub fn into_model(self) -> Channel {
@@ -192,10 +202,29 @@ pub struct ChannelPatchDto {
 	pub flags: Patch<u64>,
 	#[serde(default)]
 	pub message_count: Patch<u32>,
+	#[serde(default)]
+	pub is_message_request: Patch<bool>,
+	#[serde(default)]
+	pub is_spam: Patch<bool>,
 }
 impl ChannelPatchDto {
 	pub fn is_obfuscated(&self) -> bool {
 		matches!(self.flags, Patch::Value(flags) if flags & (1 << 17) != 0)
+	}
+
+	pub fn pending_message_request(&self) -> Option<bool> {
+		let request = match self.is_message_request {
+			Patch::Value(v) => Some(v),
+			Patch::Null => Some(false),
+			Patch::Absent => None,
+		};
+		let spam = matches!(self.is_spam, Patch::Value(true));
+		match request {
+			Some(false) => Some(false),
+			Some(true) => Some(!spam),
+			None if spam => Some(false),
+			None => None,
+		}
 	}
 
 	pub fn into_model(self) -> model::ChannelPatch {

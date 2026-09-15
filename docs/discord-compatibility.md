@@ -983,6 +983,20 @@ The native MPEG-4 source does not support external tracks; it receives an unname
 stream without a base URL and Media Foundation starts with socket support disabled.
 See [Microsoft MPEG-4 source documentation](https://learn.microsoft.com/en-us/windows/win32/medfound/mpeg-4-file-source).
 
+### Home rail request badge (September 15, 2026)
+
+The Direct Messages tile on the server rail shows a bottom-right count. The count is
+incoming friend requests plus pending non-spam message-request DMs. Outgoing friend
+requests do not increment it. The unofficial channel fields `is_message_request` and
+`is_spam` come from the
+[docs.discord.food channel object](https://docs.discord.food/resources/channel#channel-object).
+READY, CHANNEL_CREATE, and CHANNEL_UPDATE fill a bounded session set. This change
+does not add a Message Requests inbox. Live badge behavior is unverified.
+
+Unread private conversations on the rail sort by latest known activity, newest first.
+An active DM call stays visible and pinned at the top. The rail keeps at most 15 rows
+after that sort.
+
 ### Friend requests (September 12, 2026)
 
 Friends now includes Add Friend and Pending, with searchable incoming/outgoing lists,

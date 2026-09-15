@@ -4,7 +4,7 @@ use crate::{
 	auth::{AuthState, Failure},
 };
 use model::Id;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const MAX_RELATIONSHIPS: usize = 4000;
 pub const MAX_RELATIONSHIP_BYTES: usize = 128 * 1024;
@@ -63,6 +63,11 @@ pub enum Event {
 		user: Id,
 		blocked: bool,
 	},
+	MessageRequests(Option<Vec<Id>>),
+	MessageRequest {
+		channel: Id,
+		pending: bool,
+	},
 	Written {
 		action: Action,
 		request: u64,
@@ -79,6 +84,7 @@ pub struct Actions {
 	friends: BTreeMap<Id, (model::User, String)>,
 	friends_known: bool,
 	relationships: BTreeMap<Id, bool>,
+	message_requests: BTreeSet<Id>,
 	known: bool,
 	view: u64,
 	sequence: u64,
@@ -156,6 +162,20 @@ impl State {
 			.requests
 			.values()
 			.filter(|(u, _, _)| self.user_blocked(u.id) == Some(false))
+	}
+	pub fn home_request_count(&self) -> u32 {
+		let friends = self
+			.pending_friends()
+			.filter(|(_, _, incoming)| *incoming)
+			.count();
+		u32::try_from(friends.saturating_add(self.user_actions.message_requests.len()))
+			.unwrap_or(u32::MAX)
+	}
+	pub(crate) fn forget_message_request(&mut self, channel: Id) {
+		self.user_actions.message_requests.remove(&channel);
+	}
+	pub(crate) fn message_request_pending(&self, channel: Id) -> bool {
+		self.user_actions.message_requests.contains(&channel)
 	}
 	pub fn friend_requests_known(&self) -> bool {
 		self.user_actions.requests_known
@@ -699,6 +719,37 @@ impl State {
 						}
 					}
 					self.user_actions.known = true;
+				}
+			}
+			Event::MessageRequests(entries) => {
+				self.user_actions.message_requests.clear();
+				if let Some(entries) = entries {
+					if entries.len() > MAX_RELATIONSHIPS
+						|| entries.capacity() * size_of::<Id>() > MAX_RELATIONSHIP_BYTES
+					{
+						return Err("Message requests exceed safe capacity");
+					}
+					for channel in entries {
+						if channel.0 == 0 || !self.user_actions.message_requests.insert(channel) {
+							self.user_actions.message_requests.clear();
+							return Err("Message requests contain invalid or duplicate channels");
+						}
+					}
+				}
+			}
+			Event::MessageRequest { channel, pending } => {
+				if channel.0 == 0 {
+					return Err("Invalid message request");
+				}
+				if pending {
+					if !self.user_actions.message_requests.contains(&channel)
+						&& self.user_actions.message_requests.len() >= MAX_RELATIONSHIPS
+					{
+						return Err("Message requests exceed safe capacity");
+					}
+					self.user_actions.message_requests.insert(channel);
+				} else {
+					self.user_actions.message_requests.remove(&channel);
 				}
 			}
 			Event::Relationship { user, blocked } => {

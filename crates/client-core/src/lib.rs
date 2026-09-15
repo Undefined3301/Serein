@@ -2606,6 +2606,7 @@ impl State {
 			self.permissions.channels.remove(id);
 			self.end_voice_channel(*id);
 			self.read_state.forget(*id);
+			self.forget_message_request(*id);
 		}
 		if !removed.is_empty() {
 			self.clear_profile();
@@ -2834,6 +2835,10 @@ impl Event {
 				Self::UserAction(user_actions::Event::Relationships(entries)) => entries
 					.as_ref()
 					.map_or(0, |e| e.capacity() * size_of::<(Id, bool)>()),
+				Self::UserAction(user_actions::Event::MessageRequests(entries)) => entries
+					.as_ref()
+					.map_or(0, |e| e.capacity() * size_of::<Id>()),
+				Self::UserAction(user_actions::Event::MessageRequest { .. }) => size_of::<Id>(),
 				Self::Archives { result, .. } => {
 					result.as_ref().map_or(0, model::archives::Page::bytes)
 				}

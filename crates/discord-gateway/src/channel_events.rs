@@ -65,9 +65,11 @@ pub(super) fn admit_call(channel: &Channel, guilds: &BTreeSet<Id>, calls: &mut C
 	}
 }
 
-pub(super) fn create(bytes: &[u8]) -> Result<Event, Failure> {
+pub(super) fn create(bytes: &[u8]) -> Result<(Event, Option<Id>), Failure> {
 	let channel: ChannelDto = decode(bytes).map_err(|_| Failure::Protocol)?;
-	Ok(created(channel))
+	let pending =
+		(!channel.is_obfuscated() && channel.pending_message_request()).then_some(channel.id);
+	Ok((created(channel), pending))
 }
 
 pub(super) fn permission_metadata(bytes: &[u8], user: Id) -> Result<Option<Event>, Failure> {
@@ -93,6 +95,7 @@ pub(super) fn created(channel: ChannelDto) -> Event {
 pub(super) struct Update {
 	pub restored: Option<Channel>,
 	pub event: Event,
+	pub message_request: Option<(Id, bool)>,
 }
 
 pub(super) fn update(bytes: &[u8]) -> Result<Update, Failure> {
@@ -101,10 +104,14 @@ pub(super) fn update(bytes: &[u8]) -> Result<Update, Failure> {
 		return Ok(Update {
 			restored: None,
 			event: Event::Unavailable(patch.id),
+			message_request: None,
 		});
 	}
 	// Optional fields may be omitted even on visibility restoration. Core admits this
 	// candidate only when absent; the patch below updates existing channels losslessly.
+	let message_request = patch
+		.pending_message_request()
+		.map(|pending| (patch.id, pending));
 	let restored = decode::<ChannelDto>(bytes)
 		.ok()
 		.filter(|channel| {
@@ -121,6 +128,7 @@ pub(super) fn update(bytes: &[u8]) -> Result<Update, Failure> {
 	Ok(Update {
 		restored,
 		event: Event::ChannelChanged(patch.into_model()),
+		message_request,
 	})
 }
 
@@ -169,13 +177,16 @@ mod tests {
 	fn obfuscation_revokes_and_restoration_preserves_partial_updates() {
 		let hidden =
 			br#"{"id":"3","guild_id":"1","type":0,"flags":131072,"name":"not-a-placeholder"}"#;
-		assert!(matches!(create(hidden).unwrap(), Event::Unavailable(Id(3))));
+		assert!(matches!(
+			create(hidden).unwrap(),
+			(Event::Unavailable(Id(3)), None)
+		));
 		let update = super::update(hidden).unwrap();
 		assert!(matches!(update.event, Event::Unavailable(Id(3))));
 		assert!(update.restored.is_none());
 		assert!(matches!(
 			create(br#"{"id":"3","guild_id":"1","type":0,"name":"___hidden___"}"#).unwrap(),
-			Event::ChannelCreated(_)
+			(Event::ChannelCreated(_), None)
 		));
 		for flags in ["", ",\"flags\":0", ",\"flags\":16"] {
 			let body = format!(r#"{{"id":"3","guild_id":"1","type":0,"name":"Restored"{flags}}}"#);

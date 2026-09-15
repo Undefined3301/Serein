@@ -327,6 +327,26 @@ pub fn demo_state() -> State {
 					message_count: None,
 				},
 				Channel {
+					id: Id(40),
+					guild: None,
+					parent_id: None,
+					position: 0,
+					name: "Message request (synthetic)".into(),
+					kind: 1,
+					recipients: vec![User {
+						id: Id(8004),
+						name: "Rowan (synthetic)".into(),
+						avatar: None,
+						webhook: false,
+						kind: Default::default(),
+						discriminator: 0,
+					}],
+					last_message: None,
+					icon: None,
+					member_list_id: None,
+					message_count: None,
+				},
+				Channel {
 					id: Id(29),
 					guild: None,
 					parent_id: None,
@@ -459,7 +479,38 @@ pub fn demo_state() -> State {
 	});
 	state.apply(Envelope {
 		generation: state.generation,
-		event: Event::UserAction(client_core::user_actions::Event::Requests(Some(vec![]))),
+		event: Event::UserAction(client_core::user_actions::Event::Requests(Some(vec![
+			(
+				User {
+					id: Id(8001),
+					name: "Avery".into(),
+					avatar: None,
+					discriminator: 0,
+					webhook: false,
+					kind: Default::default(),
+				},
+				"avery.synthetic".into(),
+				true,
+			),
+			(
+				User {
+					id: Id(8003),
+					name: "Rowan".into(),
+					avatar: None,
+					discriminator: 0,
+					webhook: false,
+					kind: Default::default(),
+				},
+				"rowan.synthetic".into(),
+				true,
+			),
+		]))),
+	});
+	state.apply(Envelope {
+		generation: state.generation,
+		event: Event::UserAction(client_core::user_actions::Event::MessageRequests(Some(
+			vec![Id(40)],
+		))),
 	});
 	state.apply(Envelope {
 		generation: state.generation,

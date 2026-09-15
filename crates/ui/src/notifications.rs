@@ -28,24 +28,16 @@ impl RailCache {
 			return false;
 		}
 		let mut badges = std::collections::BTreeMap::<Id, (bool, u32)>::new();
-		let mut direct = Vec::new();
 		for channel in state.channels.iter().take(client_core::MAX_NAV) {
 			if let Some(guild) = channel.guild {
 				let entry = badges.entry(guild).or_default();
 				entry.0 |= state.channel_unread(channel) == Some(true)
 					|| state.unread_count(channel.id) > 0;
 				entry.1 = entry.1.saturating_add(state.mention_count(channel.id));
-			} else if direct.len() < 15
-				&& channel.supports_text()
-				&& (Some(channel.id) == call
-					|| state.channel_unread(channel) == Some(true)
-					|| state.unread_count(channel.id) > 0)
-			{
-				direct.push(channel.id);
 			}
 		}
 		self.guild_badges = badges.into_iter().collect();
-		self.direct = direct.into_boxed_slice();
+		self.direct = state.unread_directs(call).into_boxed_slice();
 		self.key = Some(key);
 		true
 	}
@@ -190,15 +182,35 @@ impl MessagingUi {
 					},
 				);
 				rail_indicator(ui, rect, home, hovered, false);
+				let requests = state.home_request_count();
+				if requests > 0 {
+					badge(
+						ui,
+						rect.right_bottom() - egui::vec2(8.0, 8.0),
+						requests,
+						design::window_palette(ui).base,
+					);
+				}
 				response.widget_info(|| {
 					egui::WidgetInfo::selected(
 						egui::WidgetType::SelectableLabel,
 						true,
 						home,
-						"Direct messages",
+						if requests > 0 {
+							format!("Direct messages, {requests} requests")
+						} else {
+							"Direct messages".into()
+						},
 					)
 				});
-				if response.on_hover_text("Direct Messages").clicked() {
+				if response
+					.on_hover_text(if requests > 0 {
+						format!("Direct Messages · {requests} requests")
+					} else {
+						"Direct Messages".into()
+					})
+					.clicked()
+				{
 					self.guild = None;
 				}
 				self.scroll
@@ -401,7 +413,10 @@ mod tests {
 		}
 		let mut cache = RailCache::default();
 		assert!(cache.sync(&state));
-		assert_eq!(&*cache.direct, &(100..115).map(Id).collect::<Vec<_>>());
+		assert_eq!(
+			&*cache.direct,
+			&(101..=115).rev().map(Id).collect::<Vec<_>>()
+		);
 		// Exercise the local command preparation gate; no command is dispatched by this test.
 		state.demo = false;
 		let revision = state.revision;
@@ -410,12 +425,12 @@ mod tests {
 		assert!(cache.sync(&state));
 		assert_eq!(cache.direct.len(), 15);
 		assert_eq!(cache.direct[0], Id(22));
-		assert_eq!(cache.direct[14], Id(113));
+		assert_eq!(cache.direct[14], Id(102));
 		assert!(state.leave_call().is_some());
 		assert_eq!(state.revision, revision);
 		assert!(cache.sync(&state));
-		assert_eq!(cache.direct[0], Id(100));
-		assert_eq!(cache.direct[14], Id(114));
+		assert_eq!(cache.direct[0], Id(115));
+		assert_eq!(cache.direct[14], Id(101));
 		// Session failure through a local completion must also retire unread visibility.
 		state.folders_pending = true;
 		state.apply_guild_folders(Err(client_core::auth::Failure::Expired));
