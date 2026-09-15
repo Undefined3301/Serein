@@ -147,14 +147,22 @@ fn main() {
 		previous < latched,
 		"a mouse3 click must keep scrolling after release"
 	);
-	frame(vec![button(true)]);
-	frame(vec![button(false)]);
+	let off = egui::pos2(600.0, 250.0);
+	let click = |pressed| egui::Event::PointerButton {
+		pos: off,
+		button: egui::PointerButton::Middle,
+		pressed,
+		modifiers: egui::Modifiers::NONE,
+	};
+	frame(vec![egui::Event::PointerMoved(off), click(true)]);
+	frame(vec![click(false)]);
+	frame(vec![egui::Event::PointerMoved(egui::pos2(600.0, 150.0))]);
 	let clicked_off = frame(vec![]);
 	for _ in 0..30 {
 		assert_eq!(
 			frame(vec![]),
 			clicked_off,
-			"a second click must stop latched autoscroll"
+			"a second click must stop latched autoscroll, not start a new origin"
 		);
 	}
 	println!(
