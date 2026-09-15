@@ -871,9 +871,11 @@ async fn run_inner(
 										}.prepare()?)))?; was_ready = true;
 
 										let nicknames = ready.relationships.as_ref().map(|s| s.nicknames());
+										let spam_requests = ready.relationships.as_ref().map(|s| s.spam_incoming_ids());
 										emit(Event::UserAction(client_core::user_actions::Event::Relationships(ready.relationships.take().map(|s| s.entries()))))?;
 										emit(Event::UserAction(client_core::user_actions::Event::Friends(friends)))?;
 										emit(Event::UserAction(client_core::user_actions::Event::Requests(requests)))?;
+										emit(Event::UserAction(client_core::user_actions::Event::RequestSpams(spam_requests)))?;
 										emit(Event::UserAction(client_core::user_actions::Event::MessageRequests(Some(message_requests))))?;
 										emit(Event::UserAction(client_core::user_actions::Event::MessageSpams(Some(message_spams))))?;
 										if let Some(nicknames) = nicknames { emit(Event::UserAction(client_core::user_actions::Event::Nicknames(nicknames)))?; }
@@ -957,6 +959,7 @@ async fn run_inner(
 										let incoming = (packet.t.as_deref() != Some("RELATIONSHIP_REMOVE") && matches!(relationship.kind,3|4)).then_some(relationship.kind==3);
 										emit(Event::UserAction(client_core::user_actions::Event::Friend { user: relationship.id, friend, profile: profile.clone() }))?;
 										emit(Event::UserAction(client_core::user_actions::Event::Request { user: relationship.id, incoming, profile }))?;
+										emit(Event::UserAction(client_core::user_actions::Event::RequestSpam { user: relationship.id, spam: packet.t.as_deref() != Some("RELATIONSHIP_REMOVE") && relationship.kind == 3 && relationship.is_spam_request }))?;
 										if friend { match relationship.nickname {
 											model::Patch::Absent => {},
 											model::Patch::Null => emit(Event::UserAction(client_core::user_actions::Event::Nickname { user: relationship.id, text: String::new() }))?,
@@ -1795,7 +1798,8 @@ mod tests {
 							| client_core::user_actions::Event::Requests(None)
 							| client_core::user_actions::Event::Friends(None)
 							| client_core::user_actions::Event::MessageRequests(_)
-							| client_core::user_actions::Event::MessageSpams(_),
+							| client_core::user_actions::Event::MessageSpams(_)
+							| client_core::user_actions::Event::RequestSpams(_),
 						) => return Ok(()),
 						_ => return Err(Failure::Protocol),
 					};

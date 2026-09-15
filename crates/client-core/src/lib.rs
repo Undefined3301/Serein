@@ -2844,6 +2844,10 @@ impl Event {
 					.as_ref()
 					.map_or(0, |e| e.capacity() * size_of::<Id>()),
 				Self::UserAction(user_actions::Event::MessageSpam { .. }) => size_of::<Id>(),
+				Self::UserAction(user_actions::Event::RequestSpams(entries)) => entries
+					.as_ref()
+					.map_or(0, |e| e.capacity() * size_of::<Id>()),
+				Self::UserAction(user_actions::Event::RequestSpam { .. }) => size_of::<Id>(),
 				Self::Archives { result, .. } => {
 					result.as_ref().map_or(0, model::archives::Page::bytes)
 				}

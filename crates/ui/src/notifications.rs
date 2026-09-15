@@ -57,6 +57,25 @@ fn direct_call(state: &State) -> Option<Id> {
 		.map(|call| call.channel)
 }
 
+fn home_request_label(friends: u32, messages: u32) -> String {
+	let mut parts = vec!["Direct Messages".to_owned()];
+	if friends > 0 {
+		parts.push(if friends == 1 {
+			"1 friend request".into()
+		} else {
+			format!("{friends} friend requests")
+		});
+	}
+	if messages > 0 {
+		parts.push(if messages == 1 {
+			"1 message request".into()
+		} else {
+			format!("{messages} message requests")
+		});
+	}
+	parts.join(" · ")
+}
+
 pub(super) fn badge(ui: &egui::Ui, center: egui::Pos2, count: u32, ring: Color32) {
 	let label = if count > 99 {
 		"99+".into()
@@ -182,7 +201,8 @@ impl MessagingUi {
 					},
 				);
 				rail_indicator(ui, rect, home, hovered, false);
-				let requests = state.home_request_count();
+				let (friends, messages) = state.home_request_parts();
+				let requests = friends.saturating_add(messages);
 				if requests > 0 {
 					badge(
 						ui,
@@ -191,26 +211,16 @@ impl MessagingUi {
 						design::window_palette(ui).base,
 					);
 				}
+				let label = home_request_label(friends, messages);
 				response.widget_info(|| {
 					egui::WidgetInfo::selected(
 						egui::WidgetType::SelectableLabel,
 						true,
 						home,
-						if requests > 0 {
-							format!("Direct messages, {requests} requests")
-						} else {
-							"Direct messages".into()
-						},
+						label.clone(),
 					)
 				});
-				if response
-					.on_hover_text(if requests > 0 {
-						format!("Direct Messages · {requests} requests")
-					} else {
-						"Direct Messages".into()
-					})
-					.clicked()
-				{
+				if response.on_hover_text(label).clicked() {
 					self.guild = None;
 				}
 				self.scroll
@@ -363,6 +373,69 @@ mod tests {
 		assert_eq!(&*cache.direct, &[Id(22)]);
 		assert!(!cache.direct.contains(&Id(43)));
 		assert_eq!(state.home_request_count(), 3);
+		assert_eq!(state.home_request_parts(), (2, 1));
+		let avery = state
+			.pending_friends()
+			.find(|(user, _, incoming)| *incoming && user.id == Id(8001))
+			.map(|(user, _, _)| user.clone())
+			.expect("demo incoming Avery");
+		apply(
+			&mut state,
+			Event::ChannelCreated(model::Channel {
+				id: Id(44),
+				guild: None,
+				parent_id: None,
+				position: 0,
+				name: "Overlapping request (synthetic)".into(),
+				kind: 1,
+				recipients: vec![avery],
+				last_message: None,
+				icon: None,
+				member_list_id: None,
+				message_count: None,
+			}),
+		);
+		apply(
+			&mut state,
+			Event::UserAction(client_core::user_actions::Event::MessageRequest {
+				channel: Id(44),
+				pending: true,
+			}),
+		);
+		assert!(state.channel(Id(44)).is_some());
+		assert_eq!(state.home_request_parts(), (2, 2));
+		assert_eq!(state.home_request_count(), 4);
+		let robin = state
+			.friend(Id(1001))
+			.cloned()
+			.expect("demo friend Robin");
+		apply(
+			&mut state,
+			Event::ChannelCreated(model::Channel {
+				id: Id(45),
+				guild: None,
+				parent_id: None,
+				position: 0,
+				name: "Friend-flagged request (synthetic)".into(),
+				kind: 1,
+				recipients: vec![robin],
+				last_message: None,
+				icon: None,
+				member_list_id: None,
+				message_count: None,
+			}),
+		);
+		apply(
+			&mut state,
+			Event::UserAction(client_core::user_actions::Event::MessageRequest {
+				channel: Id(45),
+				pending: true,
+			}),
+		);
+		assert!(state.channel(Id(45)).is_some());
+		assert_eq!(state.home_request_parts(), (2, 2));
+		assert_eq!(state.home_request_count(), 4);
+		assert!(cache.sync(&state));
 		assert_eq!(cache.guild_badge(Id(10)), (true, 1));
 		for _ in 0..10 {
 			assert!(!cache.sync(&state));
