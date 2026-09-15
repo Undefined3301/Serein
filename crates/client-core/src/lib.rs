@@ -1970,6 +1970,7 @@ impl State {
 				if self.user.as_ref().is_some_and(|u| u.id == user) {
 					self.end_voice_channel(channel);
 					self.read_state.forget(channel);
+					self.forget_direct_inbox(channel);
 					self.channels.retain(|c| c.id != channel);
 					self.prune_direct_presence();
 					if self.selected == Some(channel) {
