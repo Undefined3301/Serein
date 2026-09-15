@@ -541,6 +541,7 @@ async fn run_inner(
 	let mut owner_id = None;
 	let mut attempt = 0;
 	let mut calls = voice::Calls::default();
+	let mut inbox = channel_events::Inbox::default();
 	let mut known_guilds = std::collections::BTreeSet::new();
 	let mut voice_open = true;
 	while attempt < 6 {
@@ -634,7 +635,6 @@ async fn run_inner(
 		);
 		timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 		let mut ready_at: Option<Instant> = None;
-		let mut inbox = channel_events::Inbox::default();
 		let ready_deadline = Instant::now() + Duration::from_secs(30);
 		let mut active_members: Option<ActiveMembers> = None;
 		let mut direct_presence = presence::Pending::default();

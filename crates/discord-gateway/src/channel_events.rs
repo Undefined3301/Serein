@@ -21,16 +21,16 @@ impl Inbox {
 		self.marks.remove(&id);
 	}
 
-	pub fn observe(&mut self, channel: &ChannelDto) {
+	pub fn observe(&mut self, channel: &ChannelDto) -> bool {
 		if channel.is_obfuscated() || channel.guild_id.is_some() || channel.kind != 1 {
 			self.marks.remove(&channel.id);
-			return;
+			return true;
 		}
 		self.store(
 			channel.id,
 			channel.is_message_request,
 			channel.pending_spam_direct(),
-		);
+		)
 	}
 
 	pub fn classify_update(&mut self, patch: &ChannelPatchDto) -> (InboxEvent, InboxEvent) {
@@ -43,7 +43,9 @@ impl Inbox {
 			);
 		}
 		let (request, spam) = patch.merged_inbox(prior);
-		self.store(patch.id, request, spam);
+		if !self.store(patch.id, request, spam) {
+			return (None, None);
+		}
 		let new_req = request && !spam;
 		let old_req = prior.0 && !prior.1;
 		(
@@ -52,17 +54,18 @@ impl Inbox {
 		)
 	}
 
-	fn store(&mut self, id: Id, request: bool, spam: bool) {
+	fn store(&mut self, id: Id, request: bool, spam: bool) -> bool {
 		if !(request || spam) {
 			self.marks.remove(&id);
-			return;
+			return true;
 		}
 		if self.marks.len() >= client_core::user_actions::MAX_RELATIONSHIPS
 			&& !self.marks.contains_key(&id)
 		{
-			return;
+			return false;
 		}
 		self.marks.insert(id, (request, spam));
+		true
 	}
 }
 
@@ -131,7 +134,9 @@ pub(super) fn create(
 	inbox: &mut Inbox,
 ) -> Result<(Event, Option<Id>, Option<Id>), Failure> {
 	let channel: ChannelDto = decode(bytes).map_err(|_| Failure::Protocol)?;
-	inbox.observe(&channel);
+	if !inbox.observe(&channel) {
+		return Ok((created(channel), None, None));
+	}
 	let visible = !channel.is_obfuscated();
 	let request = (visible && channel.pending_message_request()).then_some(channel.id);
 	let spam = (visible && channel.pending_spam_direct()).then_some(channel.id);
