@@ -968,28 +968,64 @@ mod tests {
 		state.permissions.replace(permissions).unwrap();
 		assert!(state.can_view(Id(4)));
 		assert!(!state.can_view(Id(7)));
-		let list = |state: &State, collapsed: BTreeSet<Id>, show_hidden| {
+		assert!(
 			rows(
-				state,
+				&state,
 				Scope::Guild(Id(100)),
 				&Roster::default(),
-				&collapsed,
-				show_hidden,
+				&BTreeSet::new(),
+				false,
 			)
-		};
-		assert!(list(&state, BTreeSet::new(), false).is_empty());
-		assert_eq!(list(&state, BTreeSet::new(), true).len(), 2);
+			.is_empty()
+		);
+		assert_eq!(
+			rows(
+				&state,
+				Scope::Guild(Id(100)),
+				&Roster::default(),
+				&BTreeSet::new(),
+				true,
+			)
+			.len(),
+			2
+		);
 		// Obfuscated children may be omitted from navigation entirely.
 		state.channels.retain(|c| c.id != Id(7));
-		assert!(list(&state, BTreeSet::new(), false).is_empty());
-		assert_eq!(list(&state, BTreeSet::new(), true).len(), 1);
+		assert!(
+			rows(
+				&state,
+				Scope::Guild(Id(100)),
+				&Roster::default(),
+				&BTreeSet::new(),
+				false,
+			)
+			.is_empty()
+		);
+		assert_eq!(
+			rows(
+				&state,
+				Scope::Guild(Id(100)),
+				&Roster::default(),
+				&BTreeSet::new(),
+				true,
+			)
+			.len(),
+			1
+		);
 		state.channels.push(channel(7, 0, 0, Some(Id(4))));
 		state
 			.permissions
 			.replace(test_support::permission_snapshot(&state))
 			.unwrap();
 		assert!(matches!(
-			list(&state, BTreeSet::from([Id(4)]), false).as_slice(),
+			rows(
+				&state,
+				Scope::Guild(Id(100)),
+				&Roster::default(),
+				&BTreeSet::from([Id(4)]),
+				false,
+			)
+			.as_slice(),
 			[Row::Category(_, 1)]
 		));
 	}
