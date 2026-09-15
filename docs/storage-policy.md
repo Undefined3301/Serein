@@ -245,7 +245,7 @@ The owner explicitly withdrew the no-storage policy on 2026-09-09. Local files, 
 
 | Data | Location / bound | Removal |
 |---|---|---|
-| Discord token | OS credential store, service `org.serein.desktop`, account `discord-session`; at most 2048 bytes | Explicit logout / Forget saved login; invalid-token expiry also requests deletion |
+| Discord token | OS credential store, service `cz.viceverse.serein`, account `discord-session`; at most 2048 bytes | Explicit logout / Forget saved login; invalid-token expiry also requests deletion |
 | History and drafts | `dirs::data_local_dir()/serein/client.sqlite3` | Clear cached history also clears service images and keeps drafts; logout clears the authenticated account’s history and drafts |
 | Messages | 500 per window, at most 20 stored channel windows globally, 48 MiB estimated text/metadata; SQLite main database capped at 64 MiB | Oldest touched channel evicted transactionally |
 | Avatar, server-icon, profile-banner and message-preview PNGs | Account subdirectory beneath `dirs::data_local_dir()/serein/avatars`; 1 GiB / 4096 files per account, 90 days since last use, at most 2 MiB per preview (512 KiB for icons/avatars) | Clear cache or account logout; versioned avatar/icon/banner keys and hashed media-source keys separate changed images |
@@ -779,3 +779,14 @@ four permits and a 512-KiB wire cap; results use the existing bounded event queu
 Replacing or closing the member view drops that read. Session/request/channel and
 view-permission checks fence late results. No member snapshots, cursors or payloads
 are persisted, and no background pagination or new queue is introduced.
+
+### Opt-in macOS startup
+
+The existing startup worker writes only
+`~/Library/LaunchAgents/cz.viceverse.serein.startup.plist`, at most 16 KiB,
+with an absolute executable path and fixed autostart/minimized flags. Reads are
+bounded to 16 KiB; unknown or moved entries report an error. Enabling atomically
+replaces this file using a private sibling temporary file; disabling removes it.
+No account data, credentials or separate preference is stored. The entry runs once
+at the next graphical login; it has no KeepAlive or immediate launch. Demo mode
+keeps startup changes in memory. OS login-item restrictions remain authoritative.

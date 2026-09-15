@@ -1974,6 +1974,7 @@ impl State {
 				if self.user.as_ref().is_some_and(|u| u.id == user) {
 					self.end_voice_channel(channel);
 					self.read_state.forget(channel);
+					self.forget_direct_inbox(channel);
 					self.channels.retain(|c| c.id != channel);
 					self.prune_direct_presence();
 					if self.selected == Some(channel) {
@@ -2610,6 +2611,7 @@ impl State {
 			self.permissions.channels.remove(id);
 			self.end_voice_channel(*id);
 			self.read_state.forget(*id);
+			self.forget_direct_inbox(*id);
 		}
 		if !removed.is_empty() {
 			self.clear_profile();
@@ -2838,6 +2840,18 @@ impl Event {
 				Self::UserAction(user_actions::Event::Relationships(entries)) => entries
 					.as_ref()
 					.map_or(0, |e| e.capacity() * size_of::<(Id, bool)>()),
+				Self::UserAction(user_actions::Event::MessageRequests(entries)) => entries
+					.as_ref()
+					.map_or(0, |e| e.capacity() * size_of::<Id>()),
+				Self::UserAction(user_actions::Event::MessageRequest { .. }) => size_of::<Id>(),
+				Self::UserAction(user_actions::Event::MessageSpams(entries)) => entries
+					.as_ref()
+					.map_or(0, |e| e.capacity() * size_of::<Id>()),
+				Self::UserAction(user_actions::Event::MessageSpam { .. }) => size_of::<Id>(),
+				Self::UserAction(user_actions::Event::RequestSpams(entries)) => entries
+					.as_ref()
+					.map_or(0, |e| e.capacity() * size_of::<Id>()),
+				Self::UserAction(user_actions::Event::RequestSpam { .. }) => size_of::<Id>(),
 				Self::Archives { result, .. } => {
 					result.as_ref().map_or(0, model::archives::Page::bytes)
 				}
