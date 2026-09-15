@@ -68,6 +68,11 @@ pub enum Event {
 		channel: Id,
 		pending: bool,
 	},
+	MessageSpams(Option<Vec<Id>>),
+	MessageSpam {
+		channel: Id,
+		spam: bool,
+	},
 	Written {
 		action: Action,
 		request: u64,
@@ -85,6 +90,7 @@ pub struct Actions {
 	friends_known: bool,
 	relationships: BTreeMap<Id, bool>,
 	message_requests: BTreeSet<Id>,
+	spam_directs: BTreeSet<Id>,
 	known: bool,
 	view: u64,
 	sequence: u64,
@@ -171,11 +177,49 @@ impl State {
 		u32::try_from(friends.saturating_add(self.user_actions.message_requests.len()))
 			.unwrap_or(u32::MAX)
 	}
-	pub(crate) fn forget_message_request(&mut self, channel: Id) {
+	pub(crate) fn forget_direct_inbox(&mut self, channel: Id) {
 		self.user_actions.message_requests.remove(&channel);
+		self.user_actions.spam_directs.remove(&channel);
 	}
 	pub(crate) fn message_request_pending(&self, channel: Id) -> bool {
 		self.user_actions.message_requests.contains(&channel)
+	}
+	pub fn spam_direct(&self, channel: Id) -> bool {
+		self.user_actions.spam_directs.contains(&channel)
+	}
+	fn set_message_request(&mut self, channel: Id, pending: bool) -> Result<(), &'static str> {
+		if channel.0 == 0 {
+			return Err("Invalid message request");
+		}
+		if pending {
+			if !self.user_actions.message_requests.contains(&channel)
+				&& self.user_actions.message_requests.len() >= MAX_RELATIONSHIPS
+			{
+				return Err("Message requests exceed safe capacity");
+			}
+			self.user_actions.spam_directs.remove(&channel);
+			self.user_actions.message_requests.insert(channel);
+		} else {
+			self.user_actions.message_requests.remove(&channel);
+		}
+		Ok(())
+	}
+	fn set_spam_direct(&mut self, channel: Id, spam: bool) -> Result<(), &'static str> {
+		if channel.0 == 0 {
+			return Err("Invalid message request");
+		}
+		if spam {
+			if !self.user_actions.spam_directs.contains(&channel)
+				&& self.user_actions.spam_directs.len() >= MAX_RELATIONSHIPS
+			{
+				return Err("Message requests exceed safe capacity");
+			}
+			self.user_actions.message_requests.remove(&channel);
+			self.user_actions.spam_directs.insert(channel);
+		} else {
+			self.user_actions.spam_directs.remove(&channel);
+		}
+		Ok(())
 	}
 	pub fn friend_requests_known(&self) -> bool {
 		self.user_actions.requests_known
@@ -734,23 +778,32 @@ impl State {
 							self.user_actions.message_requests.clear();
 							return Err("Message requests contain invalid or duplicate channels");
 						}
+						self.user_actions.spam_directs.remove(&channel);
 					}
 				}
 			}
 			Event::MessageRequest { channel, pending } => {
-				if channel.0 == 0 {
-					return Err("Invalid message request");
-				}
-				if pending {
-					if !self.user_actions.message_requests.contains(&channel)
-						&& self.user_actions.message_requests.len() >= MAX_RELATIONSHIPS
+				self.set_message_request(channel, pending)?;
+			}
+			Event::MessageSpams(entries) => {
+				self.user_actions.spam_directs.clear();
+				if let Some(entries) = entries {
+					if entries.len() > MAX_RELATIONSHIPS
+						|| entries.capacity() * size_of::<Id>() > MAX_RELATIONSHIP_BYTES
 					{
 						return Err("Message requests exceed safe capacity");
 					}
-					self.user_actions.message_requests.insert(channel);
-				} else {
-					self.user_actions.message_requests.remove(&channel);
+					for channel in entries {
+						if channel.0 == 0 || !self.user_actions.spam_directs.insert(channel) {
+							self.user_actions.spam_directs.clear();
+							return Err("Message requests contain invalid or duplicate channels");
+						}
+						self.user_actions.message_requests.remove(&channel);
+					}
 				}
+			}
+			Event::MessageSpam { channel, spam } => {
+				self.set_spam_direct(channel, spam)?;
 			}
 			Event::Relationship { user, blocked } => {
 				self.store_relationship(user, blocked)?;

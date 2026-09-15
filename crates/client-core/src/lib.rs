@@ -2606,7 +2606,7 @@ impl State {
 			self.permissions.channels.remove(id);
 			self.end_voice_channel(*id);
 			self.read_state.forget(*id);
-			self.forget_message_request(*id);
+			self.forget_direct_inbox(*id);
 		}
 		if !removed.is_empty() {
 			self.clear_profile();
@@ -2839,6 +2839,10 @@ impl Event {
 					.as_ref()
 					.map_or(0, |e| e.capacity() * size_of::<Id>()),
 				Self::UserAction(user_actions::Event::MessageRequest { .. }) => size_of::<Id>(),
+				Self::UserAction(user_actions::Event::MessageSpams(entries)) => entries
+					.as_ref()
+					.map_or(0, |e| e.capacity() * size_of::<Id>()),
+				Self::UserAction(user_actions::Event::MessageSpam { .. }) => size_of::<Id>(),
 				Self::Archives { result, .. } => {
 					result.as_ref().map_or(0, model::archives::Page::bytes)
 				}

@@ -334,6 +334,7 @@ impl State {
 				channel.guild.is_none()
 					&& channel.supports_text()
 					&& !self.message_request_pending(channel.id)
+					&& !self.spam_direct(channel.id)
 					&& (Some(channel.id) == call
 						|| self.channel_unread(channel) == Some(true)
 						|| self.unread_count(channel.id) > 0)

@@ -361,6 +361,8 @@ mod tests {
 		let mut cache = RailCache::default();
 		assert!(cache.sync(&state));
 		assert_eq!(&*cache.direct, &[Id(22)]);
+		assert!(!cache.direct.contains(&Id(43)));
+		assert_eq!(state.home_request_count(), 3);
 		assert_eq!(cache.guild_badge(Id(10)), (true, 1));
 		for _ in 0..10 {
 			assert!(!cache.sync(&state));
@@ -413,6 +415,7 @@ mod tests {
 		}
 		let mut cache = RailCache::default();
 		assert!(cache.sync(&state));
+		assert!(!cache.direct.contains(&Id(43)));
 		assert_eq!(
 			&*cache.direct,
 			&(101..=115).rev().map(Id).collect::<Vec<_>>()

@@ -144,13 +144,22 @@ pub struct ChannelDto {
 	#[serde(default)]
 	pub is_spam: bool,
 }
+const CHANNEL_FLAG_SPAM: u64 = 1 << 5;
 impl ChannelDto {
 	pub fn is_obfuscated(&self) -> bool {
 		self.flags & (1 << 17) != 0
 	}
 
+	fn spam_folder(&self) -> bool {
+		self.is_spam || self.flags & CHANNEL_FLAG_SPAM != 0
+	}
+
 	pub fn pending_message_request(&self) -> bool {
-		self.guild_id.is_none() && self.kind == 1 && self.is_message_request && !self.is_spam
+		self.guild_id.is_none() && self.kind == 1 && self.is_message_request && !self.spam_folder()
+	}
+
+	pub fn pending_spam_direct(&self) -> bool {
+		self.guild_id.is_none() && self.kind == 1 && self.spam_folder()
 	}
 
 	pub fn into_model(self) -> Channel {
@@ -212,18 +221,45 @@ impl ChannelPatchDto {
 		matches!(self.flags, Patch::Value(flags) if flags & (1 << 17) != 0)
 	}
 
+	fn spam_folder(&self) -> Option<bool> {
+		let flagged = match self.flags {
+			Patch::Value(flags) => Some(flags & CHANNEL_FLAG_SPAM != 0),
+			Patch::Null => Some(false),
+			Patch::Absent => None,
+		};
+		let marked = match self.is_spam {
+			Patch::Value(marked) => Some(marked),
+			Patch::Null => Some(false),
+			Patch::Absent => None,
+		};
+		match (marked, flagged) {
+			(Some(true), _) | (_, Some(true)) => Some(true),
+			(None, None) => None,
+			_ => Some(false),
+		}
+	}
+
 	pub fn pending_message_request(&self) -> Option<bool> {
 		let request = match self.is_message_request {
 			Patch::Value(v) => Some(v),
 			Patch::Null => Some(false),
 			Patch::Absent => None,
 		};
-		let spam = matches!(self.is_spam, Patch::Value(true));
-		match request {
-			Some(false) => Some(false),
-			Some(true) => Some(!spam),
-			None if spam => Some(false),
-			None => None,
+		match (request, self.spam_folder()) {
+			(_, Some(true)) => Some(false),
+			(Some(false), _) => Some(false),
+			(Some(true), _) => Some(true),
+			(None, _) => None,
+		}
+	}
+
+	pub fn pending_spam_direct(&self) -> Option<bool> {
+		match self.is_spam {
+			Patch::Value(_) | Patch::Null => self.spam_folder(),
+			Patch::Absent => match self.flags {
+				Patch::Value(flags) if flags & CHANNEL_FLAG_SPAM != 0 => Some(true),
+				_ => None,
+			},
 		}
 	}
 

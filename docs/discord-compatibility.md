@@ -987,11 +987,12 @@ See [Microsoft MPEG-4 source documentation](https://learn.microsoft.com/en-us/wi
 
 The Direct Messages tile on the server rail shows a bottom-right count. The count is
 incoming friend requests plus pending non-spam message-request DMs. Outgoing friend
-requests do not increment it. The unofficial channel fields `is_message_request` and
-`is_spam` come from the
+requests do not increment it. Spam-folder DMs do not increment it and do not appear
+on the unread rail or the Direct Messages sidebar. The unofficial channel fields
+`is_message_request` and `is_spam`, plus channel flag `IS_SPAM` (`1 << 5`), come from the
 [docs.discord.food channel object](https://docs.discord.food/resources/channel#channel-object).
-READY, CHANNEL_CREATE, and CHANNEL_UPDATE fill a bounded session set. This change
-does not add a Message Requests inbox. Live badge behavior is unverified.
+READY, CHANNEL_CREATE, and CHANNEL_UPDATE fill bounded session sets. This change
+does not add a Message Requests or Spam inbox. Live badge behavior is unverified.
 
 Unread private conversations on the rail sort by latest known activity, newest first.
 An active DM call stays visible and pinned at the top. The rail keeps at most 15 rows
