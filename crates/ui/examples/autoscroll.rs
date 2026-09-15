@@ -130,7 +130,34 @@ fn main() {
 			"releasing mouse3 must stop autoscroll (held from {held})"
 		);
 	}
+	frame(vec![egui::Event::PointerMoved(origin)]);
+	frame(vec![button(true)]);
+	frame(vec![button(false)]);
+	let latched = frame(vec![egui::Event::PointerMoved(egui::pos2(600.0, 250.0))]);
+	let mut previous = latched;
+	for _ in 0..60 {
+		let current = frame(vec![]);
+		assert!(
+			current <= previous,
+			"latched chat reversed: {previous} -> {current}"
+		);
+		previous = current;
+	}
+	assert!(
+		previous < latched,
+		"a mouse3 click must keep scrolling after release"
+	);
+	frame(vec![button(true)]);
+	frame(vec![button(false)]);
+	let clicked_off = frame(vec![]);
+	for _ in 0..30 {
+		assert_eq!(
+			frame(vec![]),
+			clicked_off,
+			"a second click must stop latched autoscroll"
+		);
+	}
 	println!(
-		"PASS: synthetic chat scrolls while mouse3 is held and stops on release; no animation loop at either boundary."
+		"PASS: synthetic chat scrolls while mouse3 is held and stops on release; a click latches until the next click; no animation loop at either boundary."
 	);
 }
