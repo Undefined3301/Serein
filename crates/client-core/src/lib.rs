@@ -45,7 +45,7 @@ pub const MAX_CONTENT: usize = 2000;
 /// Discord accepts at most ten attachments per message.
 pub const MAX_ATTACHMENTS: usize = 10;
 pub const MAX_NAV: usize = model::account::MAX_ENTRIES;
-const MAX_VIEWED_SERVERS: usize = LastViewedChannels::MAX_ENTRIES;
+const MAX_VIEWED_SERVERS: usize = 1024;
 pub const MAX_MEMBER_PRESENCE_BYTES: usize = 128 * 1024;
 pub const MAX_EVENT_BYTES: usize = 4 * 1024 * 1024;
 pub const EVENT_SLOTS: usize = 8; // UI drain batch; reliable events share a 32 MiB byte budget.
@@ -561,10 +561,9 @@ pub struct State {
 	#[doc(hidden)]
 	pub navigation_index: NavigationIndex,
 	pub selected: Option<Id>,
+	/// Session-local guild/channel ID pairs, oldest visit first; at most 16 KiB.
 	#[doc(hidden)]
 	pub last_viewed_channels: Vec<(Id, Id)>,
-	#[doc(hidden)]
-	pub last_viewed_epoch: u64,
 	pub timeline: Timeline,
 	pub preserve_deleted_messages: bool,
 	pub resident: resident::Windows,
@@ -639,7 +638,6 @@ impl Default for State {
 			navigation_index: NavigationIndex::default(),
 			selected: None,
 			last_viewed_channels: Vec::new(),
-			last_viewed_epoch: 0,
 			timeline: Timeline::default(),
 			preserve_deleted_messages: false,
 			resident: resident::Windows::default(),
@@ -773,40 +771,15 @@ impl State {
 				})
 				.sum::<usize>()
 	}
-	fn record_view(&mut self, guild: Id, channel: Id) -> bool {
-		if self.last_viewed_channels.last() == Some(&(guild, channel)) {
-			return false;
-		}
+	fn remember_channel(&mut self, channel: Id) {
+		let Some(guild) = self.channel(channel).and_then(|c| c.guild) else {
+			return;
+		};
 		self.last_viewed_channels.retain(|(id, _)| *id != guild);
 		if self.last_viewed_channels.len() == MAX_VIEWED_SERVERS {
 			self.last_viewed_channels.remove(0);
 		}
 		self.last_viewed_channels.push((guild, channel));
-		self.last_viewed_channels.shrink_to(MAX_VIEWED_SERVERS);
-		true
-	}
-	fn remember_channel(&mut self, channel: Id) {
-		let Some(guild) = self.channel(channel).and_then(|c| c.guild) else {
-			return;
-		};
-		if self.record_view(guild, channel) {
-			self.last_viewed_epoch = self.last_viewed_epoch.saturating_add(1);
-		}
-	}
-	pub fn restore_last_viewed(&mut self, value: LastViewedChannels) {
-		if !value.is_valid() {
-			return;
-		}
-		if self.last_viewed_epoch == 0 {
-			self.last_viewed_channels = value.pairs;
-			self.last_viewed_channels.shrink_to(MAX_VIEWED_SERVERS);
-			return;
-		}
-		let session = std::mem::take(&mut self.last_viewed_channels);
-		self.last_viewed_channels = value.pairs;
-		for (guild, channel) in session {
-			self.record_view(guild, channel);
-		}
 	}
 	pub fn select_guild(&mut self, guild: Id) -> Option<Command> {
 		self.guild(guild)?;

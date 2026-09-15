@@ -36,12 +36,11 @@ measure executable length and sum all files under `dist`.
 Server clicks now select through the existing history/resident-window path.
 Remembered server/channel IDs add at most 16 KiB vector payload and a fixed
 header; visits scan at most 1,024 entries. Cold/invalid remembered selections
-scan existing bounded navigation to choose an accessible fallback. Disk restore
-and coalesced saves reuse the existing SQLite worker. There is no new network
-endpoint or Discord proto write for this memory.
+scan existing bounded navigation to choose an accessible fallback. There is no
+per-frame work, timer, persistence or new network endpoint for this memory.
 Focused reducer and synthetic egui pointer tests cover restoration, repeated
 click no-op, revoked/deleted fallback, voice preview, logout and memory bounds.
-This persist update did not rerun `cargo xtask check`. Native screenshots and interaction CPU/memory/p95
+`cargo xtask check` passed. Native screenshots and interaction CPU/memory/p95
 were unavailable: Orca CLI is absent and the Windows Computer Use native pipe
 fails with OS error 2. These tests are not native visual or live Discord proof.
 
