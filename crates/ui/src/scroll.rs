@@ -11,6 +11,11 @@ enum Drive {
 	Holding {
 		origin: Pos2,
 		target: egui::Id,
+		wandered: bool,
+	},
+	Latched {
+		origin: Pos2,
+		target: egui::Id,
 	},
 }
 
@@ -24,19 +29,27 @@ pub struct Session {
 
 impl Session {
 	pub fn holding(&self) -> bool {
-		matches!(self.drive, Drive::Holding { .. })
+		!matches!(self.drive, Drive::Idle)
 	}
 
 	pub fn bind(&mut self, ui: &egui::Ui, target: egui::Id, area: Rect) -> f32 {
 		let frame = ui.ctx().cumulative_frame_nr();
+		let mut consume_press = false;
 		if self.frame != Some(frame) {
 			self.frame = Some(frame);
 			self.bound = false;
-			self.stop_if_needed(ui);
+			consume_press = self.step(ui);
 		}
-		self.try_start(ui, target, area);
+		if !consume_press {
+			self.try_start(ui, target, area);
+		}
 		match self.drive {
 			Drive::Holding {
+				origin,
+				target: held,
+				..
+			}
+			| Drive::Latched {
 				origin,
 				target: held,
 			} if held == target => {
@@ -86,8 +99,9 @@ impl Session {
 	}
 
 	pub fn paint(&self, ctx: &egui::Context) {
-		let Drive::Holding { origin, .. } = self.drive else {
-			return;
+		let origin = match self.drive {
+			Drive::Holding { origin, .. } | Drive::Latched { origin, .. } => origin,
+			Drive::Idle => return,
 		};
 		let colors = design::palette_for(ctx);
 		let painter = ctx.layer_painter(egui::LayerId::new(
@@ -126,19 +140,61 @@ impl Session {
 		}
 	}
 
-	fn stop_if_needed(&mut self, ui: &egui::Ui) {
-		if matches!(self.drive, Drive::Idle) {
-			return;
-		}
-		let stop = ui.input(|input| {
-			!input.focused
-				|| !input.pointer.button_down(PointerButton::Middle)
-				|| input.key_pressed(egui::Key::Escape)
+	fn step(&mut self, ui: &egui::Ui) -> bool {
+		let input = ui.input(|input| {
+			(
+				input.focused,
+				input.pointer.button_down(PointerButton::Middle),
+				input.pointer.any_pressed(),
+				input.key_pressed(egui::Key::Escape),
+				input.smooth_scroll_delta().y != 0.0,
+				input.pointer.hover_pos(),
+			)
 		});
-		if stop {
-			self.drive = Drive::Idle;
-			self.last_offset = None;
+		let (focused, middle_down, any_pressed, escape, wheel, hover) = input;
+		match self.drive {
+			Drive::Idle => false,
+			Drive::Holding {
+				origin,
+				target,
+				wandered,
+			} => {
+				let wandered = wandered || hover.is_some_and(|pos| (pos.y - origin.y).abs() > 8.0);
+				if !focused || escape {
+					self.idle();
+					return false;
+				}
+				if !middle_down {
+					self.drive = if wandered {
+						Drive::Idle
+					} else {
+						Drive::Latched { origin, target }
+					};
+					if matches!(self.drive, Drive::Idle) {
+						self.last_offset = None;
+					}
+					return false;
+				}
+				self.drive = Drive::Holding {
+					origin,
+					target,
+					wandered,
+				};
+				false
+			}
+			Drive::Latched { .. } => {
+				if !focused || escape || any_pressed || wheel {
+					self.idle();
+					return any_pressed;
+				}
+				false
+			}
 		}
+	}
+
+	fn idle(&mut self) {
+		self.drive = Drive::Idle;
+		self.last_offset = None;
 	}
 
 	fn try_start(&mut self, ui: &egui::Ui, target: egui::Id, area: Rect) {
@@ -158,6 +214,7 @@ impl Session {
 			self.drive = Drive::Holding {
 				origin: pos,
 				target,
+				wandered: false,
 			};
 			self.bound = true;
 		}
