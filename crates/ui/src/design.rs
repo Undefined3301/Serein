@@ -23,7 +23,6 @@ impl LazyHover for egui::Response {
 	}
 }
 
-/// Painted on the tooltip layer. egui `Area` tooltips fade in and sit under the widget.
 pub fn rail_name(response: &egui::Response, name: impl AsRef<str>) {
 	let name = name.as_ref();
 	if name.is_empty() {
@@ -664,7 +663,6 @@ pub fn apply(ctx: &egui::Context) {
 			egui::vec2(f32::from(button_padding[0]), f32::from(button_padding[1]));
 		style.spacing.interact_size.y = f32::from(metrics.control_height.unwrap_or(32));
 		style.spacing.menu_margin = egui::Margin::same(8);
-		// egui defaults to 0.5s after the pointer stops.
 		style.interaction.tooltip_delay = 0.0;
 		style.interaction.show_tooltips_only_when_still = false;
 		style.visuals.panel_fill = p.chat;
