@@ -103,11 +103,21 @@ pub fn everyone_can_view(everyone: u128, guild: Id, overwrites: &[Overwrite]) ->
 	if everyone & ADMINISTRATOR != 0 {
 		return Some(true);
 	}
+	let mut seen = BTreeSet::new();
+	let mut selected = None;
+	for overwrite in overwrites {
+		if overwrite.id.0 == 0
+			|| overwrite.kind > 1
+			|| !seen.insert((overwrite.kind, overwrite.id))
+		{
+			return None;
+		}
+		if overwrite.kind == 0 && overwrite.id == guild {
+			selected = Some(overwrite);
+		}
+	}
 	let mut bits = everyone;
-	if let Some(overwrite) = overwrites
-		.iter()
-		.find(|overwrite| overwrite.kind == 0 && overwrite.id == guild)
-	{
+	if let Some(overwrite) = selected {
 		bits = (bits & !overwrite.deny) | overwrite.allow;
 	}
 	Some(bits & VIEW_CHANNEL != 0)
