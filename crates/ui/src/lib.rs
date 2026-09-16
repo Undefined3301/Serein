@@ -2495,6 +2495,9 @@ impl MessagingUi {
 			.hline(line, y, egui::Stroke::new(1.0, colors.border));
 		ui.add_space(6.0);
 	}
+	fn shows_title_bar(&self) -> bool {
+		!cfg!(target_os = "linux") && !self.hide_title_bar
+	}
 	pub fn show(&mut self, ui: &mut egui::Ui, state: &mut State) -> Vec<Command> {
 		if self.editing.is_none()
 			&& let Some(index) = state
@@ -2650,7 +2653,7 @@ impl MessagingUi {
 			.guild
 			.and_then(|id| state.guild(id))
 			.map_or_else(|| "Direct Messages".to_owned(), |g| g.name.clone());
-		if !cfg!(target_os = "linux") && !self.hide_title_bar {
+		if self.shows_title_bar() {
 			self.title_bar(ui, state, &title);
 		}
 		// Server rail and channel list share one resizable column so the account card can
@@ -3448,7 +3451,12 @@ mod composer_tests {
 			}
 			_ => None,
 		});
-		assert!(surface.is_some_and(|rect| (rect.top() - 84.0).abs() <= 1.0));
+		let expected_top = if view.shows_title_bar() { 84.0 } else { 48.0 };
+		assert!(
+			surface.is_some_and(|rect| (rect.top() - expected_top).abs() <= 1.0),
+			"message surface top {:?}, expected {expected_top}",
+			surface.map(|rect| rect.top()),
+		);
 		output.textures_delta.clear();
 		design::set_extension_theme(None);
 	}
