@@ -678,45 +678,7 @@ impl TimelineView {
 			|| self.hide_media_links != self.applied_hide_media_links;
 		let dimensions_changed = width_changed || content_dimensions_changed;
 		self.applied_hide_media_links = self.hide_media_links;
-		let forced_reflow = self.revision == u64::MAX;
-		let revision_changed = self.revision != state.revision;
-		let mut changed = forced_reflow || dimensions_changed;
-		if revision_changed || changed {
-			let row_ids: Vec<_> = state
-				.timeline
-				.display_iter()
-				.map(|message| message.id)
-				.collect();
-			let ids_changed = self.rows.len() != row_ids.len()
-				|| self
-					.rows
-					.iter()
-					.zip(&row_ids)
-					.any(|((id, _), next)| id != next);
-			changed |= ids_changed;
-			if !changed && revision_changed {
-				let mut previous = None;
-				changed = state.timeline.display_iter().any(|message| {
-					let key = row_key(message, previous, self.unread_boundary)
-						^ u64::from(state.timeline.is_deleted(message.id));
-					previous = (!state.timeline.is_deleted(message.id)).then_some(message);
-					self.heights
-						.get(&message.id)
-						.is_some_and(|(old, _)| *old != key)
-				});
-			}
-			self.heights
-				.retain(|id, _| row_ids.binary_search(id).is_ok());
-			self.formatted.retain(|id| state.timeline.get(id).is_some());
-			self.toolbar = self
-				.toolbar
-				.filter(|(id, _)| state.timeline.get(*id).is_some());
-			self.revealed
-				.retain(|id, content| state.timeline.get(*id).is_some_and(|m| content.matches(m)));
-		}
-		if revision_changed && !changed {
-			self.revision = state.revision;
-		}
+		let changed = self.revision != state.revision || dimensions_changed;
 		let mut offset = None;
 		let mut lead_rows = None;
 		if changed {
@@ -729,6 +691,19 @@ impl TimelineView {
 			self.width = width;
 			self.text_size = text_size;
 			self.scale = scale;
+			let row_ids: Vec<_> = state
+				.timeline
+				.display_iter()
+				.map(|message| message.id)
+				.collect();
+			self.heights
+				.retain(|id, _| row_ids.binary_search(id).is_ok());
+			self.formatted.retain(|id| state.timeline.get(id).is_some());
+			self.toolbar = self
+				.toolbar
+				.filter(|(id, _)| state.timeline.get(*id).is_some());
+			self.revealed
+				.retain(|id, content| state.timeline.get(*id).is_some_and(|m| content.matches(m)));
 			let mut previous = None;
 			let mut lead_basis = 0.0;
 			self.rows = state
@@ -1905,12 +1880,12 @@ impl TimelineView {
 		}
 		let mut reflow = false;
 		for (id, key, height) in measurements {
-			let height_changed = self
+			if self
 				.heights
 				.get(&id)
-				.is_none_or(|(old_key, old)| *old_key != key || (*old - height).abs() > 1.0);
-			self.heights.insert(id, (key, height));
-			if height_changed {
+				.is_none_or(|(old_key, old)| *old_key != key || (*old - height).abs() > 1.0)
+			{
+				self.heights.insert(id, (key, height));
 				reflow = true;
 			}
 		}
