@@ -242,8 +242,8 @@ impl egui::Plugin for Pointer {
 					.commands
 					.retain(|command| !matches!(command, egui::OutputCommand::CopyText(_)));
 			}
-			self.silent = false;
 		}
+		self.silent = false;
 		if output.platform_output.cursor_icon == CursorIcon::Text && !hovering_edit(ctx) {
 			output.platform_output.cursor_icon = CursorIcon::Default;
 		}

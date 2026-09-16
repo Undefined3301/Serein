@@ -337,8 +337,12 @@ pub fn show(
 							});
 						} else {
 							ui.horizontal_wrapped(|ui| {
-								download_button(ui, attachment, download, demo);
-								open_original(ui, attachment, opening);
+								let download = download_button(ui, attachment, download, demo);
+								let open = open_original(ui, attachment, opening);
+								if let Some(open) = &open {
+									surface.keep(open);
+								}
+								surface.keep(&download);
 							});
 						}
 					} else {

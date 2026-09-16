@@ -188,7 +188,7 @@ impl Session {
 				input.focused,
 				input.pointer.any_pressed(),
 				input.key_pressed(egui::Key::Escape),
-				input.smooth_scroll_delta().y != 0.0,
+				input.smooth_scroll_delta() != egui::Vec2::ZERO,
 				input.pointer.hover_pos(),
 			)
 		});
