@@ -4,9 +4,10 @@ use client_core::ChannelAccess;
 use egui::{Color32, Pos2, Rect, Vec2};
 
 const DIM: f32 = 0.6;
-const EYE: f32 = 16.0;
-const LOCK: f32 = 10.0;
-const LOCK_KNOCKOUT: f32 = 1.5;
+const EYE: f32 = 22.0;
+const SCROLL: f32 = 16.0;
+const LOCK: f32 = 6.0;
+const LOCK_HALO: f32 = 3.5;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Emphasis {
@@ -30,7 +31,7 @@ pub(crate) fn tint(colors: &Palette, access: ChannelAccess, emphasis: Emphasis) 
 }
 
 pub(crate) fn trailing(access: ChannelAccess) -> f32 {
-	if access.hidden() { EYE } else { 0.0 }
+	if access.hidden() { EYE + SCROLL } else { 0.0 }
 }
 
 pub(crate) fn paint(
@@ -42,19 +43,21 @@ pub(crate) fn paint(
 	background: Color32,
 ) {
 	if access.limited() {
-		let lock = Rect::from_center_size(
-			glyph.min
-				+ Vec2::new(
-					glyph.width() * (19.5 / 24.0),
-					glyph.height() * (6.25 / 24.0),
-				),
-			Vec2::splat(LOCK),
+		let center = glyph.min
+			+ Vec2::new(
+				glyph.width() * (19.5 / 24.0),
+				glyph.height() * (6.25 / 24.0),
+			);
+		painter.circle_filled(center, LOCK * 0.5 + LOCK_HALO, background);
+		icons::paint(
+			painter,
+			Icon::Lock,
+			Rect::from_center_size(center, Vec2::splat(LOCK)),
+			color,
 		);
-		icons::paint(painter, Icon::Lock, lock.expand(LOCK_KNOCKOUT), background);
-		icons::paint(painter, Icon::Lock, lock, color);
 	}
 	if access.hidden() {
-		let center = Pos2::new(row.right() - EYE * 0.5, row.center().y);
+		let center = Pos2::new(row.right() - SCROLL - EYE * 0.5, row.center().y);
 		icons::paint(
 			painter,
 			Icon::EyeSlash,

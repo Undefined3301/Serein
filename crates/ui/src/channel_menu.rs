@@ -43,6 +43,7 @@ pub(super) struct ChannelMenu {
 	requested: Option<(Id, Intent)>,
 	dialog: Option<Dialog>,
 	feedback: Option<Id>,
+	quiet: Option<Id>,
 	preference_error: bool,
 	generation: u64,
 }
@@ -313,9 +314,16 @@ impl ChannelMenu {
 					}
 				}
 				Intent::Write(action) => {
-					self.feedback = Some(id);
+					let quiet = matches!(action, Action::Mute(_) | Action::Notifications(_));
 					if let Some(command) = state.request_channel_action(id, action) {
 						commands.push(command);
+						if quiet {
+							self.quiet = Some(id);
+						} else {
+							self.feedback = Some(id);
+						}
+					} else {
+						self.feedback = Some(id);
 					}
 				}
 				Intent::Dialog(kind) => {
@@ -348,6 +356,15 @@ impl ChannelMenu {
 						commands.push(command);
 					}
 				}
+			}
+		}
+		if let Some(id) = self.quiet.take() {
+			if state.channel_action_pending() {
+				self.quiet = Some(id);
+			} else if !state.channel_action_succeeded(id)
+				&& state.channel_action_status(id).is_some()
+			{
+				self.feedback = Some(id);
 			}
 		}
 		self.show_feedback(ctx, state, active);
