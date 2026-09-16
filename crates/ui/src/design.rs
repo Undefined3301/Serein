@@ -3,7 +3,7 @@
 //! The palette is resolved from egui's light/dark mode plus a process-wide [`Variant`]
 //! (the cool Serein neutrals, deep black, blue-grey, or a gradient recolour). Gradient
 //! variants paint a backdrop under translucent surfaces; see [`paint_backdrop`].
-use egui::{Color32, FontFamily, FontId, RichText, Stroke};
+use egui::{Color32, FontFamily, FontId, RichText, Stroke, epaint::FontColorTransferFunction};
 use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
 /// Tooltip text that is only formatted while the tooltip is actually shown.
@@ -832,6 +832,16 @@ pub fn apply(ctx: &egui::Context) {
 		style.spacing.interact_size.y = f32::from(metrics.control_height.unwrap_or(32));
 		style.spacing.menu_margin = egui::Margin::same(8);
 		style.visuals.panel_fill = p.chat;
+		// Grayscale AA only. Vertical TrueType hints still snap stems on 1x.
+		// Leave the interpreter off and keep binning on. Gamma 0.5 keeps more
+		// fringe than egui's sharper 2c-c^2 dark default.
+		style.visuals.text_options.font_hinting = false;
+		style.visuals.text_options.subpixel_binning = true;
+		style.visuals.text_options.color_transfer_function = if theme == egui::Theme::Dark {
+			FontColorTransferFunction::Gamma(0.5)
+		} else {
+			FontColorTransferFunction::Off
+		};
 		style.visuals.interact_cursor = Some(egui::CursorIcon::PointingHand);
 		style.visuals.window_fill = p.raised.to_opaque();
 		style.visuals.window_corner_radius = metrics.window_radius.unwrap_or(12).into();

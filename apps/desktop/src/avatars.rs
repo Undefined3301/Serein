@@ -564,9 +564,12 @@ fn decode(bytes: &[u8], edge: u32) -> Option<egui::ColorImage> {
 	});
 	reader.limits(limits);
 	let mut image = reader.decode().ok()?;
-	// Only shrink: a 1024-pixel original must not be blown up to the viewer's 2048 budget.
-	if image.width() > edge || image.height() > edge {
-		image = image.thumbnail(edge, edge);
+	// wgpu textures have no mip chain. A 128px face bilinear-minified into the
+	// 48px rail aliases. Lanczos down to 64 leaves a 4/3 sample for that slot
+	// and stays near 1:1 at 150% zoom or the 72px settings icon.
+	let upload = if edge <= 128 { 64 } else { edge };
+	if image.width() > upload || image.height() > upload {
+		image = image.resize(upload, upload, image::imageops::FilterType::Lanczos3);
 	}
 	let image = image.into_rgba8();
 	Some(egui::ColorImage::from_rgba_unmultiplied(
@@ -1056,7 +1059,7 @@ mod tests {
 		assert!(decode(b"not an image", 128).is_none());
 		assert!(decode(&png(257, 1), 128).is_none());
 		let bytes = png(256, 256);
-		assert_eq!(decode(&bytes, 128).unwrap().size, [128, 128]);
+		assert_eq!(decode(&bytes, 128).unwrap().size, [64, 64]);
 		let root = std::env::temp_dir().join(format!(
 			"serein-avatar-test-{}-{}",
 			std::process::id(),
@@ -1140,7 +1143,7 @@ mod tests {
 				.unwrap()
 				.unwrap()
 		});
-		assert_eq!(result.image.unwrap().size, [128, 128]);
+		assert_eq!(result.image.unwrap().size, [64, 64]);
 		assert!(result.error.is_none());
 		// Fill the result channel, then cancel: shutdown must not wait on the renderer.
 		for _ in 0..32 {
