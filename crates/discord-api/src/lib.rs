@@ -613,11 +613,20 @@ impl DiscordApi {
 				channel,
 				message,
 				request,
+				manual,
 			} => {
-				let result = self.mark_read(channel, message).await;
+				let result = self.mark_read(channel, message, manual).await;
 				Event::ReadState(client_core::read_state::Event::Result {
 					channel,
 					message,
+					request,
+					result,
+				})
+			}
+			Command::MarkGuildRead { guild, request } => {
+				let result = self.mark_guild_read(guild).await;
+				Event::ReadState(client_core::read_state::Event::GuildAck {
+					guild,
 					request,
 					result,
 				})
@@ -843,15 +852,25 @@ impl DiscordApi {
 	}
 }
 impl DiscordApi {
-	async fn mark_read(&self, channel: model::Id, message: model::Id) -> Result<(), Failure> {
+	async fn mark_read(
+		&self,
+		channel: model::Id,
+		message: model::Id,
+		manual: bool,
+	) -> Result<(), Failure> {
 		#[derive(serde::Deserialize)]
 		struct Reply {
 			#[serde(default)]
 			token: Option<String>,
 		}
 		// Legacy acknowledgement tokens are session-only, redacted by ownership, and never cached.
+		// Manual mark-unread omits the token, matching the unofficial normal-user ack body.
 		let mut token = self.ack_token.lock().await;
-		let body = serde_json::json!({"token":token.as_deref(),"manual":false});
+		let body = if manual {
+			serde_json::json!({"manual": true})
+		} else {
+			serde_json::json!({"token":token.as_deref(),"manual":false})
+		};
 		let bytes = zeroize::Zeroizing::new(
 			self.request_limited(
 				Method::POST,
@@ -876,6 +895,11 @@ impl DiscordApi {
 		}
 		*token = next;
 		Ok(())
+	}
+	async fn mark_guild_read(&self, guild: model::Id) -> Result<(), Failure> {
+		self.request_limited(Method::POST, &format!("/guilds/{guild}/ack"), None, 4096)
+			.await
+			.map(|_| ())
 	}
 }
 impl DiscordApi {
@@ -1573,6 +1597,7 @@ mod tests {
 					channel: Id(1),
 					message: Id(2),
 					request,
+					manual: false,
 				})
 				.await
 				else {

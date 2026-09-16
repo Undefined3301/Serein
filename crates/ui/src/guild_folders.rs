@@ -470,6 +470,8 @@ impl MessagingUi {
 					response.context_menu(|ui| {
 						if let Item::Server(id) = item {
 							ui.set_width(232.0);
+							self.server_menu.read_item(ui, state, id);
+							ui.separator();
 							let settings = self.server_menu.settings_item(ui, state, id);
 							let leave = self.server_menu.leave_item(ui, state, id);
 							if settings || leave {

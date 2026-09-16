@@ -1296,6 +1296,7 @@ mod tests {
 			channel,
 			message,
 			request,
+			..
 		} = state.prepare_mark_read(latest).unwrap()
 		else {
 			panic!()
@@ -1858,6 +1859,7 @@ mod tests {
 			channel,
 			message,
 			request,
+			..
 		} = state.prepare_mark_read(Id(500)).unwrap()
 		else {
 			panic!()

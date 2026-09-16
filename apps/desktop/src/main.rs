@@ -2207,12 +2207,20 @@ impl Desktop {
 					channel,
 					message,
 					request,
+					..
 				} => Event::ReadState(client_core::read_state::Event::Result {
 					channel,
 					message,
 					request,
 					result: Ok(()),
 				}),
+				Command::MarkGuildRead { guild, request } => {
+					Event::ReadState(client_core::read_state::Event::GuildAck {
+						guild,
+						request,
+						result: Ok(()),
+					})
+				}
 				Command::Reactions(command) => {
 					use client_core::reactions::{Command as R, Event as E};
 					Event::Reactions(match command {

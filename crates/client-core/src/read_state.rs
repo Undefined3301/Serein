@@ -25,6 +25,11 @@ pub enum Event {
 		request: u64,
 		result: Result<(), Failure>,
 	},
+	GuildAck {
+		guild: Id,
+		request: u64,
+		result: Result<(), Failure>,
+	},
 }
 impl Event {
 	pub fn bytes(&self) -> usize {
@@ -38,6 +43,21 @@ impl Event {
 			}
 	}
 }
+enum Pending {
+	Channel {
+		channel: Id,
+		message: Id,
+		request: u64,
+		epoch: u64,
+		manual: bool,
+	},
+	Guild {
+		guild: Id,
+		request: u64,
+		channels: Vec<(Id, u64, Id)>,
+	},
+}
+
 #[derive(Default)]
 pub struct ReadState {
 	pub(crate) activity: crate::notifications::Activity,
@@ -45,7 +65,7 @@ pub struct ReadState {
 	known: bool,
 	version: Option<u64>,
 	revision: u64,
-	pending: Option<(Id, Id, u64, u64)>,
+	pending: Option<Pending>,
 	pub(crate) status: Option<(Id, &'static str)>,
 }
 impl ReadState {
@@ -71,7 +91,12 @@ impl ReadState {
 		if self.status(channel).is_some() {
 			self.status = None;
 		}
-		if self.pending.is_some_and(|(id, ..)| id == channel) {
+		if self.pending.as_ref().is_some_and(|pending| match pending {
+			Pending::Channel {
+				channel: pending, ..
+			} => *pending == channel,
+			Pending::Guild { channels, .. } => channels.iter().any(|(id, ..)| *id == channel),
+		}) {
 			self.cancel();
 		}
 	}
@@ -98,21 +123,35 @@ impl State {
 		self.channel_unread(self.channel(channel)?)
 	}
 	/// Shared unread visibility for sidebar rows and notification badges.
+	/// A missing read-state entry stays unknown. A full snapshot that omitted a
+	/// thread or voice chat is not treated as unread.
+	/// A live-edge page whose rows are all at or behind the cursor is not
+	/// unread. That last_message has outlived a deleted row.
 	pub fn channel_unread(&self, channel: &model::Channel) -> Option<bool> {
-		if !self.gateway_connected
-			|| !self.can_view(channel.id)
-			|| !channel.supports_text()
-			|| !(self.read_state.known || self.read_state.entries.contains_key(&channel.id))
-		{
+		if !self.gateway_connected || !self.can_view(channel.id) || !channel.supports_text() {
 			return None;
 		}
 		let read = self
 			.read_state
 			.entries
 			.get(&channel.id)
-			.and_then(|(id, _)| *id);
+			.map(|(id, _)| *id)?;
 		let latest = channel.last_message?;
-		Some(read.is_none_or(|read| latest > read))
+		let unread = read.is_none_or(|read| latest > read);
+		if unread
+			&& let Some(marker) = read
+			&& self.selected == Some(channel.id)
+			&& self.freshness == Freshness::Fresh
+			&& !self.history_targeted
+			&& self.history_before.is_none()
+			&& self.history_after.is_none()
+			&& !self.history_pending
+			&& !self.timeline.is_empty()
+			&& self.timeline.iter().all(|message| message.id <= marker)
+		{
+			return Some(false);
+		}
+		Some(unread)
 	}
 	pub fn can_jump_unread(&self) -> bool {
 		self.auth == AuthState::Authenticated
@@ -221,7 +260,7 @@ impl State {
 			return None;
 		}
 		let channel = self.selected?;
-		Some(self.mark_read_command(channel, message))
+		Some(self.mark_read_command(channel, message, false))
 	}
 	/// Explicit sidebar acknowledgement uses known channel metadata without navigating.
 	pub fn can_mark_channel_read(&self, channel: Id) -> bool {
@@ -235,9 +274,75 @@ impl State {
 			return None;
 		}
 		let message = self.channel(channel)?.last_message?;
-		Some(self.mark_read_command(channel, message))
+		Some(self.mark_read_command(channel, message, false))
 	}
-	fn mark_read_command(&mut self, channel: Id, message: Id) -> crate::Command {
+	pub fn can_mark_unread(&self, message: Id) -> bool {
+		self.auth == AuthState::Authenticated
+			&& self.gateway_connected
+			&& self.freshness == Freshness::Fresh
+			&& self.read_state.pending.is_none()
+			&& message.0 > 0
+			&& self
+				.timeline
+				.get(message)
+				.is_some_and(|m| Some(m.channel) == self.selected)
+			&& self.selected.is_some_and(|channel| {
+				self.can_view(channel)
+					&& self
+						.read_marker(channel)
+						.flatten()
+						.is_some_and(|read| message <= read)
+			})
+	}
+	pub fn prepare_mark_unread(&mut self, message: Id) -> Option<crate::Command> {
+		if !self.can_mark_unread(message) {
+			return None;
+		}
+		let channel = self.selected?;
+		Some(self.mark_read_command(channel, Id(message.0 - 1), true))
+	}
+	pub fn can_mark_guild_read(&self, guild: Id) -> bool {
+		self.auth == AuthState::Authenticated
+			&& self.gateway_connected
+			&& self.read_state.pending.is_none()
+			&& self.guilds.iter().any(|g| g.id == guild)
+			&& self.channels.iter().any(|channel| {
+				channel.guild == Some(guild) && self.unread(channel.id) == Some(true)
+			})
+	}
+	pub fn prepare_mark_guild_read(&mut self, guild: Id) -> Option<crate::Command> {
+		if !self.can_mark_guild_read(guild) {
+			return None;
+		}
+		let channels = self
+			.channels
+			.iter()
+			.filter(|channel| channel.guild == Some(guild) && self.unread(channel.id) == Some(true))
+			.filter_map(|channel| {
+				let message = channel.last_message?;
+				let epoch = self
+					.read_state
+					.entries
+					.get(&channel.id)
+					.map_or(0, |(_, epoch)| *epoch);
+				Some((channel.id, epoch, message))
+			})
+			.take(crate::MAX_NAV)
+			.collect::<Vec<_>>();
+		if channels.is_empty() {
+			return None;
+		}
+		self.read_state.revision = self.read_state.revision.wrapping_add(1);
+		let request = self.read_state.revision;
+		self.read_state.pending = Some(Pending::Guild {
+			guild,
+			request,
+			channels,
+		});
+		self.read_state.status = None;
+		Some(crate::Command::MarkGuildRead { guild, request })
+	}
+	fn mark_read_command(&mut self, channel: Id, message: Id, manual: bool) -> crate::Command {
 		self.read_state.revision = self.read_state.revision.wrapping_add(1);
 		let request = self.read_state.revision;
 		let epoch = self
@@ -245,13 +350,19 @@ impl State {
 			.entries
 			.get(&channel)
 			.map_or(0, |(_, epoch)| *epoch);
-		self.read_state.pending = Some((channel, message, request, epoch));
-		// Routine acknowledgements must not resize the timeline on every incoming message.
+		self.read_state.pending = Some(Pending::Channel {
+			channel,
+			message,
+			request,
+			epoch,
+			manual,
+		});
 		self.read_state.status = None;
 		crate::Command::MarkRead {
 			channel,
 			message,
 			request,
+			manual,
 		}
 	}
 	pub fn observe_last_message(&mut self, channel: Id, message: Id) {
@@ -369,8 +480,13 @@ impl State {
 				request,
 				result,
 			} => {
-				let Some((pending_channel, pending_message, pending_request, epoch)) =
-					self.read_state.pending
+				let Some(Pending::Channel {
+					channel: pending_channel,
+					message: pending_message,
+					request: pending_request,
+					epoch,
+					manual,
+				}) = self.read_state.pending
 				else {
 					return Ok(());
 				};
@@ -386,7 +502,8 @@ impl State {
 				}
 				match result {
 					Ok(()) => {
-						// A newer service ACK (including manual mark-unread) wins over this HTTP completion.
+						// A newer service ACK wins over this HTTP completion. Manual
+						// mark-unread may move the cursor backward.
 						if self.channels.iter().any(|c| c.id == channel)
 							&& self
 								.read_state
@@ -401,15 +518,16 @@ impl State {
 								.entries
 								.get(&channel)
 								.and_then(|(id, _)| *id);
+							let next = if manual {
+								Some(message)
+							} else {
+								Some(message).max(current)
+							};
+							self.read_state.activity.ack(channel, next, None);
 							self.read_state
-								.activity
-								.ack(channel, Some(message).max(current), None);
-							self.read_state.entries.insert(
-								channel,
-								(Some(message).max(current), self.read_state.revision),
-							);
+								.entries
+								.insert(channel, (next, self.read_state.revision));
 						}
-						// Success is silent; only failures deserve a notice line.
 						self.read_state.status = None;
 					}
 					Err(failure) => {
@@ -424,6 +542,67 @@ impl State {
 						{
 							self.read_state.status = Some((
 								channel,
+								match failure {
+									Failure::Ambiguous => {
+										"Read status could not be confirmed · unread markers may be out of date"
+									}
+									_ => {
+										"Read status could not sync · unread markers may be out of date"
+									}
+								},
+							));
+						}
+					}
+				}
+			}
+			Event::GuildAck {
+				guild,
+				request,
+				result,
+			} => {
+				let Some(Pending::Guild {
+					guild: pending_guild,
+					request: pending_request,
+					..
+				}) = &self.read_state.pending
+				else {
+					return Ok(());
+				};
+				if (*pending_guild, *pending_request) != (guild, request) {
+					return Ok(());
+				}
+				let Some(Pending::Guild { channels, .. }) = self.read_state.pending.take() else {
+					return Ok(());
+				};
+				match result {
+					Ok(()) => {
+						self.read_state.revision = self.read_state.revision.wrapping_add(1);
+						let revision = self.read_state.revision;
+						for (channel, epoch, message) in channels {
+							if self
+								.read_state
+								.entries
+								.get(&channel)
+								.map_or(0, |(_, current)| *current)
+								!= epoch
+							{
+								continue;
+							}
+							self.read_state
+								.activity
+								.ack(channel, Some(message), Some(0));
+							self.read_state
+								.entries
+								.insert(channel, (Some(message), revision));
+						}
+						self.read_state.status = None;
+					}
+					Err(failure) => {
+						if failure.ends_session() {
+							self.fail(failure);
+						} else if let Some((channel, ..)) = channels.first() {
+							self.read_state.status = Some((
+								*channel,
 								match failure {
 									Failure::Ambiguous => {
 										"Read status could not be confirmed · unread markers may be out of date"
@@ -533,6 +712,7 @@ mod navigation_tests {
 				channel,
 				message,
 				request,
+				manual: false,
 			} = state.prepare_mark_read(Id(500)).unwrap()
 			else {
 				panic!("expected read acknowledgement");
@@ -600,6 +780,7 @@ mod navigation_tests {
 			channel,
 			message,
 			request,
+			manual: false,
 		}) = state.prepare_mark_channel_read(Id(1))
 		else {
 			panic!("sidebar acknowledgement")

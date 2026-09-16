@@ -30,8 +30,7 @@ impl RailCache {
 		for channel in state.channels.iter().take(client_core::MAX_NAV) {
 			if let Some(guild) = channel.guild {
 				let entry = badges.entry(guild).or_default();
-				entry.0 |= state.channel_unread(channel) == Some(true)
-					|| state.unread_count(channel.id) > 0;
+				entry.0 |= state.lights_guild_rail(channel);
 				entry.1 = entry.1.saturating_add(state.mention_count(channel.id));
 			}
 		}
@@ -366,6 +365,11 @@ mod tests {
 		let mut state = test_support::notification_demo_state();
 		let mut cache = RailCache::default();
 		assert!(cache.sync(&state));
+		assert_eq!(
+			state.channel_unread(state.channel(Id(27)).unwrap()),
+			None,
+			"Threads omitted from read-state stay unknown, not unread"
+		);
 		assert_eq!(&*cache.direct, &[Id(22)]);
 		assert!(!cache.direct.contains(&Id(43)));
 		assert_eq!(state.home_request_count(), 3);
@@ -479,6 +483,18 @@ mod tests {
 				}),
 			);
 		}
+		apply(
+			&mut state,
+			Event::ReadState(read_state::Event::Snapshot {
+				partial: false,
+				entries: Some(
+					std::iter::once((Id(20), Some(Id(495)), 0))
+						.chain((100..=115).map(|id| (Id(id), Some(Id(1)), 0)))
+						.collect(),
+				),
+				version: Some(1),
+			}),
+		);
 		let mut cache = RailCache::default();
 		assert!(cache.sync(&state));
 		assert!(!cache.direct.contains(&Id(43)));

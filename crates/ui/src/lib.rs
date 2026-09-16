@@ -2724,6 +2724,11 @@ impl MessagingUi {
 		{
 			commands.push(command);
 		}
+		if let Some(guild) = self.server_menu.mark_read_requested.take()
+			&& let Some(command) = state.prepare_mark_guild_read(guild)
+		{
+			commands.push(command);
+		}
 		let selected_voice = state
 			.selected
 			.and_then(|id| state.channel(id))
@@ -3198,7 +3203,13 @@ impl MessagingUi {
 				self.timeline.pending_channel_reference = None;
 			}
 		}
-		if let Some(message) = self.timeline.mark_read.take()
+		if let Some(message) = self.timeline.mark_unread.take() {
+			self.timeline.mark_read = None;
+			if !settings_open && let Some(command) = state.prepare_mark_unread(message) {
+				self.timeline.browse_away();
+				commands.push(command);
+			}
+		} else if let Some(message) = self.timeline.mark_read.take()
 			&& !settings_open
 			&& state.search_target.is_none()
 			&& !state.history_targeted
@@ -4496,7 +4507,14 @@ mod composer_tests {
 					partial: false,
 				})
 				.unwrap();
-			let message = state.timeline.get(Id(20)).unwrap().clone();
+			let mut message = state.timeline.get(Id(20)).unwrap().clone();
+			message.content = "Synthetic tall unread row\n\n".repeat(80);
+			state.timeline.clear();
+			state
+				.timeline
+				.insert(message.clone(), false, false)
+				.unwrap();
+			state.revision += 1;
 			let drafts = state.drafts.clone();
 			let frame = |view: &mut MessagingUi, state: &mut State, events| {
 				let mut commands = vec![];
@@ -4516,7 +4534,10 @@ mod composer_tests {
 				assert!(
 					!commands.iter().any(|command| matches!(
 						command,
-						Command::Send { .. } | Command::Edit { .. } | Command::MarkRead { .. }
+						Command::Send { .. }
+							| Command::Edit { .. }
+							| Command::MarkRead { .. }
+							| Command::MarkGuildRead { .. }
 					)),
 					"Browsing unread pages must not send or acknowledge"
 				);
@@ -4683,6 +4704,7 @@ mod composer_tests {
 						| Command::Edit { .. }
 						| Command::Delete { .. }
 						| Command::MarkRead { .. }
+						| Command::MarkGuildRead { .. }
 				)));
 				let mut labels = vec![];
 				for shape in &output.shapes {
@@ -4786,6 +4808,7 @@ mod composer_tests {
 						| Command::Edit { .. }
 						| Command::Delete { .. }
 						| Command::MarkRead { .. }
+						| Command::MarkGuildRead { .. }
 				)));
 				let mut labels = vec![];
 				for shape in &output.shapes {
