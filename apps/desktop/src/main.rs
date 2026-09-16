@@ -76,6 +76,7 @@ fn main() -> eframe::Result {
 		access_marks_demo::check();
 		return Ok(());
 	}
+	#[cfg(feature = "demo")]
 	if demo && std::env::args().any(|arg| arg == "--demo-check-switcher") {
 		dm_demo::check();
 		return Ok(());
