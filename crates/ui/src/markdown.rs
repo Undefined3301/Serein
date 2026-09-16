@@ -990,7 +990,7 @@ impl Formatted {
 							.iter()
 							.take_while(|(_, style)| style.block == Some(block))
 							.count();
-						Self::show_code_block(ui, &self.blocks[usize::from(block)], block);
+						Self::show_code_block(ui, &self.blocks[usize::from(block)], block, surface);
 						start += count;
 						continue;
 					}
@@ -1048,7 +1048,12 @@ impl Formatted {
 	}
 	/// Full-width framed block: optional language header with a copy control, then the
 	/// highlighted, wrapped, selectable monospace text.
-	fn show_code_block(ui: &mut egui::Ui, block: &CodeBlock, index: u8) -> egui::Rect {
+	fn show_code_block(
+		ui: &mut egui::Ui,
+		block: &CodeBlock,
+		index: u8,
+		surface: &mut crate::select::Surface,
+	) -> egui::Rect {
 		let colors = crate::design::palette(ui);
 		let code_colors = crate::design::code_colors(ui);
 		let width = ui.max_rect().width();
@@ -1092,7 +1097,7 @@ impl Formatted {
 							ui.with_layout(
 								egui::Layout::right_to_left(egui::Align::Center),
 								|ui| {
-									Self::copy_button(ui, id, &block.code);
+									surface.keep(&Self::copy_button(ui, id, &block.code));
 								},
 							);
 						});
@@ -1154,7 +1159,7 @@ impl Formatted {
 								.layout(egui::Layout::left_to_right(egui::Align::Center)),
 						);
 						child.painter().rect_filled(target, 6, colors.raised);
-						Self::copy_button(&mut child, id, &block.code);
+						surface.keep(&Self::copy_button(&mut child, id, &block.code));
 					}
 				}
 				ui.add_space(4.0);
@@ -1168,7 +1173,7 @@ impl Formatted {
 		ui.data(|data| data.get_temp::<f64>(id))
 			.is_some_and(|at| now - at < 1.5)
 	}
-	fn copy_button(ui: &mut egui::Ui, id: egui::Id, code: &str) {
+	fn copy_button(ui: &mut egui::Ui, id: egui::Id, code: &str) -> egui::Response {
 		let copied = Self::copied_recently(ui, id);
 		let (icon, label) = if copied {
 			(crate::icons::Icon::Check, "Copied")
@@ -1185,6 +1190,7 @@ impl Formatted {
 			ui.ctx()
 				.request_repaint_after(std::time::Duration::from_millis(200));
 		}
+		response
 	}
 	/// One galley per run: emoji occupy fixed-width slots inside the text layout, so rows
 	/// holding artwork grow before any text on them is positioned. Separate widgets would
@@ -1351,6 +1357,7 @@ impl Formatted {
 				response.id.with("link"),
 				egui::Sense::click(),
 			);
+			surface.keep(&response);
 		}
 		if ui.is_rect_visible(response.rect) {
 			for (index, rect) in &slots {
@@ -1379,6 +1386,7 @@ impl Formatted {
 						)
 					});
 					crate::emoji_details::show(ui, &hit, &inline.text, image, guilds);
+					surface.keep(&hit);
 				}
 			}
 			if link && response.hovered() {

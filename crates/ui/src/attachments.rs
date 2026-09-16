@@ -928,6 +928,7 @@ mod tests {
 					},
 					|ui| {
 						ui.set_width(width);
+						let mut surface = crate::select::Surface::new(ui, "attachment-test");
 						show(
 							ui,
 							&message,
@@ -938,8 +939,9 @@ mod tests {
 							&mut crate::audio::AudioUi::default(),
 							&mut crate::video::VideoUi::default(),
 							true,
-							&mut crate::select::Surface::new(ui, "attachment-test"),
+							&mut surface,
 						);
+						surface.finish(ui);
 					},
 				)
 			};

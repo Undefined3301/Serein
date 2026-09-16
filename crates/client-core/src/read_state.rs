@@ -174,7 +174,9 @@ impl State {
 								|| (self.history_targeted && self.history_after.is_none()),
 							|latest| {
 								latest > last
-									&& (self.newer_may_have_more || self.history_after.is_none())
+									&& (self.newer_may_have_more
+										|| self.newer_cursor.is_some()
+										|| self.history_after.is_none())
 							},
 						)
 				})

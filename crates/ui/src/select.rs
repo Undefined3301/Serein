@@ -1,8 +1,9 @@
 //! Chat text selection. The block is the selection target, not the glyph.
 
 use egui::{
-	Color32, CursorIcon, Event, FontId, FullOutput, Id, LayerId, Order, PointerButton, Popup,
-	PopupAnchor, Pos2, RawInput, Rect, Response, Sense, Stroke, epaint::Galley,
+	Color32, CursorIcon, Event, FullOutput, Id, LayerId, Order, PointerButton, Popup, PopupAnchor,
+	Pos2, RawInput, Rect, Response, Sense, Stroke,
+	epaint::{Galley, TextShape},
 	text_selection::LabelSelectionState,
 };
 use std::sync::Arc;
@@ -20,11 +21,10 @@ struct Run {
 	galley_pos: Pos2,
 	galley: Arc<Galley>,
 	rect: Rect,
-	artwork: Vec<Artwork>,
+	painted: bool,
 }
 
 struct Hole {
-	id: egui::Id,
 	rect: Rect,
 }
 
@@ -32,8 +32,8 @@ struct Hole {
 pub struct Surface {
 	base: egui::Id,
 	runs: Vec<Run>,
-	/// Mentions, author, media, and other click widgets. Raised after the bands so a
-	/// click still hits them and a drag still starts on the band underneath.
+	/// Mentions, author, media, and other click widgets. Punched out of the bands so a
+	/// click still hits them and a drag still starts on the remaining band.
 	holes: Vec<Hole>,
 	/// Full message row, including the avatar column, header, and attachment cards.
 	cover: Option<Rect>,
@@ -57,74 +57,96 @@ impl Surface {
 		}
 	}
 
-	/// Keep `response` clickable after the tiled bands cover its rect.
+	/// Punch this clickable rect out of the tiled bands.
 	pub fn keep(&mut self, response: &Response) {
 		if response.rect.is_positive() {
 			self.holes.push(Hole {
-				id: response.id,
 				rect: response.rect,
 			});
 		}
 	}
 
-	/// Record a run and claim its interaction slot below later links and emoji.
+	/// Record a run, paint it like a label, and claim a later band slot.
 	pub fn run(
 		&mut self,
-		ui: &egui::Ui,
+		ui: &mut egui::Ui,
 		response: &Response,
 		galley_pos: Pos2,
 		galley: Arc<Galley>,
 		artwork: Vec<Artwork>,
 	) {
 		let band = self.base.with(self.runs.len());
-		// `Rect::NOTHING` is filtered out of this frame's hit test. Only the order index survives.
-		ui.interact(Rect::NOTHING, band, Sense::click_and_drag());
+		let painted =
+			!artwork.is_empty() && galley.rows.iter().all(|row| row.visuals.mesh.is_empty());
+		if painted {
+			ui.painter().add(TextShape::new(
+				galley_pos,
+				galley.clone(),
+				Color32::TRANSPARENT,
+			));
+		} else {
+			egui::text_selection::LabelSelectionState::label_text_selection(
+				ui,
+				response,
+				galley_pos,
+				galley.clone(),
+				ui.visuals().text_color(),
+				Stroke::NONE,
+			);
+		}
+		for art in &artwork {
+			paint_artwork(ui, art);
+		}
 		self.runs.push(Run {
 			band,
 			galley_pos,
 			galley,
 			rect: response.rect,
-			artwork,
+			painted,
 		});
 	}
 
-	/// Tile the block, register the selection, paint the text and then the artwork.
+	/// Tile the block and register selection on the remaining bands.
 	pub fn finish(self, ui: &mut egui::Ui) {
 		let block = block_rect(ui, &self.runs, self.cover);
 		let mut runs = self.runs;
 		if runs.is_empty() && block.is_positive() {
 			runs.push(blank_run(ui, self.base, block));
 		}
-		tile(&mut runs, block, self.cover.is_some());
+		let covered = self.cover.is_some();
+		tile(&mut runs, block, covered);
 		let pointer = ui.input(|input| input.pointer.hover_pos());
 		let over_hole =
 			pointer.is_some_and(|pos| self.holes.iter().any(|hole| hole.rect.contains(pos)));
-		let color = ui.visuals().text_color();
+		let holes: Vec<Rect> = self.holes.iter().map(|hole| hole.rect).collect();
 		for run in runs {
 			if !run.rect.is_positive() || !ui.is_rect_visible(run.rect) {
 				continue;
 			}
-			// `click_and_drag`, not `drag`: double-click word and triple-click line need click.
-			let response = ui.interact(run.rect, run.band, Sense::click_and_drag());
-			egui::text_selection::LabelSelectionState::label_text_selection(
-				ui,
-				&response,
-				run.galley_pos,
-				run.galley,
-				color,
-				Stroke::NONE,
-			);
-			for art in run.artwork {
-				paint_artwork(ui, &art);
+			let pieces = punch(run.rect, &holes);
+			let mut primary = None;
+			for (index, piece) in pieces.iter().enumerate() {
+				let id = if index == 0 {
+					run.band
+				} else {
+					run.band.with(index)
+				};
+				let response = ui.interact(*piece, id, band_sense());
+				if index == 0 {
+					primary = Some(response);
+				}
 			}
-		}
-		for hole in self.holes {
-			ui.interact_opt(
-				hole.rect,
-				hole.id,
-				Sense::click(),
-				egui::InteractOptions { move_to_top: true },
-			);
+			let response = primary.unwrap_or_else(|| ui.interact(run.rect, run.band, band_sense()));
+			if covered && !run.painted && !run.galley.job.text.is_empty() {
+				egui::text_selection::LabelSelectionState::label_text_selection(
+					ui,
+					&response,
+					run.galley_pos,
+					run.galley,
+					ui.visuals().text_color(),
+					Stroke::NONE,
+				);
+			}
 		}
 		if over_hole {
 			ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
@@ -262,6 +284,64 @@ pub fn request_copy(ctx: &egui::Context) {
 	}
 }
 
+pub(crate) fn band_sense() -> Sense {
+	Sense::CLICK | Sense::DRAG
+}
+
+fn punch(rect: Rect, holes: &[Rect]) -> Vec<Rect> {
+	let mut parts = vec![rect];
+	for hole in holes {
+		if !hole.is_positive() {
+			continue;
+		}
+		let mut next = Vec::new();
+		for part in parts {
+			next.extend(subtract(part, *hole));
+		}
+		parts = next;
+		if parts.is_empty() {
+			break;
+		}
+	}
+	parts
+		.into_iter()
+		.filter(|part| part.is_positive() && part.width() >= 1.0 && part.height() >= 1.0)
+		.collect()
+}
+
+fn subtract(rect: Rect, hole: Rect) -> Vec<Rect> {
+	let cut = rect.intersect(hole);
+	if !cut.is_positive() {
+		return vec![rect];
+	}
+	let mut parts = Vec::new();
+	if rect.top() < cut.top() {
+		parts.push(Rect::from_min_max(
+			egui::pos2(rect.left(), rect.top()),
+			egui::pos2(rect.right(), cut.top()),
+		));
+	}
+	if cut.bottom() < rect.bottom() {
+		parts.push(Rect::from_min_max(
+			egui::pos2(rect.left(), cut.bottom()),
+			egui::pos2(rect.right(), rect.bottom()),
+		));
+	}
+	if rect.left() < cut.left() {
+		parts.push(Rect::from_min_max(
+			egui::pos2(rect.left(), cut.top()),
+			egui::pos2(cut.left(), cut.bottom()),
+		));
+	}
+	if cut.right() < rect.right() {
+		parts.push(Rect::from_min_max(
+			egui::pos2(cut.right(), cut.top()),
+			egui::pos2(rect.right(), cut.bottom()),
+		));
+	}
+	parts
+}
+
 fn block_rect(ui: &egui::Ui, runs: &[Run], cover: Option<Rect>) -> Rect {
 	let from_runs = runs.first().map(|first| {
 		let pad = ui.spacing().item_spacing.y / 2.0;
@@ -346,7 +426,7 @@ fn tile(runs: &mut [Run], block: Rect, stitch: bool) {
 fn blank_run(ui: &egui::Ui, base: egui::Id, block: Rect) -> Run {
 	let galley = ui.painter().layout_no_wrap(
 		String::new(),
-		FontId::proportional(1.0),
+		egui::FontId::proportional(1.0),
 		Color32::TRANSPARENT,
 	);
 	Run {
@@ -354,7 +434,7 @@ fn blank_run(ui: &egui::Ui, base: egui::Id, block: Rect) -> Run {
 		galley_pos: block.min,
 		galley,
 		rect: block,
-		artwork: Vec::new(),
+		painted: true,
 	}
 }
 

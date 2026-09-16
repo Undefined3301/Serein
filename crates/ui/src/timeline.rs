@@ -310,7 +310,7 @@ fn divider(ui: &mut egui::Ui, label: String, unread: bool) {
 		let text = ui.painter().layout_no_wrap(label.clone(), font, color);
 		let (rect, response) = ui.allocate_exact_size(
 			egui::vec2((ui.available_width() - 16.0).max(0.0), 20.0),
-			egui::Sense::click_and_drag(),
+			crate::select::band_sense(),
 		);
 		response.widget_info(|| {
 			egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), &label)
