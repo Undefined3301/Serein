@@ -41,7 +41,7 @@ pub struct TimelineView {
 	/// Requested pin change: channel, message, pinned.
 	pub(super) pin_request: Option<(Id, Id, bool)>,
 	toolbar: Option<(Id, egui::Rect)>,
-	heights: BTreeMap<Id, (u64, f32)>,
+	heights: BTreeMap<Id, f32>,
 	pub(super) reflow_frames: u64,
 	pub(super) consecutive_reflows: u64,
 	width: f32,
@@ -210,6 +210,7 @@ fn anchor_offset(rows: &[(Id, f32)], id: Id, inset: f32) -> f32 {
 	};
 	rows[..index].iter().map(|(_, height)| *height).sum::<f32>() + within
 }
+#[cfg(test)]
 fn layout_key(message: &Message) -> u64 {
 	// A layout fingerprint only; spoiler visibility uses exact text instead.
 	let mut key = DefaultHasher::new();
@@ -290,6 +291,7 @@ fn mentions_viewer(message: &Message, viewer: Option<Id>) -> bool {
 	message.mention_everyone
 		|| viewer.is_some_and(|viewer| message.mentions.iter().any(|mention| mention.id == viewer))
 }
+#[cfg(test)]
 fn row_key(message: &Message, previous: Option<&Message>, boundary: Option<Id>) -> u64 {
 	let mut key = DefaultHasher::new();
 	layout_key(message).hash(&mut key);
@@ -678,7 +680,34 @@ impl TimelineView {
 			|| self.hide_media_links != self.applied_hide_media_links;
 		let dimensions_changed = width_changed || content_dimensions_changed;
 		self.applied_hide_media_links = self.hide_media_links;
-		let changed = self.revision != state.revision || dimensions_changed;
+		let forced_reflow = self.revision == u64::MAX;
+		let revision_changed = self.revision != state.revision;
+		let mut changed = forced_reflow || dimensions_changed;
+		if revision_changed || changed {
+			let row_ids: Vec<_> = state
+				.timeline
+				.display_iter()
+				.map(|message| message.id)
+				.collect();
+			let ids_changed = self.rows.len() != row_ids.len()
+				|| self
+					.rows
+					.iter()
+					.zip(&row_ids)
+					.any(|((id, _), next)| id != next);
+			changed |= ids_changed;
+			self.heights
+				.retain(|id, _| row_ids.binary_search(id).is_ok());
+			self.formatted.retain(|id| state.timeline.get(id).is_some());
+			self.toolbar = self
+				.toolbar
+				.filter(|(id, _)| state.timeline.get(*id).is_some());
+			self.revealed
+				.retain(|id, content| state.timeline.get(*id).is_some_and(|m| content.matches(m)));
+		}
+		if revision_changed && !changed {
+			self.revision = state.revision;
+		}
 		let mut offset = None;
 		let mut lead_rows = None;
 		if changed {
@@ -691,28 +720,11 @@ impl TimelineView {
 			self.width = width;
 			self.text_size = text_size;
 			self.scale = scale;
-			let row_ids: Vec<_> = state
-				.timeline
-				.display_iter()
-				.map(|message| message.id)
-				.collect();
-			self.heights
-				.retain(|id, _| row_ids.binary_search(id).is_ok());
-			self.formatted.retain(|id| state.timeline.get(id).is_some());
-			self.toolbar = self
-				.toolbar
-				.filter(|(id, _)| state.timeline.get(*id).is_some());
-			self.revealed
-				.retain(|id, content| state.timeline.get(*id).is_some_and(|m| content.matches(m)));
-			let mut previous = None;
 			let mut lead_basis = 0.0;
 			self.rows = state
 				.timeline
 				.display_iter()
 				.map(|m| {
-					let key = row_key(m, previous, self.unread_boundary)
-						^ u64::from(state.timeline.is_deleted(m.id));
-					previous = (!state.timeline.is_deleted(m.id)).then_some(m);
 					let estimate = (if m.embeds_suppressed {
 						0.0
 					} else {
@@ -731,11 +743,7 @@ impl TimelineView {
 							})
 							.sum::<f32>())
 						.min(128.0);
-					let height = self
-						.heights
-						.get(&m.id)
-						.filter(|(old_key, _)| *old_key == key)
-						.map_or(estimate, |(_, height)| *height);
+					let height = self.heights.get(&m.id).copied().unwrap_or(estimate);
 					lead_basis += if height * 8.0 < estimate {
 						estimate
 					} else {
@@ -1040,11 +1048,7 @@ impl TimelineView {
 								});
 							});
 					});
-					measurements.push((
-						*id,
-						row_key(message, previous, self.unread_boundary) ^ 1,
-						response.response.rect.height(),
-					));
+					measurements.push((*id, response.response.rect.height()));
 					continue;
 				}
 				let compact = grouped(previous, message, self.unread_boundary);
@@ -1731,11 +1735,7 @@ impl TimelineView {
 						);
 					}
 				});
-				measurements.push((
-					*id,
-					row_key(message, previous, self.unread_boundary),
-					response.response.rect.height(),
-				));
+				measurements.push((*id, response.response.rect.height()));
 			}
 			let used: f32 = self.rows[..end].iter().map(|(_, height)| *height).sum();
 			ui.add_space((total - used).max(0.0));
@@ -1785,7 +1785,7 @@ impl TimelineView {
 			ui.add_space(end_padding);
 			// Visible rows occupy their measured height immediately; leading overscan
 			// still occupies its old height until the next anchored pass.
-			for (index, (_, _, height)) in (first..end).zip(&measurements) {
+			for (index, (_, height)) in (first..end).zip(&measurements) {
 				if index >= anchor {
 					self.rows[index].1 = *height;
 				}
@@ -1879,13 +1879,13 @@ impl TimelineView {
 			self.mark_read = Some(latest);
 		}
 		let mut reflow = false;
-		for (id, key, height) in measurements {
-			if self
+		for (id, height) in measurements {
+			let height_changed = self
 				.heights
 				.get(&id)
-				.is_none_or(|(old_key, old)| *old_key != key || (*old - height).abs() > 1.0)
-			{
-				self.heights.insert(id, (key, height));
+				.is_none_or(|old| (*old - height).abs() > 1.0);
+			self.heights.insert(id, height);
+			if height_changed {
 				reflow = true;
 			}
 		}
@@ -3207,10 +3207,10 @@ mod tests {
 				)
 				.drop_without_applying_deltas();
 			}
-			let short = view.heights[&Id(2)].1;
+			let short = view.heights[&Id(2)];
 			assert!(short <= 26.0, "single-line continuation is {short} pt tall");
 			assert!(
-				view.heights[&Id(3)].1 > short + 8.0,
+				view.heights[&Id(3)] > short + 8.0,
 				"internal newline must remain visible"
 			);
 		}
@@ -3435,7 +3435,7 @@ mod tests {
 			);
 			assert!(view.opening.is_none());
 			if extra == all {
-				full_height = Some(view.heights[&message.id].1);
+				full_height = Some(view.heights[&message.id]);
 				let point = texts
 					.iter()
 					.find(|(text, _)| text == "Open in Discord")
@@ -3465,7 +3465,7 @@ mod tests {
 			}
 			if !extra.any() {
 				assert!(
-					view.heights[&message.id].1 < full_height.unwrap(),
+					view.heights[&message.id] < full_height.unwrap(),
 					"Removing marker-only metadata must shrink the row"
 				);
 			}
@@ -4110,12 +4110,7 @@ mod tests {
 
 		// Force a severe underestimate without invalidating the row key, as can
 		// happen when content geometry changes independently of its message data.
-		let key = row_key(
-			state.timeline.get(Id(1)).unwrap(),
-			None,
-			view.unread_boundary,
-		);
-		view.heights.insert(Id(1), (key, 76.0));
+		view.heights.insert(Id(1), 76.0);
 		view.following = false;
 		// The extra short row before the anchor also catches premature cutoff while
 		// the leading measurement cursor is still below the visible viewport.
@@ -4128,7 +4123,7 @@ mod tests {
 			.any(|shape| shape.clip_rect.is_positive() && contains_final_row(&shape.shape));
 		output.drop_without_applying_deltas();
 		assert!(
-			view.heights[&Id(1)].1 > 600.0,
+			view.heights[&Id(1)] > 600.0,
 			"Fixture must measure a tall leading row"
 		);
 		assert!(
@@ -4334,10 +4329,10 @@ mod tests {
 			assert_eq!(anchor.0, Id(200));
 			// A newly measured leading row while browsing must not opt into the
 			// bottom restoration used for a following layout retry.
-			let (key, height) = view.heights[&Id(199)];
+			let height = view.heights[&Id(199)];
 			assert!(height > 1.0);
 			let reflows = view.reflow_frames;
-			view.heights.insert(Id(199), (key, 1.0));
+			view.heights.insert(Id(199), 1.0);
 			view.revision = u64::MAX;
 			render(&mut view, &mut state);
 			assert!(view.reflow_frames > reflows);
@@ -4850,14 +4845,14 @@ mod tests {
 		for _ in 0..3 {
 			render(&mut view, &mut state, &mut images);
 		}
-		let short_height = view.heights[&Id(1)].1;
+		let short_height = view.heights[&Id(1)];
 		view.following = false;
 		view.anchor = Some((Id(2), 400.0));
 		state.revision += 1;
 		for _ in 0..3 {
 			render(&mut view, &mut state, &mut images);
 		}
-		assert_eq!(view.heights[&Id(1)].1, short_height);
+		assert_eq!(view.heights[&Id(1)], short_height);
 		assert_eq!(view.anchor.unwrap().0, Id(2));
 		state.apply(client_core::Envelope {
 			generation: state.generation,
@@ -4885,7 +4880,7 @@ mod tests {
 			render(&mut view, &mut state, &mut images);
 		}
 		assert!(
-			view.heights[&Id(1)].1 > short_height + 20.0,
+			view.heights[&Id(1)] > short_height + 20.0,
 			"The renamed references must be measured with their new wrapped labels"
 		);
 		assert!(images.take_requests().is_empty());
@@ -4957,11 +4952,8 @@ mod tests {
 		};
 		view.revealed
 			.insert(message.id, Revealed::new(&message, u32::MAX, true));
-		view.heights
-			.insert(message.id, (layout_key(&message), 4000.0));
+		view.heights.insert(message.id, 4000.0);
 		message.content = "||new concealed content||".into();
-		let current_key = layout_key(&message);
-		assert_ne!(view.heights[&message.id].0, current_key);
 		let mut state = State {
 			selected: Some(Id(2)),
 			revision: 1,
@@ -4985,14 +4977,10 @@ mod tests {
 		});
 		output.drop_without_applying_deltas();
 		assert!(view.revealed.is_empty());
-		assert_eq!(
-			view.heights[&Id(1)].0,
-			row_key(state.timeline.get(Id(1)).unwrap(), None, None)
-		);
 		assert!(
-			view.heights[&Id(1)].1 < 210.0,
+			view.heights[&Id(1)] < 210.0,
 			"A short concealed message must keep a compact row even in an unbounded scroll layout: {}",
-			view.heights[&Id(1)].1
+			view.heights[&Id(1)]
 		);
 	}
 	#[test]
