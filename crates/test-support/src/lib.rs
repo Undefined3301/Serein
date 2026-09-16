@@ -797,7 +797,6 @@ pub fn empty_channel_demo_state(long_name: bool) -> State {
 	state
 }
 
-/// Role-limited, hidden, and unknown rows for the default `--demo` sidebar.
 pub fn seed_access_marks(state: &mut State) {
 	use model::permissions::{Overwrite, Role, VIEW_CHANNEL};
 	const GUILD: Id = Id(10);

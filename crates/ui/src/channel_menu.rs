@@ -43,7 +43,7 @@ pub(super) struct ChannelMenu {
 	requested: Option<(Id, Intent)>,
 	dialog: Option<Dialog>,
 	feedback: Option<Id>,
-	quiet: Option<Id>,
+	failure: Option<Id>,
 	preference_error: bool,
 	generation: u64,
 }
@@ -314,11 +314,11 @@ impl ChannelMenu {
 					}
 				}
 				Intent::Write(action) => {
-					let quiet = matches!(action, Action::Mute(_) | Action::Notifications(_));
+					let on_fail = matches!(action, Action::Mute(_) | Action::Notifications(_));
 					if let Some(command) = state.request_channel_action(id, action) {
 						commands.push(command);
-						if quiet {
-							self.quiet = Some(id);
+						if on_fail {
+							self.failure = Some(id);
 						} else {
 							self.feedback = Some(id);
 						}
@@ -358,9 +358,9 @@ impl ChannelMenu {
 				}
 			}
 		}
-		if let Some(id) = self.quiet.take() {
+		if let Some(id) = self.failure.take() {
 			if state.channel_action_pending() {
-				self.quiet = Some(id);
+				self.failure = Some(id);
 			} else if !state.channel_action_succeeded(id)
 				&& state.channel_action_status(id).is_some()
 			{

@@ -8,6 +8,8 @@ const EYE: f32 = 22.0;
 const SCROLL: f32 = 16.0;
 const LOCK: f32 = 6.0;
 const LOCK_HALO: f32 = 3.5;
+const LOCK_U: f32 = 19.5 / 24.0;
+const LOCK_V: f32 = 6.25 / 24.0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Emphasis {
@@ -43,18 +45,9 @@ pub(crate) fn paint(
 	background: Color32,
 ) {
 	if access.limited() {
-		let center = glyph.min
-			+ Vec2::new(
-				glyph.width() * (19.5 / 24.0),
-				glyph.height() * (6.25 / 24.0),
-			);
-		painter.circle_filled(center, LOCK * 0.5 + LOCK_HALO, background);
-		icons::paint(
-			painter,
-			Icon::Lock,
-			Rect::from_center_size(center, Vec2::splat(LOCK)),
-			color,
-		);
+		let badge = lock_badge(glyph);
+		painter.circle_filled(badge.center(), LOCK * 0.5 + LOCK_HALO, background);
+		icons::paint(painter, Icon::Lock, badge, color);
 	}
 	if access.hidden() {
 		let center = Pos2::new(row.right() - SCROLL - EYE * 0.5, row.center().y);
@@ -65,6 +58,13 @@ pub(crate) fn paint(
 			color,
 		);
 	}
+}
+
+fn lock_badge(glyph: Rect) -> Rect {
+	Rect::from_center_size(
+		glyph.min + Vec2::new(glyph.width() * LOCK_U, glyph.height() * LOCK_V),
+		Vec2::splat(LOCK),
+	)
 }
 
 pub(crate) fn label(access: ChannelAccess) -> &'static str {

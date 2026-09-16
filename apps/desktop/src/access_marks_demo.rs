@@ -1,4 +1,3 @@
-//! Offline debug check: cargo run --locked -p serein --features demo -- --demo --demo-check-access-marks
 use eframe::egui;
 use model::Id;
 

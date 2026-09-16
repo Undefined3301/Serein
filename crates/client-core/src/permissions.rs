@@ -565,7 +565,7 @@ impl State {
 		p::everyone_can_view(everyone.bits, guild.id, overwrites)
 	}
 	pub fn channel_access(&self, channel: Id) -> ChannelAccess {
-		let hidden = !self.can_view(channel);
+		let hidden = self.permission(channel, p::VIEW_CHANNEL) != Some(true);
 		if self.channel(channel).is_none_or(|c| c.guild.is_none()) {
 			return ChannelAccess {
 				hidden,
