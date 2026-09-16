@@ -26,6 +26,7 @@ struct Run {
 
 struct Hole {
 	rect: Rect,
+	clickable: bool,
 }
 
 struct Overlay {
@@ -62,12 +63,20 @@ impl Surface {
 	}
 
 	pub fn keep(&mut self, response: &Response) {
-		self.exclude(response.rect);
+		if response.rect.is_positive() {
+			self.holes.push(Hole {
+				rect: response.rect,
+				clickable: true,
+			});
+		}
 	}
 
 	pub fn exclude(&mut self, rect: Rect) {
 		if rect.is_positive() {
-			self.holes.push(Hole { rect });
+			self.holes.push(Hole {
+				rect,
+				clickable: false,
+			});
 		}
 	}
 
@@ -122,7 +131,9 @@ impl Surface {
 		tile(&mut runs, block, covered);
 		let pointer = ui.input(|input| input.pointer.hover_pos());
 		let over_hole = pointer.is_some_and(|pos| {
-			self.holes.iter().any(|hole| hole.rect.contains(pos))
+			self.holes
+				.iter()
+				.any(|hole| hole.clickable && hole.rect.contains(pos))
 				|| self.overlays.iter().any(|over| over.rect.contains(pos))
 		});
 		let menu_open = Popup::is_any_open(ui.ctx());
