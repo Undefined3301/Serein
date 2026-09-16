@@ -6,7 +6,7 @@ use egui::{Color32, Pos2, Rect, Vec2};
 const DIM: f32 = 0.6;
 const EYE: f32 = 22.0;
 const SCROLL: f32 = 16.0;
-const LOCK: f32 = 6.0;
+const LOCK: f32 = 8.0;
 const LOCK_HALO: f32 = 3.5;
 const LOCK_U: f32 = 19.5 / 24.0;
 const LOCK_V: f32 = 6.25 / 24.0;
