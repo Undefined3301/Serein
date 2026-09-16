@@ -46,9 +46,12 @@ winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
 unsafe_code = "forbid"
 
 [profile.release]
-lto = "thin"
+# Fat LTO inlines across the bundled C libraries (libopus, sqlite, sonora) and drops their
+# unused code; stripping the symbol table removes the 7-8 MB `__LINKEDIT`/`.symtab` from the
+# shipped binary. Line tables still land in the split debug file for symbolicating crashes.
+lto = "fat"
 codegen-units = 1
-strip = "debuginfo"
+strip = "symbols"
 debug = "line-tables-only"
 
 # Real-time echo processing must also keep up in otherwise unoptimized dev builds.

@@ -3,6 +3,7 @@ pub mod badge;
 pub mod captcha;
 pub mod game_activity;
 pub mod notifications;
+pub mod processes;
 pub mod save;
 pub mod startup;
 pub mod tray;

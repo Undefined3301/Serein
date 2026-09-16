@@ -161,7 +161,7 @@ Download `serein-<version>-macOS-ARM64.zip` from [Releases](https://github.com/V
 - 🎨 **Extensions & Theme Shop:** Git-backed plugin engine and community theme shop with preview cards, color preset toggles, permission verification, and a built-in deleted-message retention protector.
 - 🎬 **Rich Media & Video Player:** Inline video playback for MOV and MP4 attachments, interactive seekable voice message waveforms, right-click media save/copy context menus, and full-resolution image viewer modals.
 - ⌨️ **Keybinds & Shortcuts:** Built-in keybind reference sheet styled with raised keycaps, quick edit (`Up`), quick delete (`Backspace`), and intuitive keyboard navigation.
-- 🎮 **Local Game IPC & Rich Presence:** Built-in Discord IPC socket server detecting local games, showing live game activities in member rosters, DM lists, and user profiles, with opt-in system tray integration.
+- 🎮 **Rich Presence & Game Detection:** Built-in Discord IPC and WebSocket RPC servers, plus executable-based detection of running games, showing live game activities in member rosters, DM lists, and user profiles, with opt-in system tray integration.
 
 ---
 
@@ -251,7 +251,7 @@ cargo xtask package
 | **Server Administration** | Implemented | Server profile editor (banners, icons, traits), role management with permissions matrix, audit log viewer, invite tracking and revocation, integrations/webhooks, and member moderation |
 | **Extensions & Theme Shop** | Implemented | Git-backed plugins, community theme catalog with preview cards and color presets, permission prompt modals, and deleted-message protector |
 | **Keybinds & Shortcuts** | Implemented | In-app keybind cheat sheet with raised keycaps, quick edit (`Up`), quick delete (`Backspace`), and keyboard navigation hotkeys |
-| **Rich Presence & Game IPC** | Implemented | Discord IPC socket server detecting active games; displays activities in member rosters, DMs, and user profiles; opt-in system tray |
+| **Rich Presence & Game IPC** | Implemented | Discord IPC and WebSocket RPC servers plus running-game detection; displays activities in member rosters, DMs, and user profiles; opt-in system tray |
 | **Profile Cards & Editing** | Implemented | On-demand profile popouts with banners, bios, badges, connections; native in-app editor for display name, bio, pronouns, and custom accent color with live preview |
 | **Server & Group Actions** | Implemented | Server dropdown with friend invites and leave server; group DM actions (edit name/icon preview, mute, leave) |
 | **Context Menus & Shortcuts** | Implemented | Right-click context menus for messages, media (save/copy), server channels, and members |

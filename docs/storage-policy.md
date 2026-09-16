@@ -372,7 +372,7 @@ Pinned-message summaries share search's single session-only 25-item / 64 KiB res
 
 Uploads do not persist local source paths, signed staging targets or file bytes. Pending filename/size labels remain bounded session metadata; existing recovery drafts retain only composed text, so retrying an attachment requires selecting the source again. Files are opened for reading and checked for observable size/modification changes; this is not an immutable snapshot guarantee. Cancellation stops the local job, but bytes already uploaded to Discord staging may remain there without a created message; no remote cleanup or retention guarantee is claimed. Completed messages and their returned attachment metadata can enter the existing bounded history cache. The OS file picker may retain OS-managed recent-location history. No new application log or hidden upload recovery store is introduced.
 
-Twemoji artwork is public bundled data, not an account cache: one 6,002,931-byte PNG
+Twemoji artwork is public bundled data, not an account cache: one 5,225,108-byte PNG
 and a fixed 4,009-entry Unicode index are embedded in the executable. Startup decodes
 one 2,048×2,016 RGBA atlas (15.75 MiB) before the first render callback; the GPU texture
 has the same pixel payload, with driver overhead additional. Decode/conversion/upload

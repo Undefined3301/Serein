@@ -33,6 +33,10 @@ pub struct VideoUi {
 	pub seen: bool,
 	pub volume: f32,
 	texture: Option<egui::TextureHandle>,
+	/// Staging pixels for the current frame. The renderer drops its reference after the
+	/// upload, so the same allocation is refilled each frame instead of reallocating up to
+	/// 8 MB per frame (1080p at 60 fps churned ~500 MB/s through the allocator).
+	frame: Option<std::sync::Arc<egui::ColorImage>>,
 	/// Vertical transparent-to-black ramp behind the overlay controls.
 	shade: Option<egui::TextureHandle>,
 	/// Keyboard focus rested on an overlay control last frame, so keep the overlay visible.
@@ -51,6 +55,7 @@ impl Default for VideoUi {
 			seen: false,
 			volume: 1.0,
 			texture: None,
+			frame: None,
 			shade: None,
 			controls_focused: false,
 			fullscreen: None,
@@ -62,6 +67,7 @@ impl VideoUi {
 		self.exit_fullscreen();
 		self.active = None;
 		self.texture = None;
+		self.frame = None;
 		self.state = VideoState::Idle;
 		self.position = 0.0;
 		self.duration = 0.0;
@@ -126,7 +132,25 @@ impl VideoUi {
 		{
 			return false;
 		}
-		let image = egui::ColorImage::from_rgba_unmultiplied([width, height], rgba);
+		let frame = self.frame.get_or_insert_with(|| {
+			std::sync::Arc::new(egui::ColorImage::filled(
+				[width, height],
+				egui::Color32::BLACK,
+			))
+		});
+		// Reuses the buffer once the previous upload released it; clones only if the
+		// renderer still holds the last frame.
+		let image = std::sync::Arc::make_mut(frame);
+		image.size = [width, height];
+		image.source_size = egui::vec2(width as f32, height as f32);
+		image.pixels.clear();
+		image.pixels.extend(
+			rgba.as_chunks::<4>()
+				.0
+				.iter()
+				.map(|&[r, g, b, a]| egui::Color32::from_rgba_unmultiplied(r, g, b, a)),
+		);
+		let image = std::sync::Arc::clone(frame);
 		if let Some(texture) = &mut self.texture {
 			texture.set(image, egui::TextureOptions::LINEAR);
 		} else {
@@ -146,6 +170,7 @@ impl VideoUi {
 			_ => {
 				self.active = Some((message.channel, message.id, attachment.clone()));
 				self.texture = None;
+				self.frame = None;
 				self.state = VideoState::Loading;
 				self.position = 0.0;
 				self.duration = 0.0;

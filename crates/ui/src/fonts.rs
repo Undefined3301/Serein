@@ -1,7 +1,11 @@
 //! Bundled OFL fallback faces. No runtime download, system-font scan, or disk I/O.
 use egui::{Context, FontData, FontDefinitions, FontFamily};
 
-const CJK: &[u8] = include_bytes!("../../../assets/fonts/NotoSansCJKjp-Regular.otf");
+/// Noto Sans CJK JP is a quarter of the executable uncompressed (16.4 MB). It ships as a
+/// `zstd -19` archive (12.0 MB) and is inflated in memory the first time CJK text is
+/// drawn; Latin-only sessions never pay for the decode.
+const CJK_ZSTD: &[u8] = include_bytes!("../../../assets/fonts/NotoSansCJKjp-Regular.otf.zst");
+const CJK_BYTES: usize = 16_467_736;
 const ARABIC: &[u8] = include_bytes!("../../../assets/fonts/NotoSansArabic.ttf");
 const INTER: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 const INTER_MEDIUM: &[u8] = include_bytes!("../../../assets/fonts/Inter-Medium.ttf");
@@ -17,6 +21,7 @@ pub fn install(ctx: &Context) {
 	ctx.set_fonts(latin);
 	let installed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 	ctx.on_end_pass("CJK fallback", std::sync::Arc::new(move |ui| {
+		// Also true while the decode thread runs, so the scan stops after the first hit.
 		if installed.load(std::sync::atomic::Ordering::Relaxed) { return; }
 		fn needs_cjk(shape: &egui::Shape) -> bool {
 			match shape {
@@ -30,9 +35,19 @@ pub fn install(ctx: &Context) {
 		let needed = ctx.graphics(|graphics| layers.iter().any(|layer| graphics.get(*layer).is_some_and(|list| list.all_entries().any(|entry| needs_cjk(&entry.shape)))));
 		if needed {
 			installed.store(true, std::sync::atomic::Ordering::Relaxed);
-			ctx.set_fonts(definitions());
-			ctx.request_discard("CJK fallback loaded");
-			ctx.request_repaint();
+			// Inflating 16 MB and reparsing the font set takes tens of milliseconds; keep
+			// it off the UI thread and accept one pass of fallback glyphs.
+			let worker = ctx.clone();
+			let spawned = std::thread::Builder::new()
+				.name("cjk-font".into())
+				.spawn(move || {
+					worker.set_fonts(definitions());
+					worker.request_repaint();
+				});
+			if spawned.is_err() {
+				ctx.set_fonts(definitions());
+				ctx.request_repaint();
+			}
 		}
 	}));
 	crate::design::weights_installed(ctx);
@@ -46,6 +61,15 @@ pub fn install(ctx: &Context) {
 /// That split is what DirectWrite does — baselines and x-heights land on whole
 /// pixels while spacing stays even. Letting the hints grid-fit horizontally instead
 /// snaps stems per glyph and reads as uneven, "wobbly" text at 1x.
+/// The bundled archive always inflates; a corrupt asset is a build defect, not a runtime path.
+fn cjk() -> Vec<u8> {
+	let mut font = Vec::with_capacity(CJK_BYTES);
+	ruzstd::decoding::FrameDecoder::new()
+		.decode_all_to_vec(CJK_ZSTD, &mut font)
+		.expect("bundled CJK font archive");
+	font
+}
+
 fn definitions() -> FontDefinitions {
 	let mut definitions = FontDefinitions::default();
 	// Inter leads proportional text; two heavier faces provide Discord-style emphasis
@@ -73,10 +97,11 @@ fn definitions() -> FontDefinitions {
 		list.insert(0, name.into());
 		list.extend(defaults.iter().cloned());
 	}
-	for (name, data) in [("Noto Sans CJK JP", CJK), ("Noto Sans Arabic", ARABIC)] {
-		definitions
-			.font_data
-			.insert(name.into(), FontData::from_static(data).into());
+	for (name, data) in [
+		("Noto Sans CJK JP", FontData::from_owned(cjk())),
+		("Noto Sans Arabic", FontData::from_static(ARABIC)),
+	] {
+		definitions.font_data.insert(name.into(), data.into());
 		for family in [
 			FontFamily::Proportional,
 			FontFamily::Monospace,
@@ -105,10 +130,12 @@ mod tests {
 	fn bundled_fallbacks_cover_multilingual_text_with_a_fixed_asset_budget() {
 		// The Inter faces are the hinted TrueType builds: their instructions cost
 		// ~1.3 MB more than the CFF originals, which is the price of sharp text at 1x.
+		// The CJK face counts at its embedded (compressed) size.
 		assert!(
-			CJK.len() + ARABIC.len() + INTER.len() + INTER_MEDIUM.len() + INTER_SEMIBOLD.len()
-				<= 20 * 1024 * 1024
+			CJK_ZSTD.len() + ARABIC.len() + INTER.len() + INTER_MEDIUM.len() + INTER_SEMIBOLD.len()
+				<= 16 * 1024 * 1024
 		);
+		assert_eq!(cjk().len(), CJK_BYTES);
 		let definitions = definitions();
 		for family in [FontFamily::Proportional, FontFamily::Monospace] {
 			let faces: Vec<_> = definitions.families[&family]

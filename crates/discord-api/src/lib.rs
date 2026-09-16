@@ -2,6 +2,8 @@
 mod activity_sharing;
 mod archives;
 mod channel_actions;
+pub mod detectable;
+pub mod external_assets;
 mod forum;
 mod group_actions;
 mod guild_folders;

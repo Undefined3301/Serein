@@ -27,6 +27,8 @@ pub struct Connection {
 	pub share_activity: watch::Sender<bool>,
 	pub own_presence: watch::Sender<model::OwnPresence>,
 	pub game_activity: watch::Receiver<crate::game_activity::Detection>,
+	/// A local Rich Presence client asked the client to show an invite: counter and code.
+	pub rpc_invite: watch::Receiver<Option<(u64, String)>>,
 	pub activity_observation: watch::Receiver<discord_gateway::ActivityObservation>,
 	pub activity_sharing: watch::Receiver<Result<Option<bool>, Failure>>,
 	pub activity_sharing_request: mpsc::Sender<bool>,
@@ -64,6 +66,7 @@ impl Connection {
 		let (share_activity, share_receive) = watch::channel(false);
 		let (own_presence, presence_receive) = watch::channel(model::OwnPresence::default());
 		let (game_report, game_activity) = watch::channel(Ok(None));
+		let (invite_send, rpc_invite) = watch::channel(None);
 		let (activity_observed, activity_observation) =
 			watch::channel(discord_gateway::ActivityObservation::Unconfirmed);
 		let (sharing_report, activity_sharing) = watch::channel(Ok(None));
@@ -91,7 +94,7 @@ impl Connection {
                 let (voice_send,voice_receive)=mpsc::channel(8);
 				let (activity_send,activity_receive)=watch::channel(None);
 				let _sharing_task=AbortTask(tokio::spawn(run_activity_sharing(api.clone(),share_receive.clone(),sharing_requests,sharing_report,finished.clone(),wake.clone())));
-				let _activity_task=AbortTask(tokio::spawn(crate::game_activity::run(share_receive,activity_send,game_report,wake.clone(),user.clone())));
+				let _activity_task=AbortTask(tokio::spawn(crate::game_activity::run(share_receive,activity_send,game_report,invite_send,wake.clone(),user.clone(),api.clone())));
                 let dm_channels=Arc::new(Mutex::new(BTreeSet::new()));
                 let gateway_channels=dm_channels.clone();
                 let (voice_online,mut voice_availability)=watch::channel(false);
@@ -349,6 +352,7 @@ impl Connection {
 			share_activity,
 			own_presence,
 			game_activity,
+			rpc_invite,
 			activity_observation,
 			activity_sharing,
 			activity_sharing_request,

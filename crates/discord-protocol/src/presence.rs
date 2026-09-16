@@ -132,8 +132,10 @@ impl Activity {
 			image.filter(ActivityImage::valid)
 		};
 		let assets = self.assets.as_ref().map(|assets| &assets.0);
+		// A small image is a corner badge. When no large image resolves, Discord falls back
+		// to the application icon rather than blowing the badge up into the artwork.
 		let primary = assets
-			.and_then(|assets| assets.large_image.as_ref().or(assets.small_image.as_ref()))
+			.and_then(|assets| assets.large_image.as_ref())
 			.and_then(image)
 			.or_else(|| application.map(ActivityImage::Application));
 		let small = assets.and_then(|assets| match &assets.small_image {
@@ -330,12 +332,10 @@ mod tests {
 					asset: Id(20),
 				}),
 			),
+			// A badge alone must not become the artwork; the application icon does.
 			(
 				r#""application_id":"10","assets":{"small_image":"30"}"#,
-				Some(ActivityImage::Asset {
-					application: Id(10),
-					asset: Id(30),
-				}),
+				Some(ActivityImage::Application(Id(10))),
 			),
 			(
 				r#""application_id":"10""#,
@@ -393,7 +393,13 @@ mod tests {
 				serde_json::json!({"large_image":"20"}),
 				Some(ActivityImage::Application(Id(10))),
 			),
-			(serde_json::json!({"small_image":"30"}), None),
+			(
+				serde_json::json!({"small_image":"30"}),
+				Some(ActivityImage::Asset {
+					application: Id(10),
+					asset: Id(30),
+				}),
+			),
 			(
 				serde_json::json!({"large_image":"20","small_image":"20"}),
 				None,

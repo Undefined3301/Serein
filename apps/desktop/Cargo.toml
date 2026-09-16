@@ -25,6 +25,8 @@ discord-gateway.workspace = true
 discord-protocol.workspace = true
 test-support = { workspace = true, optional = true }
 tokio.workspace = true
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
 zeroize.workspace = true
 platform.workspace = true
 local-store.workspace = true

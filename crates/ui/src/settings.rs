@@ -918,7 +918,7 @@ impl MessagingUi {
 			design::switch(
 				ui,
 				"Share game activity",
-				Some("Display your current game as activity on Discord."),
+				Some("Detect running games and show them as activity on Discord."),
 				&mut self.share_game_activity,
 			);
 			ui.separator();
@@ -932,7 +932,7 @@ impl MessagingUi {
 					game.map_or_else(
 						|| {
 							if self.share_game_activity {
-								"Waiting for a game to connect".into()
+								"Looking for a running game".into()
 							} else {
 								"Activity sharing is off".into()
 							}

@@ -501,6 +501,8 @@ struct Desktop {
 	connection: Option<connection::Connection>,
 	state: State,
 	messaging: ui::MessagingUi,
+	/// Last invite counter a local Rich Presence client published, so it opens exactly once.
+	rpc_invite_seen: u64,
 	downloads: downloads::Downloads,
 	audio: audio::Audio,
 	video: video::Video,
@@ -1396,6 +1398,7 @@ impl Desktop {
 			connection: None,
 			state,
 			messaging,
+			rpc_invite_seen: 0,
 			downloads: downloads::Downloads::default(),
 			audio: audio::Audio::default(),
 			video: video::Video::default(),
@@ -1785,6 +1788,14 @@ impl Desktop {
 				*enabled = self.game_activity.enabled;
 				true
 			});
+			// A local client may ask for an invite once; the dialog then waits for the user.
+			if let Some((count, code)) = connection.rpc_invite.borrow().clone()
+				&& self.rpc_invite_seen < count
+			{
+				self.rpc_invite_seen = count;
+				self.messaging
+					.open_rpc_invite(self.state.generation, code.clone());
+			}
 			if self.game_activity.enabled && self.state.gateway_connected {
 				match &*connection.game_activity.borrow() {
 					Ok(game) => {

@@ -153,6 +153,20 @@ impl GifMode {
 
 const CUSTOM_LIMIT: usize = model::MAX_GUILD_EMOJIS;
 
+/// Case-insensitive substring test against an already lowercased `needle`. Runs for every
+/// custom emoji on every frame the picker is open, so ASCII names (Discord permits only
+/// `[A-Za-z0-9_]`) compare in place; only non-ASCII server names allocate.
+fn contains_ignore_case(haystack: &str, needle: &str) -> bool {
+	if haystack.is_ascii() && needle.is_ascii() {
+		haystack
+			.as_bytes()
+			.windows(needle.len())
+			.any(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
+	} else {
+		haystack.to_lowercase().contains(needle)
+	}
+}
+
 /// Borrow catalog entries only; cap search results independently of the joined-server count.
 fn custom_matches<'a>(
 	state: &'a State,
@@ -166,13 +180,10 @@ fn custom_matches<'a>(
 		.filter(|guild| !query.is_empty() || server == Some(guild.id))
 		.flat_map(|guild| {
 			let query = &query;
-			let source_matches =
-				!query.is_empty() && guild.name.to_lowercase().contains(query.as_str());
+			let source_matches = !query.is_empty() && contains_ignore_case(&guild.name, query);
 			guild.emojis.iter().flatten().filter_map(move |emoji| {
-				(source_matches
-					|| query.is_empty()
-					|| emoji.name.to_lowercase().contains(query.as_str()))
-				.then_some((guild, emoji))
+				(source_matches || query.is_empty() || contains_ignore_case(&emoji.name, query))
+					.then_some((guild, emoji))
 			})
 		})
 		.take(CUSTOM_LIMIT)

@@ -5,6 +5,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub const MAX_FRAME_BYTES: usize = 16 * 1024;
+/// Registered keys are short, but a resolved `mp:external/...` proxy path or the source
+/// URL a launcher sends before resolution needs the same room as a proxied presence image.
+pub const MAX_ASSET_KEY: usize = 1024;
+/// Invite codes are vanity URLs or short random codes; never a path or query string.
+pub const MAX_INVITE_CODE: usize = 64;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Activity {
@@ -103,7 +108,7 @@ fn validate_fields(
 			|| [&a.large_image, &a.small_image]
 				.into_iter()
 				.flatten()
-				.any(|text| !text_valid(text, 256))
+				.any(|text| !text_valid(text, MAX_ASSET_KEY))
 	}) {
 		return Err(DecodeError);
 	}
@@ -175,12 +180,7 @@ pub fn decode_command(bytes: &[u8]) -> Result<SetActivity, DecodeError> {
 	if value.get("cmd").and_then(Value::as_str) != Some("SET_ACTIVITY") {
 		return Err(DecodeError);
 	}
-	let nonce = value
-		.get("nonce")
-		.and_then(Value::as_str)
-		.filter(|nonce| !nonce.is_empty() && text_valid(nonce, 128))
-		.ok_or(DecodeError)?
-		.to_owned();
+	let nonce = decode_nonce(&value)?;
 	let args = value
 		.get_mut("args")
 		.and_then(Value::as_object_mut)
@@ -220,6 +220,63 @@ pub fn decode_command(bytes: &[u8]) -> Result<SetActivity, DecodeError> {
 		pid,
 		activity,
 	})
+}
+
+/// Every locally supported RPC request. Unsupported commands answer with an error frame
+/// instead of silently succeeding, matching Discord's own RPC surface for absent scopes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Request {
+	SetActivity(SetActivity),
+	/// `INVITE_BROWSER`: the caller asks the client to show an invite. Joining stays user-confirmed.
+	Invite {
+		nonce: String,
+		code: String,
+	},
+}
+
+pub fn decode_request(bytes: &[u8]) -> Result<Request, DecodeError> {
+	let value = payload(bytes)?;
+	match value.get("cmd").and_then(Value::as_str) {
+		Some("SET_ACTIVITY") => decode_command(bytes).map(Request::SetActivity),
+		Some("INVITE_BROWSER") => {
+			let nonce = decode_nonce(&value)?;
+			let code = value
+				.get("args")
+				.and_then(Value::as_object)
+				.and_then(|args| args.get("code"))
+				.and_then(Value::as_str)
+				.filter(|code| valid_invite_code(code))
+				.ok_or(DecodeError)?
+				.to_owned();
+			Ok(Request::Invite { nonce, code })
+		}
+		_ => Err(DecodeError),
+	}
+}
+
+/// Invite codes travel into an invite lookup, so keep them to the characters Discord issues.
+pub fn valid_invite_code(code: &str) -> bool {
+	!code.is_empty()
+		&& code.len() <= MAX_INVITE_CODE
+		&& code
+			.bytes()
+			.all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+fn decode_nonce(value: &Value) -> Result<String, DecodeError> {
+	value
+		.get("nonce")
+		.and_then(Value::as_str)
+		.filter(|nonce| !nonce.is_empty() && text_valid(nonce, 128))
+		.map(str::to_owned)
+		.ok_or(DecodeError)
+}
+
+/// Acknowledges that the invite was handed to the client, never that the user joined.
+pub fn invite_acknowledge(nonce: &str, code: &str) -> Vec<u8> {
+	json!({"cmd":"INVITE_BROWSER","evt":null,"nonce":nonce,"data":{"code":code}})
+		.to_string()
+		.into_bytes()
 }
 
 pub fn ready(user_id: Id, username: &str) -> Vec<u8> {
@@ -351,6 +408,38 @@ mod tests {
 	}
 
 	#[test]
+	fn invite_requests_are_bounded_and_other_commands_stay_unsupported() {
+		let Request::Invite { nonce, code } = decode_request(
+			br#"{"cmd":"INVITE_BROWSER","nonce":"invite-1","args":{"code":"hTKzmak"}}"#,
+		)
+		.unwrap() else {
+			panic!("an invite request must decode as one")
+		};
+		assert_eq!((nonce.as_str(), code.as_str()), ("invite-1", "hTKzmak"));
+		let ack: Value = serde_json::from_slice(&invite_acknowledge(&nonce, &code)).unwrap();
+		assert_eq!(ack["cmd"], "INVITE_BROWSER");
+		assert_eq!(ack["nonce"], "invite-1");
+		assert_eq!(ack["data"]["code"], "hTKzmak");
+		assert!(matches!(
+			decode_request(&command(json!({}))).unwrap(),
+			Request::SetActivity(_)
+		));
+		for bytes in [
+			br#"{"cmd":"INVITE_BROWSER","nonce":"n","args":{"code":"../secret"}}"#.as_slice(),
+			br#"{"cmd":"INVITE_BROWSER","nonce":"n","args":{"code":"https://discord.gg/a"}}"#,
+			br#"{"cmd":"INVITE_BROWSER","nonce":"n","args":{"code":""}}"#,
+			br#"{"cmd":"INVITE_BROWSER","nonce":"n","args":{}}"#,
+			br#"{"cmd":"INVITE_BROWSER","args":{"code":"hTKzmak"}}"#,
+			br#"{"cmd":"AUTHORIZE","nonce":"n","args":{"scopes":["rpc"]}}"#,
+			br#"{"cmd":"GUILD_TEMPLATE_BROWSER","nonce":"n","args":{"code":"hTKzmak"}}"#,
+		] {
+			assert!(decode_request(bytes).is_err());
+		}
+		assert!(!valid_invite_code(&"a".repeat(MAX_INVITE_CODE + 1)));
+		assert!(valid_invite_code("wumpus-friends_1"));
+	}
+
+	#[test]
 	fn rejects_malformed_unbounded_and_unsupported_payloads() {
 		for bytes in [
 			br#"{"v":2,"client_id":"42"}"#.as_slice(),
@@ -373,7 +462,7 @@ mod tests {
 			json!({"details":"bad\ntext"}),
 			json!({"timestamps":[]}),
 			json!({"assets":[]}),
-			json!({"assets":{"large_image":"x".repeat(257)}}),
+			json!({"assets":{"large_image":"x".repeat(MAX_ASSET_KEY + 1)}}),
 			json!({"timestamps":{"start":u64::MAX}}),
 			json!({"timestamps":{"start":-1}}),
 			json!({"timestamps":{"start":10,"end":9}}),

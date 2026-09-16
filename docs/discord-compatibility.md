@@ -862,6 +862,13 @@ invites and uncertain writes show errors. Challenges, membership screening, and 
 requirements remain unsupported in the native join flow. No challenge bypass or automatic retry.
 Live acceptance and restricted-server flows remain unverified; offline demo cannot join.
 
+Joined-server invite cards (September 16): a fresh invite preview for a known joined guild
+offers **Go To Server**. It uses the same navigation as the server rail, restoring an accessible
+last-viewed channel or choosing the first accessible channel. It never sends another join request.
+Accepted invites without gateway-confirmed guild membership keep the pending-access behavior.
+Synthetic click tests cover navigation, preserved drafts and the absence of a second join request;
+native visuals and live account interoperability remain unverified.
+
 Standalone joining (September 12): the server-rail **+** opens **Join a Server**,
 including when no conversation is selected. Paste a bare code or a supported Discord
 invite URL, choose **Check Invite**, review the server, then choose **Join Server**.
@@ -1276,3 +1283,50 @@ Reload resubscribes; a missing response uses the existing 15-second timeout.
 No bulk guild subscription, background pagination or thread join is performed.
 The offline debug check exercises the packet, decoder and state admission.
 Live acceptance remains unofficial and unverified.
+
+## Rich Presence transports, artwork and game detection — September 16, 2026
+
+Game Activity now covers what an out-of-client Rich Presence bridge is expected to do,
+following the feature set of [arRPC](https://github.com/OpenAsar/arrpc) and
+[rsRPC](https://github.com/SpikeHD/rsRPC) without reusing their code.
+
+**WebSocket transport.** Alongside the existing IPC endpoint, sharing binds the first free
+port in Discord's RPC range 6463–6472 on loopback only. The upgrade request must carry
+`v=1` and a numeric `client_id`, and either no `Origin` or one of Discord's own web origins;
+anything else is refused without a reported error, because browsers and port scanners reach
+these ports routinely. Accepted sockets receive the same READY dispatch and speak the same
+JSON commands as IPC, without opcode framing. Messages and frames are capped at 16 KiB.
+
+**Artwork.** `large_image`/`small_image` now accept three forms: a registered asset key or ID,
+an already-proxied `mp:` key passed through after the presence path checks, and an absolute
+HTTPS URL. A URL is never fetched or forwarded raw; it is exchanged for a media-proxy path
+through `/applications/{id}/external-assets`, the same unofficial route Discord's client uses,
+and cached per connection so repeated identical updates cost nothing. Registered assets are
+refetched at most once a minute when a key misses, so artwork uploaded seconds after a game
+connects still resolves. This addresses [#237](https://github.com/ViceVerse-cz/Serein/issues/237),
+where a plugin published its cover art as a URL.
+
+A small image is a corner badge. Both the outgoing path and received presences now fall back
+to the application icon when no large image resolves, instead of promoting the badge into the
+artwork — the second symptom reported in that issue.
+
+**Detection.** Games that never speak RPC are matched by executable name against Discord's
+public `/applications/detectable` list (about 24,000 applications, 10,451 of them detectable,
+12.7 MB). The list is reduced on download to id, name and non-launcher executable names
+(1.1 MB), cached for a day under the local data directory, and re-checked against the same
+bounds when read back. Matching compares path suffixes longest-first, plus `.app` bundle
+components for macOS entries; an executable-name index keeps a full sweep at roughly 6 ms for
+900 processes instead of ~920 ms for a linear scan. Processes are enumerated read-only through
+`/proc` on Linux, `ps` on macOS and `tasklist` on Windows: executable paths only, never
+arguments, environment, memory or another user's processes. Detection is polled every ten
+seconds while sharing is on, keeps a running match stable rather than flapping between two
+matches, and always loses to a connected client, which knows more than a process name.
+
+**Invites.** `INVITE_BROWSER` prefills the existing Join a Server dialog and is acknowledged.
+It never joins: the user still confirms the lookup and the join. `GUILD_TEMPLATE_BROWSER`,
+`DEEP_LINK`, `AUTHORIZE` and join/spectate remain unsupported and answer with correlated errors.
+
+Offline tests cover the IPC and WebSocket transports end to end, origin and handshake refusal,
+URL proxying, late artwork uploads, proxy-path traversal attempts, badge fallback, detection
+precedence and cache round-tripping. The detectable list, its endpoint and the external-assets
+route were checked against live responses; game-to-Gateway publication remains unverified.
