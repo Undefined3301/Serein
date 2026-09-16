@@ -66,7 +66,7 @@ impl Surface {
 		if response.rect.is_positive() {
 			self.holes.push(Hole {
 				rect: response.rect,
-				clickable: true,
+				clickable: response.enabled() && response.sense.senses_click(),
 			});
 		}
 	}
@@ -130,12 +130,14 @@ impl Surface {
 		let covered = self.cover.is_some();
 		tile(&mut runs, block, covered);
 		let pointer = ui.input(|input| input.pointer.hover_pos());
-		let over_hole = pointer.is_some_and(|pos| {
+		let over_click = pointer.is_some_and(|pos| {
 			self.holes
 				.iter()
 				.any(|hole| hole.clickable && hole.rect.contains(pos))
 				|| self.overlays.iter().any(|over| over.rect.contains(pos))
 		});
+		let over_reserved =
+			pointer.is_some_and(|pos| self.holes.iter().any(|hole| hole.rect.contains(pos)));
 		let menu_open = Popup::is_any_open(ui.ctx());
 		let holes: Vec<Rect> = self.holes.iter().map(|hole| hole.rect).collect();
 		for run in runs {
@@ -199,9 +201,9 @@ impl Surface {
 				InteractOptions { move_to_top: true },
 			);
 		}
-		if over_hole {
+		if over_click {
 			ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
-		} else if pointer.is_some_and(|pos| block.contains(pos)) {
+		} else if pointer.is_some_and(|pos| block.contains(pos)) && !over_reserved {
 			ui.ctx().set_cursor_icon(CursorIcon::Default);
 		}
 	}
