@@ -5,8 +5,8 @@ use egui::{Color32, Pos2, Rect, Vec2};
 
 const DIM: f32 = 0.6;
 const EYE: f32 = 16.0;
-const LOCK: f32 = 9.0;
-const LOCK_KNOCKOUT: f32 = 5.5;
+const LOCK: f32 = 10.0;
+const LOCK_KNOCKOUT: f32 = 1.5;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Emphasis {
@@ -42,9 +42,15 @@ pub(crate) fn paint(
 	background: Color32,
 ) {
 	if access.limited() {
-		let lock =
-			Rect::from_center_size(glyph.right_top() + Vec2::new(-1.0, 1.0), Vec2::splat(LOCK));
-		painter.circle_filled(lock.center(), LOCK_KNOCKOUT, background);
+		let lock = Rect::from_center_size(
+			glyph.min
+				+ Vec2::new(
+					glyph.width() * (19.5 / 24.0),
+					glyph.height() * (6.25 / 24.0),
+				),
+			Vec2::splat(LOCK),
+		);
+		icons::paint(painter, Icon::Lock, lock.expand(LOCK_KNOCKOUT), background);
 		icons::paint(painter, Icon::Lock, lock, color);
 	}
 	if access.hidden() {

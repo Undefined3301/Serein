@@ -1,4 +1,6 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+#[cfg(feature = "demo")]
+mod access_marks_demo;
 mod app_settings;
 mod audio;
 mod avatars;
@@ -70,6 +72,10 @@ fn main() -> eframe::Result {
 			})
 		});
 	#[cfg(feature = "demo")]
+	if demo && std::env::args().any(|arg| arg == "--demo-check-access-marks") {
+		access_marks_demo::check();
+		return Ok(());
+	}
 	if demo && std::env::args().any(|arg| arg == "--demo-check-switcher") {
 		dm_demo::check();
 		return Ok(());

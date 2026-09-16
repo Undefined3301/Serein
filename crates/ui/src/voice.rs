@@ -149,7 +149,7 @@ impl MessagingUi {
 			if selected {
 				colors.selected
 			} else if hovered {
-				colors.hover
+				crate::design::row_highlight(ui, colors.hover, 1.0)
 			} else {
 				colors.sidebar
 			},

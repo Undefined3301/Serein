@@ -821,7 +821,8 @@ pub fn seed_access_marks(state: &mut State) {
 		channel(61, 0, Some(ACCESS), 0, "staff-notes"),
 		channel(62, 0, Some(ACCESS), 1, "secret"),
 		channel(63, 2, Some(ACCESS), 2, "locked-hangout"),
-		channel(64, 0, Some(ACCESS), 3, "unknown-room"),
+		channel(64, 2, Some(ACCESS), 3, "vault"),
+		channel(65, 0, Some(ACCESS), 4, "unknown-room"),
 	]);
 	let mut snapshot = permission_snapshot(state);
 	if let Some(guild) = snapshot.guilds.iter_mut().find(|guild| guild.id == GUILD) {
@@ -851,14 +852,21 @@ pub fn seed_access_marks(state: &mut State) {
 		allow: VIEW_CHANNEL,
 		deny: 0,
 	};
+	let deny_member = Overwrite {
+		id: state.user.as_ref().map_or(Id(1), |user| user.id),
+		kind: 1,
+		allow: 0,
+		deny: VIEW_CHANNEL,
+	};
 	for channel in &mut snapshot.channels {
 		match channel.id.0 {
 			61 | 63 => channel.overwrites = Some(vec![deny_everyone, allow_staff]),
 			62 => channel.overwrites = Some(vec![deny_everyone]),
+			64 => channel.overwrites = Some(vec![deny_member]),
 			_ => {}
 		}
 	}
-	snapshot.channels.retain(|channel| channel.id != Id(64));
+	snapshot.channels.retain(|channel| channel.id != Id(65));
 	state.permissions.replace(snapshot).unwrap();
 	state
 		.apply_notification_preferences(client_core::notifications::Event::Settings {
