@@ -524,7 +524,7 @@ impl MessagingUi {
 									crate::design::row_highlight(ui, colors.hover, 1.0),
 								);
 							}
-							if unread && !active {
+							if unread && !active && !access.muted() {
 								ui.painter().rect_filled(
 									egui::Rect::from_center_size(
 										egui::pos2(row.left() - 6.0, row.center().y),

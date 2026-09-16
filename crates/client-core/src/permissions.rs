@@ -566,10 +566,17 @@ impl State {
 	}
 	pub fn channel_access(&self, channel: Id) -> ChannelAccess {
 		let hidden = self.permission(channel, p::VIEW_CHANNEL) != Some(true);
-		if self.channel(channel).is_none_or(|c| c.guild.is_none()) {
+		let Some(target) = self.channel(channel) else {
 			return ChannelAccess {
 				hidden,
 				muted: false,
+				limited: false,
+			};
+		};
+		if target.guild.is_none() {
+			return ChannelAccess {
+				hidden,
+				muted: self.dm_muted(channel) == Some(true),
 				limited: false,
 			};
 		}
