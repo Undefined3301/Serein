@@ -19,6 +19,7 @@ mod game_activity;
 mod group_icon;
 mod notification_runtime;
 mod notification_sounds;
+mod pointer;
 #[cfg(feature = "demo")]
 mod post_menu_demo;
 mod reading_settings;
@@ -496,6 +497,7 @@ struct Desktop {
 	messaging: ui::MessagingUi,
 	/// Last invite counter a local Rich Presence client published, so it opens exactly once.
 	rpc_invite_seen: u64,
+	pointer: pointer::Pointer,
 	downloads: downloads::Downloads,
 	audio: audio::Audio,
 	video: video::Video,
@@ -1390,6 +1392,7 @@ impl Desktop {
 			state,
 			messaging,
 			rpc_invite_seen: 0,
+			pointer: pointer::Pointer::default(),
 			downloads: downloads::Downloads::default(),
 			audio: audio::Audio::default(),
 			video: video::Video::default(),
@@ -3672,7 +3675,7 @@ impl eframe::App for Desktop {
 	fn persist_egui_memory(&self) -> bool {
 		false
 	}
-	fn raw_input_hook(&mut self, _: &egui::Context, raw_input: &mut egui::RawInput) {
+	fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
 		// Viewport position/scale comes from native events; avoid an OS monitor query on paints.
 		if let Some(viewport) = raw_input.viewports.get(&raw_input.viewport_id) {
 			let geometry = (viewport.outer_rect, viewport.native_pixels_per_point);
@@ -3683,6 +3686,17 @@ impl eframe::App for Desktop {
 		}
 		if let Some(period) = self.frame_period() {
 			raw_input.predicted_dt = period.as_secs_f32();
+		}
+		let track = self.messaging.tracking_pointer();
+		let middle = self
+			.pointer
+			.intercept(raw_input, &self.window, ctx.pixels_per_point(), track);
+		self.messaging.middle_button(middle);
+		if track
+			&& let Some(egui::Event::PointerMoved(pos)) = raw_input.events.last()
+			&& !ctx.content_rect().contains(*pos)
+		{
+			ctx.request_repaint();
 		}
 	}
 	fn on_exit(&mut self) {

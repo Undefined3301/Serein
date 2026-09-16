@@ -1271,8 +1271,9 @@ mod tests {
 				};
 				assert_eq!(after, Some(Id(last)));
 				load_page_with_cursors(&mut state, before, after);
-				assert_eq!(state.timeline.row_ids().next(), Some(Id(last + 1)));
+				assert_eq!(state.timeline.row_ids().next(), Some(Id(first)));
 				assert_eq!(state.timeline.row_ids().last(), Some(Id(last + 50)));
+				assert!(state.search_target.is_none());
 			} else {
 				assert!(state.newer_history().is_none());
 			}

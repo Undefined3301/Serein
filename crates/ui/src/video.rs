@@ -684,6 +684,7 @@ mod tests {
 							&mut crate::AudioUi::default(),
 							video,
 							false,
+							&mut crate::select::Surface::new(ui, "attachment-test"),
 						);
 						assert!(ui.min_rect().width() <= width + 2.0);
 						// Only the stage and attachment spacing drive the layout estimate;

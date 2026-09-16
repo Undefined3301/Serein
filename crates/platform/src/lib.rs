@@ -3,6 +3,7 @@ pub mod badge;
 pub mod captcha;
 pub mod game_activity;
 pub mod notifications;
+pub mod pointer;
 pub mod processes;
 pub mod save;
 pub mod startup;
@@ -11,6 +12,7 @@ pub mod video;
 #[cfg(target_os = "macos")]
 pub mod window;
 use client_core::auth::{Failure, SessionSecret};
+pub use pointer::cursor_position;
 #[cfg(not(target_os = "linux"))]
 use std::{
 	sync::{

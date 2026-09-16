@@ -227,7 +227,7 @@ fn eyebrow_row(ui: &mut egui::Ui, label: &str, row_height: f32) -> egui::Rect {
 		egui::Layout::left_to_right(egui::Align::Center),
 		|ui| {
 			ui.add_space(8.0);
-			ui.label(design::eyebrow(ui, label, colors.muted));
+			ui.add(egui::Label::new(design::eyebrow(ui, label, colors.muted)).selectable(false));
 		},
 	)
 	.response

@@ -219,6 +219,7 @@ fn file_card(
 	download: &mut DownloadUi,
 	opening: &mut Option<String>,
 	demo: bool,
+	surface: &mut crate::select::Surface,
 ) {
 	let colors = design::palette(ui);
 	let kind = file_kind(&attachment.filename, attachment.content_type.as_deref());
@@ -234,20 +235,19 @@ fn file_card(
 				icons::inline(ui, kind.icon(), 32.0, kind.tint(&colors));
 				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 					ui.spacing_mut().item_spacing.x = 6.0;
-					download_button(ui, attachment, download, demo);
-					open_original(ui, attachment, opening);
+					let download = download_button(ui, attachment, download, demo);
+					let open = open_original(ui, attachment, opening);
 					ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
 						ui.vertical(|ui| {
 							ui.spacing_mut().item_spacing.y = 0.0;
-							ui.add(
-								egui::Label::new(
-									design::medium(ui, &attachment.filename, 14.0)
-										.color(colors.link),
-								)
-								.truncate()
-								.selectable(false),
+							let (pos, galley, response) = egui::Label::new(
+								design::medium(ui, &attachment.filename, 14.0).color(colors.link),
 							)
-							.on_hover_text(&attachment.filename);
+							.truncate()
+							.selectable(false)
+							.layout_in_ui(ui);
+							response.clone().on_hover_text(&attachment.filename);
+							surface.run(ui, &response, pos, galley, Vec::new());
 							ui.add(
 								egui::Label::new(
 									RichText::new(format_size(attachment.size))
@@ -258,6 +258,10 @@ fn file_card(
 							);
 						});
 					});
+					if let Some(open) = &open {
+						surface.keep(open);
+					}
+					surface.keep(&download);
 				});
 			});
 		});
@@ -274,6 +278,7 @@ pub fn show(
 	audio: &mut crate::audio::AudioUi,
 	video: &mut crate::video::VideoUi,
 	demo: bool,
+	surface: &mut crate::select::Surface,
 ) {
 	for group in message
 		.attachments
@@ -298,6 +303,7 @@ pub fn show(
 									)
 								});
 								media_context_menu(&response, attachment, download, opening, demo);
+								surface.keep(&response);
 								if response
 									.on_hover_text(
 										attachment
@@ -319,9 +325,11 @@ pub fn show(
 				ui.push_id(("attachment", attachment.id), |ui| {
 					if attachment.is_video() {
 						let response = video.show(ui, message, attachment);
+						surface.keep(&response);
 						media_context_menu(&response, attachment, download, opening, demo);
 					} else if attachment.is_audio() {
 						let response = audio.show(ui, message, attachment);
+						surface.keep(&response);
 						if attachment.is_voice_message() {
 							response.context_menu(|ui| {
 								download_button(ui, attachment, download, demo);
@@ -334,7 +342,7 @@ pub fn show(
 							});
 						}
 					} else {
-						file_card(ui, attachment, download, opening, demo);
+						file_card(ui, attachment, download, opening, demo, surface);
 					}
 					ui.add_space(6.0);
 				});
@@ -351,12 +359,17 @@ pub(crate) fn image_layout(count: usize, width: f32) -> (usize, egui::Vec2) {
 	)
 }
 
-fn open_original(ui: &mut egui::Ui, attachment: &Attachment, opening: &mut Option<String>) {
-	if let Some(target) = attachment.media.url.as_deref().and_then(external_url)
-		&& ui.small_button("Open original…").clicked()
-	{
+fn open_original(
+	ui: &mut egui::Ui,
+	attachment: &Attachment,
+	opening: &mut Option<String>,
+) -> Option<egui::Response> {
+	let target = attachment.media.url.as_deref().and_then(external_url)?;
+	let response = ui.small_button("Open original…");
+	if response.clicked() {
 		*opening = Some(target);
 	}
+	Some(response)
 }
 #[derive(Default)]
 pub struct DownloadUi {
@@ -486,19 +499,19 @@ fn download_button(
 	attachment: &Attachment,
 	download: &mut DownloadUi,
 	demo: bool,
-) {
-	if ui
+) -> egui::Response {
+	let response = ui
 		.add_enabled(!demo && !download.busy(), egui::Button::new("Download"))
 		.on_hover_text("Choose where to save this file · up to 100 MiB")
 		.on_disabled_hover_text(if demo {
 			"Downloads are disabled for synthetic attachments"
 		} else {
 			"A download is already active"
-		})
-		.clicked()
-	{
+		});
+	if response.clicked() {
 		download.request = Some(attachment.clone());
 	}
+	response
 }
 /// Resolve against the current message every frame: deleted or hidden media cannot linger.
 fn gallery_step(attachments: &[Attachment], current: Id, previous: bool) -> Option<Id> {
@@ -925,6 +938,7 @@ mod tests {
 							&mut crate::audio::AudioUi::default(),
 							&mut crate::video::VideoUi::default(),
 							true,
+							&mut crate::select::Surface::new(ui, "attachment-test"),
 						);
 					},
 				)
@@ -1166,6 +1180,7 @@ mod tests {
 				&mut crate::audio::AudioUi::default(),
 				&mut crate::video::VideoUi::default(),
 				false,
+				&mut crate::select::Surface::new(ui, "attachment-test"),
 			)
 		});
 		assert!(images.take_requests().is_empty());
@@ -1182,6 +1197,7 @@ mod tests {
 					&mut crate::audio::AudioUi::default(),
 					&mut crate::video::VideoUi::default(),
 					false,
+					&mut crate::select::Surface::new(ui, "attachment-test"),
 				)
 			});
 		}
@@ -1205,7 +1221,7 @@ mod tests {
 			};
 			for key in [None, Some(egui::Key::Tab), Some(egui::Key::Enter)] {
 				frame(&ctx, key, |ui| {
-					download_button(ui, &attachment, &mut download, demo)
+					let _ = download_button(ui, &attachment, &mut download, demo);
 				});
 			}
 			assert_eq!(download.request, pending.then_some(previous));

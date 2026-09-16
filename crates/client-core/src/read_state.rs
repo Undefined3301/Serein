@@ -172,7 +172,10 @@ impl State {
 						&& channel.last_message.map_or(
 							self.newer_may_have_more
 								|| (self.history_targeted && self.history_after.is_none()),
-							|latest| latest > last,
+							|latest| {
+								latest > last
+									&& (self.newer_may_have_more || self.history_after.is_none())
+							},
 						)
 				})
 			})
@@ -181,7 +184,7 @@ impl State {
 		if !self.can_load_newer() {
 			return None;
 		}
-		Some(self.open_after_window(self.forward_cursor()?))
+		Some(self.history_range(None, Some(self.forward_cursor()?)))
 	}
 	fn forward_cursor(&self) -> Option<Id> {
 		self.timeline
@@ -661,8 +664,16 @@ mod navigation_tests {
 				&mut state,
 				(start + 51..=start + 100).map(message).collect(),
 			);
-			assert_eq!(state.search_target, Some(Id(start + 51)));
-			assert_eq!(state.timeline.row_count(), 50);
+			assert!(state.search_target.is_none());
+			assert_eq!(state.timeline.iter().count(), 99);
+			assert_eq!(
+				state.timeline.iter().next().map(|m| m.id),
+				Some(Id(start + 2))
+			);
+			assert_eq!(
+				state.timeline.iter().last().map(|m| m.id),
+				Some(Id(start + 100))
+			);
 			assert!(!state.older_exhausted);
 			assert!(state.can_load_older());
 			assert_eq!(state.read_marker(Id(1)), Some(marker));

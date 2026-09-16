@@ -17,6 +17,7 @@ pub struct Timeline {
 	deleted: BTreeSet<Id>,
 	loading: bool,
 	retain_older: bool,
+	replace: bool,
 	preserve_deleted_messages: bool,
 }
 impl Timeline {
@@ -100,6 +101,15 @@ impl Timeline {
 	pub fn begin_page(&mut self, older: bool) {
 		// Set eviction direction before live events can race the history response.
 		self.retain_older = older;
+		self.replace = !older;
+		self.loading = true;
+		self.changed.clear();
+		self.patches.clear();
+		self.patch_bytes = 0;
+	}
+	pub fn begin_append(&mut self) {
+		self.retain_older = false;
+		self.replace = false;
 		self.loading = true;
 		self.changed.clear();
 		self.patches.clear();
@@ -241,7 +251,7 @@ impl Timeline {
 		// A recent-page reload is authoritative for the whole retained view. Preserve only
 		// mutations observed during this request, never missing cached/old RAM records.
 		self.retain_older = older;
-		if !older {
+		if self.replace {
 			self.messages.retain(|id, message| {
 				let keep = self.changed.contains(id)
 					|| (self.preserve_deleted_messages && self.deleted.contains(id));

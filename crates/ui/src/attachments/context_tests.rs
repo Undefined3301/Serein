@@ -75,6 +75,7 @@ fn select_media_menu(
 						&mut audio,
 						&mut video,
 						demo,
+						&mut crate::select::Surface::new(ui, "attachment-test"),
 					);
 				}
 			},

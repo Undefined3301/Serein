@@ -970,7 +970,11 @@ impl State {
 		self.history_after = after;
 		self.history_pending = true;
 		self.freshness = Freshness::Loading;
-		self.timeline.begin_page(before.is_some());
+		if before.is_none() && after.is_some() {
+			self.timeline.begin_append();
+		} else {
+			self.timeline.begin_page(before.is_some());
+		}
 		Command::History {
 			channel,
 			before,
@@ -2197,8 +2201,9 @@ impl State {
 					self.newer_cursor = messages.iter().map(|m| m.id).max();
 					self.newer_may_have_more = messages.len() == 50;
 				}
+				let jump = self.history_after.is_some() && self.timeline.is_empty();
 				let r = self.timeline.finish_page(messages, older);
-				if r.is_ok() && self.history_after.is_some() {
+				if r.is_ok() && jump {
 					self.search_target = self.timeline.iter().next().map(|m| m.id);
 					if self.search_target.is_none() {
 						self.status = "No messages returned after this boundary; use Jump to present to reload";

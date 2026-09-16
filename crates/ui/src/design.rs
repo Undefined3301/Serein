@@ -782,7 +782,10 @@ impl egui::Plugin for ClickableCursor {
 		let hovered = ctx.interaction_snapshot(|snapshot| snapshot.hovered.clone());
 		if hovered.into_iter().any(|id| {
 			ctx.read_response(id).is_some_and(|response| {
-				response.enabled() && response.hovered() && response.sense.senses_click()
+				response.enabled()
+					&& response.hovered()
+					&& response.sense.senses_click()
+					&& !response.sense.senses_drag()
 			})
 		}) {
 			ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -792,6 +795,7 @@ impl egui::Plugin for ClickableCursor {
 
 pub fn apply(ctx: &egui::Context) {
 	ctx.add_plugin(ClickableCursor);
+	crate::select::install(ctx);
 	let variant = variant();
 	let metrics = EXTENSION_STYLE.get();
 	let item_spacing = metrics.item_spacing.unwrap_or([8, 8]);
@@ -1346,7 +1350,7 @@ mod tests {
 				("button", CursorIcon::PointingHand),
 				("checkbox", CursorIcon::PointingHand),
 				("custom", CursorIcon::PointingHand),
-				("click-drag", CursorIcon::PointingHand),
+				("click-drag", CursorIcon::Default),
 				("disabled", CursorIcon::Default),
 				("disabled-custom", CursorIcon::Default),
 				("hover", CursorIcon::Default),

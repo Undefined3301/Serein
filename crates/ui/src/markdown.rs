@@ -844,6 +844,7 @@ impl Formatted {
 	) {
 		let (images, demo, guilds) = media;
 		let mut revealed = u32::MAX;
+		let mut surface = crate::select::Surface::new(ui, "body");
 		self.show_references(
 			ui,
 			opening,
@@ -851,8 +852,11 @@ impl Formatted {
 			profile,
 			(&[], &mut None, guilds),
 			(images, demo, &mut revealed),
+			&mut surface,
 		);
+		surface.finish(ui);
 	}
+	#[allow(clippy::too_many_arguments)]
 	pub fn show_references(
 		&self,
 		ui: &mut egui::Ui,
@@ -861,6 +865,7 @@ impl Formatted {
 		profile: &mut Option<model::User>,
 		references: (&[model::Channel], &mut Option<Id>, &[model::Guild]),
 		media: (&mut crate::avatars::Avatars, bool, &mut u32),
+		surface: &mut crate::select::Surface,
 	) {
 		let (channels, channel, guilds) = references;
 		let (images, demo, revealed) = media;
@@ -882,11 +887,11 @@ impl Formatted {
 							.iter()
 							.take_while(|(_, style)| style.spoiler == spoiler)
 							.count();
-						if ui
+						let response = ui
 							.push_id(("spoiler", region), |ui| ui.button("Reveal spoiler"))
-							.inner
-							.clicked()
-						{
+							.inner;
+						surface.keep(&response);
+						if response.clicked() {
 							*revealed |= 1_u32 << region;
 						}
 						start += count;
@@ -906,6 +911,7 @@ impl Formatted {
 							let response = ui
 								.add(egui::Link::new(egui::RichText::new(&label).strong()))
 								.on_hover_text("Open channel");
+							surface.keep(&response);
 							response.widget_info(|| {
 								egui::WidgetInfo::labeled(
 									egui::WidgetType::Link,
@@ -921,6 +927,7 @@ impl Formatted {
 							let response = ui
 								.add(egui::Link::new(egui::RichText::new(label).strong()))
 								.on_hover_text("Load channel");
+							surface.keep(&response);
 							response.widget_info(|| {
 								egui::WidgetInfo::labeled(
 									egui::WidgetType::Link,
@@ -932,10 +939,12 @@ impl Formatted {
 								*channel = Some(id);
 							}
 						} else {
-							ui.add(egui::Label::new(&self.spans[start].0).selectable(true))
+							let response = ui
+								.add(egui::Label::new(&self.spans[start].0).selectable(true))
 								.on_hover_text(
 									"Channel unavailable or unsupported in this session",
 								);
+							surface.keep(&response);
 						}
 						start += 1;
 						continue;
@@ -955,6 +964,7 @@ impl Formatted {
 									.background_color(colors.mention_bg),
 							))
 							.on_hover_text("Open user profile");
+						surface.keep(&response);
 						response.widget_info(|| {
 							egui::WidgetInfo::labeled(
 								egui::WidgetType::Link,
@@ -1014,8 +1024,9 @@ impl Formatted {
 					if let Some(index) = target {
 						let url = &self.links[index];
 						let label: String = spans.iter().map(|(text, _)| text.as_str()).collect();
-						let response = Self::show_emoji(spans, ui, true, images, demo, guilds)
-							.on_hover_text(url);
+						let response =
+							Self::show_emoji(spans, ui, true, images, demo, guilds, surface)
+								.on_hover_text(url);
 						// Text selection in egui's Link overwrites its accessibility role.
 						response.widget_info(|| {
 							egui::WidgetInfo::labeled(
@@ -1028,7 +1039,7 @@ impl Formatted {
 							*opening = Some(url.clone());
 						}
 					} else {
-						Self::show_emoji(spans, ui, false, images, demo, guilds);
+						Self::show_emoji(spans, ui, false, images, demo, guilds, surface);
 					}
 					start += count;
 				}
@@ -1037,7 +1048,7 @@ impl Formatted {
 	}
 	/// Full-width framed block: optional language header with a copy control, then the
 	/// highlighted, wrapped, selectable monospace text.
-	fn show_code_block(ui: &mut egui::Ui, block: &CodeBlock, index: u8) {
+	fn show_code_block(ui: &mut egui::Ui, block: &CodeBlock, index: u8) -> egui::Rect {
 		let colors = crate::design::palette(ui);
 		let code_colors = crate::design::code_colors(ui);
 		let width = ui.max_rect().width();
@@ -1148,7 +1159,9 @@ impl Formatted {
 				}
 				ui.add_space(4.0);
 			},
-		);
+		)
+		.response
+		.rect
 	}
 	fn copied_recently(ui: &egui::Ui, id: egui::Id) -> bool {
 		let now = ui.input(|input| input.time);
@@ -1183,6 +1196,7 @@ impl Formatted {
 		images: &mut crate::avatars::Avatars,
 		demo: bool,
 		guilds: &[model::Guild],
+		surface: &mut crate::select::Surface,
 	) -> egui::Response {
 		struct Inline {
 			text: String,
@@ -1258,10 +1272,7 @@ impl Formatted {
 				source.push_str(&text[start..]);
 			}
 		}
-		let mut label = egui::Label::new(job).wrap().selectable(true);
-		if link {
-			label = label.sense(egui::Sense::click());
-		}
+		let label = egui::Label::new(job).wrap().selectable(false);
 		let (pos, mut galley, mut response) = label.layout_in_ui(ui);
 		response.widget_info(|| {
 			egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), &source)
@@ -1319,15 +1330,29 @@ impl Formatted {
 				wrap,
 			));
 		}
-		if ui.is_rect_visible(response.rect) {
-			egui::text_selection::LabelSelectionState::label_text_selection(
-				ui,
-				&response,
-				pos,
-				galley,
-				ui.visuals().text_color(),
-				Stroke::NONE,
+		let artwork = slots
+			.iter()
+			.map(|(index, rect)| {
+				let inline = &inlines[*index];
+				crate::select::Artwork {
+					rect: *rect,
+					image: match inline.custom {
+						Some(id) => images.custom_image(ui.ctx(), id, size, demo),
+						None => inline.image.clone(),
+					},
+					fallback: '?',
+				}
+			})
+			.collect();
+		surface.run(ui, &response, pos, galley, artwork);
+		if link {
+			response = ui.interact(
+				response.rect,
+				response.id.with("link"),
+				egui::Sense::click(),
 			);
+		}
+		if ui.is_rect_visible(response.rect) {
 			for (index, rect) in &slots {
 				if !ui.is_rect_visible(*rect) {
 					continue;
@@ -1337,18 +1362,6 @@ impl Formatted {
 					Some(id) => images.custom_image(ui.ctx(), id, size, demo),
 					None => inline.image.clone(),
 				};
-				if let Some(image) = &image {
-					let painted = image.calc_size(egui::Vec2::splat(size), image.size());
-					image.paint_at(ui, egui::Rect::from_center_size(rect.center(), painted));
-				} else {
-					ui.painter().text(
-						rect.center(),
-						egui::Align2::CENTER_CENTER,
-						"?",
-						egui::FontId::proportional(size),
-						ui.visuals().weak_text_color(),
-					);
-				}
 				if !link {
 					let hit = ui
 						.interact(
@@ -1972,6 +1985,7 @@ mod tests {
 						..Default::default()
 					},
 					|ui| {
+						let mut surface = crate::select::Surface::new(ui, "body");
 						parsed.show_references(
 							ui,
 							&mut opening,
@@ -1979,7 +1993,9 @@ mod tests {
 							&mut profile,
 							(&[], &mut channel, &[]),
 							(&mut images, false, mask),
-						)
+							&mut surface,
+						);
+						surface.finish(ui);
 					},
 				);
 				assert!(output.platform_output.commands.is_empty());
@@ -2069,6 +2085,7 @@ mod tests {
 					..Default::default()
 				},
 				|ui| {
+					let mut surface = crate::select::Surface::new(ui, "body");
 					parsed.show_references(
 						ui,
 						&mut None,
@@ -2076,7 +2093,9 @@ mod tests {
 						&mut None,
 						(&[], &mut None, &[]),
 						(&mut images, false, &mut mask),
-					)
+						&mut surface,
+					);
+					surface.finish(ui);
 				},
 			)
 		};
@@ -2228,6 +2247,7 @@ mod tests {
 						..Default::default()
 					},
 					|ui| {
+						let mut surface = crate::select::Surface::new(ui, "body");
 						parsed.show_references(
 							ui,
 							&mut opening,
@@ -2235,7 +2255,9 @@ mod tests {
 							&mut profile,
 							(&channels, &mut channel, &[]),
 							(&mut crate::avatars::Avatars::default(), true, &mut revealed),
-						)
+							&mut surface,
+						);
+						surface.finish(ui);
 					},
 				);
 				assert!(output.platform_output.commands.is_empty());
