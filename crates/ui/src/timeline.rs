@@ -2325,8 +2325,6 @@ mod tests {
 					assert!(view.target_browsing && view.mark_read.is_none());
 				}
 			}
-			// An empty live edge still acknowledges stale latest metadata. A short unread
-			// page waits for a downward reach, the same as a tall one.
 			assert_eq!(view.mark_read, (count == 0).then_some(Id(latest)));
 			if tall {
 				// Scrolling to the live edge of tall unread content resolves both banners,

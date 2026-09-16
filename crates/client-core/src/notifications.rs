@@ -198,7 +198,6 @@ impl State {
 		}
 		Ok(())
 	}
-	/// Voice chat is behind Show chat, so kind 2 does not light the rail.
 	pub fn lights_guild_rail(&self, channel: &model::Channel) -> bool {
 		channel.kind != 2
 			&& self.channel_unread(channel) == Some(true)
