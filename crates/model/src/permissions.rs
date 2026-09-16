@@ -106,9 +106,7 @@ pub fn everyone_can_view(everyone: u128, guild: Id, overwrites: &[Overwrite]) ->
 	let mut seen = BTreeSet::new();
 	let mut selected = None;
 	for overwrite in overwrites {
-		if overwrite.id.0 == 0
-			|| overwrite.kind > 1
-			|| !seen.insert((overwrite.kind, overwrite.id))
+		if overwrite.id.0 == 0 || overwrite.kind > 1 || !seen.insert((overwrite.kind, overwrite.id))
 		{
 			return None;
 		}
