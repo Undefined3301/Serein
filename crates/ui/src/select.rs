@@ -128,7 +128,19 @@ impl Surface {
 		let menu_open = Popup::is_any_open(ui.ctx());
 		let holes: Vec<Rect> = self.holes.iter().map(|hole| hole.rect).collect();
 		for run in runs {
-			if menu_open || !run.rect.is_positive() || !ui.is_rect_visible(run.rect) {
+			if !run.rect.is_positive() || !ui.is_rect_visible(run.rect) {
+				continue;
+			}
+			if menu_open {
+				if !run.galley.job.text.is_empty() {
+					let color = if run.painted {
+						Color32::TRANSPARENT
+					} else {
+						ui.visuals().text_color()
+					};
+					ui.painter()
+						.add(TextShape::new(run.galley_pos, run.galley, color));
+				}
 				continue;
 			}
 			let pieces = punch(run.rect, &holes);

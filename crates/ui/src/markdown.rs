@@ -990,7 +990,13 @@ impl Formatted {
 							.iter()
 							.take_while(|(_, style)| style.block == Some(block))
 							.count();
-						Self::show_code_block(ui, &self.blocks[usize::from(block)], block, surface);
+						let code_rect = Self::show_code_block(
+							ui,
+							&self.blocks[usize::from(block)],
+							block,
+							surface,
+						);
+						surface.exclude(code_rect);
 						start += count;
 						continue;
 					}
