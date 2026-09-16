@@ -1027,7 +1027,6 @@ impl Formatted {
 						let response =
 							Self::show_emoji(spans, ui, true, images, demo, guilds, surface)
 								.on_hover_text(url);
-						// Text selection in egui's Link overwrites its accessibility role.
 						response.widget_info(|| {
 							egui::WidgetInfo::labeled(
 								egui::WidgetType::Link,

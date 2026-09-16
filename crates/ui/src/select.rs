@@ -37,11 +37,8 @@ struct Overlay {
 pub struct Surface {
 	base: egui::Id,
 	runs: Vec<Run>,
-	/// Exclusive click widgets punched out of the bands.
 	holes: Vec<Hole>,
-	/// In-text emoji and links. Raised after the bands so a click still hits them.
 	overlays: Vec<Overlay>,
-	/// Full message row, including the avatar column, header, and attachment cards.
 	cover: Option<Rect>,
 }
 
@@ -64,19 +61,16 @@ impl Surface {
 		}
 	}
 
-	/// Punch this exclusive click rect out of the tiled bands.
 	pub fn keep(&mut self, response: &Response) {
 		self.exclude(response.rect);
 	}
 
-	/// Punch a laid-out region that has no single widget `Response`.
 	pub fn exclude(&mut self, rect: Rect) {
 		if rect.is_positive() {
 			self.holes.push(Hole { rect });
 		}
 	}
 
-	/// Raise this in-text click after the bands. Drag still starts on the band.
 	pub fn through(&mut self, response: &Response) {
 		if response.rect.is_positive() {
 			self.overlays.push(Overlay {
@@ -190,7 +184,6 @@ impl Surface {
 	}
 }
 
-/// Last-wins cursor and right-click handling for chat labels.
 #[derive(Default)]
 struct Pointer {
 	menu: bool,
@@ -291,7 +284,6 @@ fn hovering_edit(ctx: &egui::Context) -> bool {
 		.any(|id| egui::text_edit::TextEditState::load(ctx, *id).is_some())
 }
 
-/// Register once per context with the theme.
 pub fn install(ctx: &egui::Context) {
 	ctx.add_plugin(Pointer::default());
 }
@@ -301,7 +293,6 @@ pub fn has_selection(ctx: &egui::Context) -> bool {
 	ctx.plugin::<LabelSelectionState>().lock().has_selection()
 }
 
-/// True on the frame that swallowed a right-click over a live selection.
 pub fn open_menu(ctx: &egui::Context) -> bool {
 	ctx.plugin_opt::<Pointer>()
 		.is_some_and(|plugin| plugin.lock().menu)
