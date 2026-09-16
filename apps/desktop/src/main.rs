@@ -3486,6 +3486,9 @@ impl Desktop {
 						) | Event::ReadState(client_core::read_state::Event::Result {
 							result: Ok(()),
 							..
+						}) | Event::ReadState(client_core::read_state::Event::GuildAck {
+							result: Ok(()),
+							..
 						})
 					)) {
 				self.notifications.dismiss();

@@ -91,12 +91,17 @@ impl ReadState {
 		if self.status(channel).is_some() {
 			self.status = None;
 		}
-		if self.pending.as_ref().is_some_and(|pending| match pending {
-			Pending::Channel {
+		let cancel = match self.pending.as_mut() {
+			Some(Pending::Channel {
 				channel: pending, ..
-			} => *pending == channel,
-			Pending::Guild { channels, .. } => channels.iter().any(|(id, ..)| *id == channel),
-		}) {
+			}) => *pending == channel,
+			Some(Pending::Guild { channels, .. }) => {
+				channels.retain(|(id, ..)| *id != channel);
+				channels.is_empty()
+			}
+			None => false,
+		};
+		if cancel {
 			self.cancel();
 		}
 	}
@@ -123,10 +128,6 @@ impl State {
 		self.channel_unread(self.channel(channel)?)
 	}
 	/// Shared unread visibility for sidebar rows and notification badges.
-	/// A missing read-state entry stays unknown. A full snapshot that omitted a
-	/// thread or voice chat is not treated as unread.
-	/// A live-edge page whose rows are all at or behind the cursor is not
-	/// unread. That last_message has outlived a deleted row.
 	pub fn channel_unread(&self, channel: &model::Channel) -> Option<bool> {
 		if !self.gateway_connected || !self.can_view(channel.id) || !channel.supports_text() {
 			return None;
@@ -502,8 +503,6 @@ impl State {
 				}
 				match result {
 					Ok(()) => {
-						// A newer service ACK wins over this HTTP completion. Manual
-						// mark-unread may move the cursor backward.
 						if self.channels.iter().any(|c| c.id == channel)
 							&& self
 								.read_state
