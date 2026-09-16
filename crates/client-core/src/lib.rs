@@ -8,6 +8,7 @@ pub mod forum;
 pub mod gifs;
 pub mod guild_folders;
 pub mod permissions;
+pub use permissions::ChannelAccess;
 #[cfg(test)]
 mod permissions_tests;
 

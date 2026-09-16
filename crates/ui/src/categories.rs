@@ -1,3 +1,4 @@
+use crate::channel_marks::{self, Emphasis};
 use crate::design::LazyHover;
 use crate::shortcuts::{Heading, Roster, Scope, ShortcutView};
 use crate::{MessagingUi, design};
@@ -480,7 +481,8 @@ impl MessagingUi {
 								);
 								continue;
 							}
-							let visible = state.can_view(channel.id);
+							let access = state.channel_access(channel.id);
+							let visible = !access.hidden();
 							let unread = visible
 								&& (state.channel_unread(channel) == Some(true)
 									|| state.unread_count(channel.id) > 0);
@@ -532,16 +534,23 @@ impl MessagingUi {
 									colors.text_strong,
 								);
 							}
-							let name_color = if !enabled {
-								colors.muted.gamma_multiply(0.6)
-							} else if active || hovered || unread {
-								colors.text_strong
-							} else {
-								colors.muted
-							};
+							let name_color = channel_marks::tint(
+								&colors,
+								access,
+								if !enabled {
+									Emphasis::Unavailable
+								} else if active || hovered {
+									Emphasis::Focused
+								} else if unread {
+									Emphasis::Unread
+								} else {
+									Emphasis::Idle
+								},
+							);
 							let badge_width = if count > 0 { 34.0 } else { 0.0 };
-							let trailing =
-								badge_width + if external.is_some() { 30.0 } else { 0.0 };
+							let trailing = badge_width
+								+ if external.is_some() { 30.0 } else { 0.0 }
+								+ channel_marks::trailing(access);
 							let content = egui::Rect::from_min_max(
 								egui::pos2(
 									row.left() + 8.0 + if nested { 14.0 } else { 0.0 },
@@ -555,6 +564,7 @@ impl MessagingUi {
 									.layout(egui::Layout::left_to_right(egui::Align::Center)),
 							);
 							inner.spacing_mut().item_spacing.x = if dm_list { 12.0 } else { 6.0 };
+							let mut glyph = None;
 							if channel.guild.is_none() {
 								if channel.kind == 3 {
 									let avatar = self
@@ -614,24 +624,22 @@ impl MessagingUi {
 									10..=12 => crate::icons::Icon::Threads,
 									_ => crate::icons::Icon::Hash,
 								};
-								crate::icons::inline(
+								glyph = Some(crate::icons::inline(
 									&mut inner,
 									icon,
 									20.0,
-									name_color.gamma_multiply(if active || hovered {
-										1.0
-									} else {
-										0.85
-									}),
-								);
+									name_color.gamma_multiply(
+										if (active || hovered) && !access.dim() {
+											1.0
+										} else {
+											0.85
+										},
+									),
+								));
 							}
 							let mut label = String::from(state.conversation_name(channel));
-							if !enabled {
-								label.push_str(if visible {
-									" · unavailable"
-								} else {
-									" · hidden"
-								});
+							if !enabled && visible {
+								label.push_str(" · unavailable");
 							}
 							let subtitle = if dm_list && channel.kind == 1 {
 								channel.recipients.first().and_then(|user| {
@@ -663,11 +671,12 @@ impl MessagingUi {
 							} else {
 								inner.add(name);
 							}
+							let lane = channel_marks::trailing(access);
 							if let Some(url) = &external {
 								let mut open = ui.new_child(
 									egui::UiBuilder::new()
 										.max_rect(egui::Rect::from_center_size(
-											row.right_center() - egui::vec2(18.0, 0.0),
+											row.right_center() - egui::vec2(18.0 + lane, 0.0),
 											egui::Vec2::splat(28.0),
 										))
 										.layout(egui::Layout::left_to_right(egui::Align::Center)),
@@ -688,7 +697,8 @@ impl MessagingUi {
 									ui,
 									row.right_center()
 										- egui::vec2(
-											20.0 + if external.is_some() { 30.0 } else { 0.0 },
+											20.0 + lane
+												+ if external.is_some() { 30.0 } else { 0.0 },
 											0.0,
 										),
 									count,
@@ -701,11 +711,28 @@ impl MessagingUi {
 									},
 								);
 							}
+							if let Some(glyph) = glyph {
+								channel_marks::paint(
+									ui.painter(),
+									access,
+									row,
+									glyph,
+									name_color,
+									if active {
+										colors.selected
+									} else if hovered {
+										colors.hover
+									} else {
+										colors.sidebar
+									},
+								);
+							}
 							let response = response.on_hover_text_with(|| {
 								format!(
-									"{} · {}{}",
+									"{} · {}{}{}",
 									channel.name,
 									kind_label(channel.kind),
+									channel_marks::label(access),
 									if unread && state.channel_unread(channel).is_none() {
 										" · Session activity; read sync unavailable"
 									} else if count > 0 {
@@ -722,8 +749,9 @@ impl MessagingUi {
 									egui::WidgetType::Button,
 									enabled,
 									format!(
-										"{}{}; {} notifications",
+										"{}{}{}; {} notifications",
 										channel.name,
+										channel_marks::label(access),
 										if unread { ", unread" } else { "" },
 										count
 									),
