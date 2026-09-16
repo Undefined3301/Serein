@@ -1357,7 +1357,7 @@ impl Formatted {
 				response.id.with("link"),
 				egui::Sense::click(),
 			);
-			surface.keep(&response);
+			surface.through(&response);
 		}
 		if ui.is_rect_visible(response.rect) {
 			for (index, rect) in &slots {
@@ -1386,7 +1386,7 @@ impl Formatted {
 						)
 					});
 					crate::emoji_details::show(ui, &hit, &inline.text, image, guilds);
-					surface.keep(&hit);
+					surface.through(&hit);
 				}
 			}
 			if link && response.hovered() {

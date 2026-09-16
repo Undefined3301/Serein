@@ -1384,10 +1384,13 @@ impl TimelineView {
 											}
 											if crate::embeds::has_media_spoilers(message) && !media
 											{
-												if ui.button("Reveal spoiler media").clicked() {
+												let reveal = ui.button("Reveal spoiler media");
+												surface.keep(&reveal);
+												if reveal.clicked() {
 													media = true;
 												}
 											} else {
+												let invite_top = ui.cursor().top();
 												crate::invites::show(
 													ui,
 													message,
@@ -1396,6 +1399,14 @@ impl TimelineView {
 													&mut self.invite_requests,
 													&mut self.invite_action,
 												);
+												surface.exclude(egui::Rect::from_min_max(
+													egui::pos2(ui.max_rect().left(), invite_top),
+													egui::pos2(
+														ui.max_rect().right(),
+														ui.min_rect().bottom(),
+													),
+												));
+												let embed_top = ui.cursor().top();
 												if let Some(gif) = crate::embeds::show(
 													ui,
 													message,
@@ -1408,6 +1419,13 @@ impl TimelineView {
 												) {
 													self.gif_favorite = Some(gif);
 												}
+												surface.exclude(egui::Rect::from_min_max(
+													egui::pos2(ui.max_rect().left(), embed_top),
+													egui::pos2(
+														ui.max_rect().right(),
+														ui.min_rect().bottom(),
+													),
+												));
 												crate::attachments::show(
 													ui,
 													message,
@@ -1421,11 +1439,13 @@ impl TimelineView {
 													&mut surface,
 												);
 											}
-											if (text != 0 || media)
-												&& ui.small_button("Hide spoilers").clicked()
-											{
-												text = 0;
-												media = false;
+											if text != 0 || media {
+												let hide = ui.small_button("Hide spoilers");
+												surface.keep(&hide);
+												if hide.clicked() {
+													text = 0;
+													media = false;
+												}
 											}
 											if before != (text, media) {
 												if text == 0 && !media {
@@ -1491,13 +1511,12 @@ impl TimelineView {
 															&& state.can_view(c.id)
 													})
 													.and_then(|c| discord_url(c, Some(message.id)));
-												if ui
-													.add_enabled(
-														target.is_some(),
-														egui::Button::new("Open in Discord"),
-													)
-													.clicked()
-												{
+												let open = ui.add_enabled(
+													target.is_some(),
+													egui::Button::new("Open in Discord"),
+												);
+												surface.keep(&open);
+												if open.clicked() {
 													self.browser_opening = target;
 												}
 											}

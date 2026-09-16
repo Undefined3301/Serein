@@ -1,8 +1,8 @@
 //! Chat text selection. The block is the selection target, not the glyph.
 
 use egui::{
-	Color32, CursorIcon, Event, FullOutput, Id, LayerId, Order, PointerButton, Popup, PopupAnchor,
-	Pos2, RawInput, Rect, Response, Sense, Stroke,
+	Color32, CursorIcon, Event, FullOutput, Id, InteractOptions, LayerId, Order, PointerButton,
+	Popup, PopupAnchor, Pos2, RawInput, Rect, Response, Sense, Stroke,
 	epaint::{Galley, TextShape},
 	text_selection::LabelSelectionState,
 };
@@ -28,13 +28,19 @@ struct Hole {
 	rect: Rect,
 }
 
+struct Overlay {
+	id: egui::Id,
+	rect: Rect,
+}
+
 /// One text block's runs, in layout order.
 pub struct Surface {
 	base: egui::Id,
 	runs: Vec<Run>,
-	/// Mentions, author, media, and other click widgets. Punched out of the bands so a
-	/// click still hits them and a drag still starts on the remaining band.
+	/// Exclusive click widgets punched out of the bands.
 	holes: Vec<Hole>,
+	/// In-text emoji and links. Raised after the bands so a click still hits them.
+	overlays: Vec<Overlay>,
 	/// Full message row, including the avatar column, header, and attachment cards.
 	cover: Option<Rect>,
 }
@@ -46,6 +52,7 @@ impl Surface {
 			base: ui.id().with(salt),
 			runs: Vec::new(),
 			holes: Vec::new(),
+			overlays: Vec::new(),
 			cover: None,
 		}
 	}
@@ -57,10 +64,23 @@ impl Surface {
 		}
 	}
 
-	/// Punch this clickable rect out of the tiled bands.
+	/// Punch this exclusive click rect out of the tiled bands.
 	pub fn keep(&mut self, response: &Response) {
+		self.exclude(response.rect);
+	}
+
+	/// Punch a laid-out region that has no single widget `Response`.
+	pub fn exclude(&mut self, rect: Rect) {
+		if rect.is_positive() {
+			self.holes.push(Hole { rect });
+		}
+	}
+
+	/// Raise this in-text click after the bands. Drag still starts on the band.
+	pub fn through(&mut self, response: &Response) {
 		if response.rect.is_positive() {
-			self.holes.push(Hole {
+			self.overlays.push(Overlay {
+				id: response.id,
 				rect: response.rect,
 			});
 		}
@@ -84,15 +104,6 @@ impl Surface {
 				galley.clone(),
 				Color32::TRANSPARENT,
 			));
-		} else {
-			egui::text_selection::LabelSelectionState::label_text_selection(
-				ui,
-				response,
-				galley_pos,
-				galley.clone(),
-				ui.visuals().text_color(),
-				Stroke::NONE,
-			);
 		}
 		for art in &artwork {
 			paint_artwork(ui, art);
@@ -116,37 +127,60 @@ impl Surface {
 		let covered = self.cover.is_some();
 		tile(&mut runs, block, covered);
 		let pointer = ui.input(|input| input.pointer.hover_pos());
-		let over_hole =
-			pointer.is_some_and(|pos| self.holes.iter().any(|hole| hole.rect.contains(pos)));
+		let over_hole = pointer.is_some_and(|pos| {
+			self.holes.iter().any(|hole| hole.rect.contains(pos))
+				|| self.overlays.iter().any(|over| over.rect.contains(pos))
+		});
+		let menu_open = Popup::is_any_open(ui.ctx());
 		let holes: Vec<Rect> = self.holes.iter().map(|hole| hole.rect).collect();
 		for run in runs {
-			if !run.rect.is_positive() || !ui.is_rect_visible(run.rect) {
+			if menu_open || !run.rect.is_positive() || !ui.is_rect_visible(run.rect) {
 				continue;
 			}
 			let pieces = punch(run.rect, &holes);
-			let mut primary = None;
+			if pieces.is_empty() {
+				continue;
+			}
+			let mut response: Option<Response> = None;
 			for (index, piece) in pieces.iter().enumerate() {
 				let id = if index == 0 {
 					run.band
 				} else {
 					run.band.with(index)
 				};
-				let response = ui.interact(*piece, id, band_sense());
-				if index == 0 {
-					primary = Some(response);
-				}
+				let piece = ui.interact(*piece, id, band_sense());
+				response = Some(match response.take() {
+					Some(prev) => prev.union(piece),
+					None => piece,
+				});
 			}
-			let response = primary.unwrap_or_else(|| ui.interact(run.rect, run.band, band_sense()));
-			if covered && !run.painted && !run.galley.job.text.is_empty() {
-				egui::text_selection::LabelSelectionState::label_text_selection(
-					ui,
-					&response,
-					run.galley_pos,
-					run.galley,
-					ui.visuals().text_color(),
-					Stroke::NONE,
-				);
+			let Some(response) = response else {
+				continue;
+			};
+			if run.galley.job.text.is_empty() {
+				continue;
 			}
+			let color = if run.painted {
+				Color32::TRANSPARENT
+			} else {
+				ui.visuals().text_color()
+			};
+			egui::text_selection::LabelSelectionState::label_text_selection(
+				ui,
+				&response,
+				run.galley_pos,
+				run.galley,
+				color,
+				Stroke::NONE,
+			);
+		}
+		for over in self.overlays {
+			ui.interact_opt(
+				over.rect,
+				over.id,
+				Sense::click(),
+				InteractOptions { move_to_top: true },
+			);
 		}
 		if over_hole {
 			ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
