@@ -680,17 +680,24 @@ impl State {
 							}
 						}
 					}
-					self.confirm_channel_preferences(
-						guild,
-						channel,
-						Some(details.muted),
-						Some(details.level),
-					)?;
-					self.confirm_channel_mute_timer(
-						channel,
-						Some(details.muted),
-						details.mute_until,
-					)?;
+					if let Err(status) = self
+						.confirm_channel_preferences(
+							guild,
+							channel,
+							Some(details.muted),
+							Some(details.level),
+						)
+						.and_then(|_| {
+							self.confirm_channel_mute_timer(
+								channel,
+								Some(details.muted),
+								details.mute_until,
+							)
+						}) {
+						self.channel_actions.status = Some((channel, status, false));
+						self.status = status;
+						return Ok(());
+					}
 					self.channel_actions.post = Some((channel, details));
 				} else {
 					self.channel_actions.status =
@@ -793,11 +800,14 @@ impl State {
 				level,
 				mute_until,
 			}) => {
-				if self.can_view(channel) && !observed {
-					self.confirm_channel_preferences(guild, channel, muted, level)?;
-				}
-				if self.can_view(channel) && !observed {
-					self.confirm_channel_mute_timer(channel, muted, mute_until)?;
+				if self.can_view(channel)
+					&& !observed && let Err(status) = self
+					.confirm_channel_preferences(guild, channel, muted, level)
+					.and_then(|_| self.confirm_channel_mute_timer(channel, muted, mute_until))
+				{
+					self.channel_actions.status = Some((channel, status, false));
+					self.status = status;
+					return Ok(());
 				}
 				"Notification settings updated"
 			}
