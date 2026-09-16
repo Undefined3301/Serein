@@ -3473,24 +3473,29 @@ impl Desktop {
 					_ => full_window = true,
 				}
 			}
+			let guild_ack = matches!(
+				&event.event,
+				Event::ReadState(client_core::read_state::Event::GuildAck {
+					guild,
+					request,
+					result: Ok(()),
+				}) if self.state.pending_guild_ack(*guild, *request)
+			);
 			if event.generation == self.state.generation
 				&& (invalidate
 					|| event.event.changes_access()
-					|| matches!(
-						&event.event,
-						Event::NotificationPreferences(_)
-							| Event::ChannelAction(_)
-							| Event::UserAction(_)
-							| Event::Disconnected | Event::ReadState(
-							client_core::read_state::Event::Ack { .. }
-						) | Event::ReadState(client_core::read_state::Event::Result {
-							result: Ok(()),
-							..
-						}) | Event::ReadState(client_core::read_state::Event::GuildAck {
+					|| guild_ack || matches!(
+					&event.event,
+					Event::NotificationPreferences(_)
+						| Event::ChannelAction(_)
+						| Event::UserAction(_)
+						| Event::Disconnected
+						| Event::ReadState(client_core::read_state::Event::Ack { .. })
+						| Event::ReadState(client_core::read_state::Event::Result {
 							result: Ok(()),
 							..
 						})
-					)) {
+				)) {
 				self.notifications.dismiss();
 			}
 			self.state.apply(event);

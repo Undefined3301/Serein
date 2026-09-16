@@ -343,6 +343,16 @@ impl State {
 		self.read_state.status = None;
 		Some(crate::Command::MarkGuildRead { guild, request })
 	}
+	pub fn pending_guild_ack(&self, guild: Id, request: u64) -> bool {
+		matches!(
+			&self.read_state.pending,
+			Some(Pending::Guild {
+				guild: pending_guild,
+				request: pending_request,
+				..
+			}) if *pending_guild == guild && *pending_request == request
+		)
+	}
 	fn mark_read_command(&mut self, channel: Id, message: Id, manual: bool) -> crate::Command {
 		self.read_state.revision = self.read_state.revision.wrapping_add(1);
 		let request = self.read_state.revision;
