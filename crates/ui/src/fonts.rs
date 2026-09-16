@@ -53,14 +53,16 @@ pub fn install(ctx: &Context) {
 	crate::design::weights_installed(ctx);
 }
 
-/// The bundled Inter faces are the "hinted for Windows" TrueType builds, so the
-/// TrueType interpreter — not the auto-hinter — grid-fits their stems. They keep
-/// egui's default rasterizer settings: symmetric rendering, which restricts those
-/// instructions to the vertical direction, and sub-pixel binning (see
-/// `design::apply`), which positions glyphs horizontally at fractional offsets.
-/// That split is what DirectWrite does — baselines and x-heights land on whole
-/// pixels while spacing stays even. Letting the hints grid-fit horizontally instead
-/// snaps stems per glyph and reads as uneven, "wobbly" text at 1x.
+/// egui paints grayscale coverage, not DirectWrite ClearType. Running Inter's
+/// TrueType instructions snaps stems to the pixel grid and reads as crunchy
+/// against other Windows apps. Leave the interpreter off. `design::apply` keeps
+/// sub-pixel binning on so origins can sit on fractional x.
+fn latin(data: &'static [u8]) -> FontData {
+	let mut font = FontData::from_static(data);
+	font.tweak.hinting = Some(false);
+	font
+}
+
 /// The bundled archive always inflates; a corrupt asset is a build defect, not a runtime path.
 fn cjk() -> Vec<u8> {
 	let mut font = Vec::with_capacity(CJK_BYTES);
@@ -91,7 +93,7 @@ fn definitions() -> FontDefinitions {
 	for (family, name, data) in weights {
 		definitions
 			.font_data
-			.insert(name.into(), FontData::from_static(data).into());
+			.insert(name.into(), latin(data).into());
 		let list = definitions.families.entry(family).or_default();
 		list.retain(|existing| !defaults.contains(existing));
 		list.insert(0, name.into());
@@ -128,8 +130,6 @@ mod tests {
 
 	#[test]
 	fn bundled_fallbacks_cover_multilingual_text_with_a_fixed_asset_budget() {
-		// The Inter faces are the hinted TrueType builds: their instructions cost
-		// ~1.3 MB more than the CFF originals, which is the price of sharp text at 1x.
 		// The CJK face counts at its embedded (compressed) size.
 		assert!(
 			CJK_ZSTD.len() + ARABIC.len() + INTER.len() + INTER_MEDIUM.len() + INTER_SEMIBOLD.len()
@@ -177,22 +177,15 @@ mod tests {
 		output.drop_without_applying_deltas();
 	}
 
-	/// Issue #200: text read as blurry at 1x on Windows. Sharpness needs the hinted
-	/// TrueType Inter builds — CFF outlines are effectively unhinted by skrifa — and
-	/// hinting enabled. The hints must stay vertical-only (symmetric rendering) and
-	/// glyphs must keep sub-pixel horizontal positions, as DirectWrite does; grid-fitting
-	/// stems horizontally instead made spacing uneven.
 	#[test]
-	fn latin_faces_are_rasterized_for_sharp_text_at_low_scale() {
+	fn latin_faces_are_rasterized_without_truetype_hinting() {
 		for data in [INTER, INTER_MEDIUM, INTER_SEMIBOLD] {
 			let font = skrifa::FontRef::new(data).expect("valid bundled font");
-			// `glyf` means TrueType outlines rather than CFF; `fpgm`/`prep` are the
-			// instructions skrifa's TrueType interpreter needs to grid-fit stems.
 			for table in ["glyf", "fpgm", "prep"] {
 				let tag = skrifa::Tag::new(table.as_bytes().try_into().unwrap());
 				assert!(
 					font.table_data(tag).is_some(),
-					"Inter must be the hinted TrueType build, missing `{table}`",
+					"Inter must be the TrueType build, missing `{table}`",
 				);
 			}
 		}
@@ -200,18 +193,23 @@ mod tests {
 		install(&ctx);
 		crate::design::apply(&ctx);
 		for theme in [egui::Theme::Dark, egui::Theme::Light] {
-			assert!(ctx.style_of(theme).visuals.text_options.subpixel_binning);
-			assert!(ctx.style_of(theme).visuals.text_options.font_hinting);
+			let options = &ctx.style_of(theme).visuals.text_options;
+			assert!(options.subpixel_binning);
+			assert!(!options.font_hinting);
 		}
-		let symmetric = definitions()
+		assert_eq!(
+			ctx.style_of(egui::Theme::Dark)
+				.visuals
+				.text_options
+				.color_transfer_function,
+			egui::epaint::FontColorTransferFunction::Gamma(0.5)
+		);
+		let hinting = definitions()
 			.font_data
 			.iter()
 			.filter(|(name, _)| name.starts_with("Inter"))
-			.map(|(_, data)| match data.tweak.hinting_target {
-				egui::epaint::text::HintingTarget::Smooth(smooth) => smooth.symmetric_rendering,
-				egui::epaint::text::HintingTarget::Mono => false,
-			})
+			.map(|(_, data)| data.tweak.hinting)
 			.collect::<Vec<_>>();
-		assert_eq!(symmetric, vec![true; 3]);
+		assert_eq!(hinting, vec![Some(false); 3]);
 	}
 }

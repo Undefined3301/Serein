@@ -15,13 +15,11 @@ Downloaded September 10, 2026 from pinned upstream sources:
 
 - [Inter 3.19](https://github.com/rsms/inter/releases/tag/v3.19) static TrueType instances `Inter-Regular.ttf`, `Inter-Medium.ttf`, `Inter-SemiBold.ttf`, taken from the `Inter Hinted for Windows/Desktop/` directory of the official `Inter-3.19.zip` release archive (SHA-256 `150ab6230d1762a57bebf35dfc04d606ff91598a31d785f7f100356ecdcc0032`), re-fetched September 15, 2026. The archive's `LICENSE.txt` is byte-identical to the bundled `fonts/Inter-OFL.txt`. SHA-256: Regular `529be850e06f62f8904f22bda77e45bde4834498fdbec4ff4201fa3177447a3a`, Medium `6df88fcb83ac96582350f801355c6eff55f15710093e9627fb431caa40521151`, SemiBold `2de533bda937a063c595b07c6bd9b70c8c5087d0649a1c8330f7ac11fcc05602`.
 
-  These are the **hinted** builds. Upstream ships Inter twice: CFF outlines without
-  TrueType instructions, and these `ttfautohint`-generated TrueType builds. egui rasterizes
-  glyphs itself and only grid-fits stems when a face carries its own instructions, so the
-  CFF originals rendered effectively unhinted and read as blurry at 1x scale, where most
-  Windows and Linux desktops run ([#200](https://github.com/ViceVerse-cz/Serein/issues/200)).
-  The instructions cost ~1.3 MB. The glyph designs and advance widths are unchanged, so text
-  layout and line breaking are unaffected.
+  These are the **hinted** TrueType builds. Upstream also ships CFF outlines. egui paints
+  grayscale coverage, not DirectWrite, so Serein leaves the TrueType interpreter off,
+  keeps sub-pixel binning on, and remaps dark-mode coverage with gamma 0.5. The files
+  stay the TrueType set so we do not churn the asset again. Glyph designs and advance
+  widths are unchanged, so layout is unaffected.
 
 The five font blobs total **19,397,204 bytes (18.50 MiB)**, below the 20 MiB asset ceiling asserted by `cargo test -p ui bundled_fallbacks`. This raw size is separate from compressed distribution size, font-parser/layout memory and GPU glyph-atlas allocations. Package the license files and third-party copyright notices with the executable.
 

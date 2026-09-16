@@ -34,6 +34,7 @@ pub struct TimelineView {
 	pub(super) load_newer: bool,
 	channel_labels: u64,
 	pub(super) mark_read: Option<Id>,
+	pub(super) mark_unread: Option<Id>,
 	auto_read_attempt: Option<Id>,
 	at_current_latest: bool,
 	pub(super) reaction_picker: Option<(Id, egui::Rect, egui::Id)>,
@@ -212,9 +213,9 @@ fn anchor_offset(rows: &[(Id, f32)], id: Id, inset: f32) -> f32 {
 }
 fn layout_key(message: &Message) -> u64 {
 	// A layout fingerprint only; spoiler visibility uses exact text instead.
+	// Reaction counts are excluded so a +1/-1 does not drop measured heights.
 	let mut key = DefaultHasher::new();
 	message.content.hash(&mut key);
-	message.reactions.hash(&mut key);
 	for user in &message.mentions {
 		user.id.hash(&mut key);
 		user.name.hash(&mut key);
@@ -357,12 +358,16 @@ fn message_actions(
 		&mut Option<(crate::extensions_ui::MenuAction, String)>,
 	),
 	actions: (bool, bool, bool, bool),
-	selection: (Option<&mut Option<Id>>, &mut Option<Id>),
+	selection: (
+		Option<&mut Option<Id>>,
+		Option<&mut Option<Id>>,
+		&mut Option<Id>,
+	),
 	editing: (&mut Option<(Id, Id, String)>, &mut bool),
 	deleting: &mut Option<(Id, Id)>,
 	pin: (bool, bool, &mut Option<(Id, Id, bool)>),
 ) {
-	let (mark_read, reply) = selection;
+	let (mark_read, mark_unread, reply) = selection;
 	let (editing, edit_started) = editing;
 	let (own, can_reply, can_edit, can_delete) = actions;
 	let (can_pin, pinned, pin_request) = pin;
@@ -404,6 +409,15 @@ fn message_actions(
 		{
 			if let Some(mark_read) = mark_read {
 				*mark_read = Some(message.id);
+			}
+			ui.close();
+		}
+		if ui
+			.add_enabled(mark_unread.is_some(), egui::Button::new("Mark Unread"))
+			.clicked()
+		{
+			if let Some(mark_unread) = mark_unread {
+				*mark_unread = Some(message.id);
 			}
 			ui.close();
 		}
@@ -553,11 +567,12 @@ impl TimelineView {
 		self.channel == Some(channel) && self.following && self.at_current_latest
 	}
 	/// Leaving the latest page is deliberate reading; nothing is acknowledged automatically.
-	fn browse_away(&mut self) {
+	pub(super) fn browse_away(&mut self) {
 		self.target_browsing = true;
 		self.following = false;
 		self.jump = false;
 		self.mark_read = None;
+		self.mark_unread = None;
 	}
 	pub(super) fn follow_latest(&mut self) {
 		self.target_browsing = false;
@@ -614,7 +629,7 @@ impl TimelineView {
 				..Self::default()
 			};
 		}
-		let mut initial_unread_gap = false;
+		let mut unread_join = false;
 		if !self.initial_read_checked
 			&& state.freshness == model::Freshness::Fresh
 			&& !state.history_pending
@@ -622,16 +637,17 @@ impl TimelineView {
 			&& let Some(unread) = state.unread(channel)
 		{
 			self.initial_read_checked = true;
-			let marker_loaded = state
-				.read_marker(channel)
-				.flatten()
-				.is_some_and(|marker| state.timeline.row_ids().any(|id| id == marker));
-			if unread && !marker_loaded {
-				initial_unread_gap = !self.target_browsing;
-				// Opening a recent page is not consent to skip an unseen unread gap.
+			if unread {
+				let marker_loaded = state
+					.read_marker(channel)
+					.flatten()
+					.is_some_and(|marker| state.timeline.row_ids().any(|id| id == marker));
+				unread_join = !self.target_browsing;
 				self.target_browsing = true;
 				self.following = false;
-				self.jump = false;
+				if !marker_loaded {
+					self.jump = false;
+				}
 				self.mark_read = None;
 			}
 		}
@@ -804,7 +820,7 @@ impl TimelineView {
 			&& !state.history_pending
 			&& let Some(target) = state.search_target.take()
 		{
-			initial_unread_gap = false;
+			unread_join = false;
 			// Target browsing is deliberate reading, even when the service omits the target.
 			// A short result page must not acknowledge unrelated newer messages automatically.
 			self.target_browsing = true;
@@ -964,6 +980,7 @@ impl TimelineView {
 				end = index + 1;
 				let (id, _) = &self.rows[index];
 				let can_mark_read = state.can_mark_read(*id);
+				let can_mark_unread = state.can_mark_unread(*id);
 				let Some(message) = state.timeline.get_display(*id) else {
 					continue;
 				};
@@ -1756,6 +1773,7 @@ impl TimelineView {
 								(own, can_reply, can_edit, can_delete),
 								(
 									can_mark_read.then_some(&mut self.mark_read),
+									can_mark_unread.then_some(&mut self.mark_unread),
 									&mut selected_reply,
 								),
 								(editing, &mut self.edit_started),
@@ -1878,45 +1896,51 @@ impl TimelineView {
 					Some(channel.id) == state.selected && channel.last_message == Some(message.id)
 				})
 			});
-		if initial_unread_gap
+		if unread_join
 			&& !state.history_targeted
 			&& state.history_before.is_none()
 			&& state.history_after.is_none()
-			&& (whole_conversation_visible || state.timeline.iter().next().is_none())
+			&& state.timeline.iter().next().is_none()
 		{
 			self.target_browsing = false;
 		}
 
-		if at_bottom
-			&& (can_load_newer || self.at_current_latest)
-			&& ui.input(|input| {
-				(scroll_delta < 0.0
-					&& (session.holding()
-						|| input
-							.pointer
-							.hover_pos()
-							.is_some_and(|pos| output.inner_rect.contains(pos))))
-					|| (input.pointer.any_down() && output.state.offset.y > output.inner)
-			}) {
+		let scrolled_toward_bottom = ui.input(|input| {
+			(scroll_delta < 0.0
+				&& (session.holding()
+					|| input
+						.pointer
+						.hover_pos()
+						.is_some_and(|pos| output.inner_rect.contains(pos))))
+				|| (input.pointer.any_down() && output.state.offset.y > output.inner)
+		});
+		if at_bottom && (can_load_newer || self.at_current_latest) {
 			if can_load_newer {
-				self.load_newer = true;
-				self.browse_away();
-			} else {
+				if scrolled_toward_bottom {
+					self.load_newer = true;
+					self.browse_away();
+					if autoscroll_delta == 0.0 {
+						ui.ctx().request_repaint();
+					}
+				}
+			} else if scrolled_toward_bottom {
 				self.target_browsing = false;
 				if state.history_targeted || state.history_after.is_some() {
 					self.latest = true;
 				}
-			}
-			if autoscroll_delta == 0.0 || can_load_newer {
-				ui.ctx().request_repaint();
+				if autoscroll_delta == 0.0 {
+					ui.ctx().request_repaint();
+				}
 			}
 		}
 		if self.reply_target.is_some() {
 			self.target_browsing = true;
 			self.mark_read = None;
+			self.mark_unread = None;
 		}
 		self.following = at_bottom && !self.target_browsing;
 		if self.following
+			&& self.mark_unread.is_none()
 			&& !state.history_targeted
 			&& state.history_before.is_none()
 			&& state.history_after.is_none()
@@ -2070,13 +2094,13 @@ impl TimelineView {
 		// alone must not raise the bar the moment a reader nudges upward. Only pages that are
 		// detached from the live edge (targeted or forward history) show it immediately.
 		let detached_page = state.history_targeted || state.history_after.is_some();
+		let unread = state
+			.selected
+			.is_some_and(|channel| state.unread(channel) == Some(true));
 		if (!self.following && distance_from_bottom > 3.0 * area.height())
-			|| self.target_browsing
+			|| (self.target_browsing && !(at_bottom && unread))
 			|| detached_page
 		{
-			let unread = state
-				.selected
-				.is_some_and(|channel| state.unread(channel) == Some(true));
 			let mut present = false;
 			let rect = egui::Rect::from_min_size(
 				egui::pos2(area.left() + 16.0, area.bottom() - 30.0),
@@ -2348,11 +2372,13 @@ mod tests {
 						"{count} messages unexpectedly showed {forbidden}"
 					);
 				}
-				assert!(!view.target_browsing && view.following);
+				if count == 0 {
+					assert!(!view.target_browsing && view.following);
+				} else {
+					assert!(view.target_browsing && view.mark_read.is_none());
+				}
 			}
-			// Stale latest metadata (a deleted message) is acknowledged like the official
-			// client does, otherwise the channel would stay unread forever.
-			assert_eq!(view.mark_read, (!tall).then_some(Id(latest)));
+			assert_eq!(view.mark_read, (count == 0).then_some(Id(latest)));
 			if tall {
 				// Scrolling to the live edge of tall unread content resolves both banners,
 				// even when the service latest ID names a deleted message.
@@ -2785,7 +2811,7 @@ mod tests {
 							egui::Popup::menu(&menu),
 							(&message, &[], &mut None),
 							(own, true, true, can_delete),
-							(None, &mut reply),
+							(None, None, &mut reply),
 							(&mut editing, &mut edit_started),
 							&mut deleting,
 							(false, false, &mut None),
@@ -3638,6 +3664,7 @@ mod tests {
 				"Copy message",
 				"Reply",
 				"Mark read through here",
+				"Mark Unread",
 				"Pin message",
 				"Edit message",
 				"Delete message\u{2026}",
@@ -3892,7 +3919,7 @@ mod tests {
 	}
 
 	#[test]
-	fn initial_unread_gap_stays_unacknowledged_and_keyboard_jump_is_explicit() {
+	fn initial_unread_join_waits_for_a_downward_reach() {
 		for (marker, width, dark) in [
 			(Some(Id(10)), 320.0, false),
 			(None, 900.0, true),
@@ -3963,55 +3990,16 @@ mod tests {
 					},
 				);
 				assert!(output.platform_output.commands.is_empty());
-				let unread_focused = output.platform_output.events.iter().any(|event| {
-					matches!(event, egui::output::OutputEvent::FocusGained(info)
-						if info.typ == egui::WidgetType::Button
-							&& info.enabled
-							&& info.label.as_deref() == Some("Jump to unread"))
-				});
 				output.drop_without_applying_deltas();
-				unread_focused
 			};
 			for _ in 0..3 {
 				frame(&mut view, &mut state, vec![]);
 			}
-			if marker == Some(Id(19)) {
-				assert_eq!(
-					view.mark_read.take(),
-					Some(Id(20)),
-					"Loaded read boundary preserves ordinary auto-read"
-				);
-				continue;
-			}
 			assert!(view.target_browsing && !view.following);
-			assert!(view.mark_read.is_none());
-			let key = |key| egui::Event::Key {
-				key,
-				physical_key: None,
-				pressed: true,
-				repeat: false,
-				modifiers: egui::Modifiers::NONE,
-			};
-			let mut unread_focused = false;
-			// The overlay follows the keyboard-accessible message rows in widget order.
-			for _ in 0..32 {
-				unread_focused = frame(&mut view, &mut state, vec![key(egui::Key::Tab)]);
-				assert!(view.mark_read.is_none() && !view.unread_jump);
-				if unread_focused {
-					break;
-				}
-			}
 			assert!(
-				unread_focused,
-				"Keyboard navigation must reach Jump to unread"
+				view.mark_read.is_none(),
+				"Opening an unread channel must not acknowledge until the user reaches the bottom"
 			);
-			frame(&mut view, &mut state, vec![key(egui::Key::Enter)]);
-			assert!(view.unread_jump);
-			assert!(view.mark_read.is_none());
-			assert_eq!(state.read_marker(Id(20)), Some(marker));
-
-			// Scrolling to the live edge also resumes reading without clicking a banner.
-			view.unread_jump = false;
 			frame(
 				&mut view,
 				&mut state,
@@ -4019,14 +4007,18 @@ mod tests {
 					egui::Event::PointerMoved(egui::pos2(width / 2.0, 300.0)),
 					egui::Event::MouseWheel {
 						unit: egui::MouseWheelUnit::Point,
-						delta: egui::vec2(0.0, -600.0),
+						delta: egui::vec2(0.0, -80.0),
 						modifiers: egui::Modifiers::NONE,
 						phase: egui::TouchPhase::Move,
 					},
 				],
 			);
-			assert!(view.following && !view.target_browsing);
-			assert_eq!(view.mark_read.take(), Some(Id(20)));
+			assert!(!view.target_browsing && view.following);
+			assert_eq!(
+				view.mark_read.take(),
+				Some(Id(20)),
+				"A downward reach at the live edge acknowledges the unread join"
+			);
 		}
 	}
 

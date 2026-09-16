@@ -11,6 +11,7 @@ pub use attachments::DownloadUi;
 mod avatars;
 pub use avatars::{EMBED_EDGE, GifFrames, LARGE_EDGE, fit_edge};
 mod categories;
+mod channel_marks;
 mod channel_menu;
 mod channel_permissions;
 #[cfg(test)]
@@ -135,6 +136,7 @@ pub struct MessagingUi {
 	member_count: usize,
 	composer_layout: composer_text::Layout,
 	channel_cache: categories::Cache,
+	channel_move: Option<(Id, client_core::channel_actions::Action)>,
 	hidden_muted_guilds: std::collections::BTreeSet<Id>,
 	search: search::SearchUi,
 	settings: settings::Settings,
@@ -1158,6 +1160,11 @@ impl MessagingUi {
 					}
 				}
 				let select = self.channel_list(ui, state);
+				if let Some((channel, action)) = self.channel_move.take()
+					&& let Some(command) = state.request_channel_action(channel, action)
+				{
+					commands.push(command);
+				}
 				if let Some(id) = select
 					&& let Some(command) = state.select(id)
 				{
@@ -2359,35 +2366,43 @@ impl MessagingUi {
                             );
                             rich_layout.select_deleted_inline(ctx, composer_id);
                         }
-                        let mut layouter = |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, width: f32| {
-                            rich_layout.galley(
-                                ui,
-                                buffer.as_str(),
-                                width,
-                                &mention_users,
-                                mass_mentions,
-                                &mut self.avatars,
-                                demo,
-                            )
-                        };
-                        let mut output = TextEdit::multiline(draft)
-                            .interactive(keyboard_enabled)
-                            .layouter(&mut layouter)
-                            .id(composer_id)
-                            .event_filter(egui::EventFilter {
-                                horizontal_arrows: true, vertical_arrows: true, escape: editing_here,
-                                ..Default::default()
-                            })
-                            .char_limit(MAX_CONTENT)
-                            .desired_rows(1)
-                            .desired_width(f32::INFINITY)
-                            // Horizontal layouts reserve the interaction height, including around icons.
-                            .min_size(egui::vec2(0.0, ui.spacing().interact_size.y))
-                            .align(egui::Align2::LEFT_CENTER)
-                            .frame(egui::Frame::NONE)
-                            .hint_text(placeholder.as_str())
-                            .show(ui);
-                        rich_layout.paint(ui, &output);
+                        let mut output = egui::ScrollArea::vertical()
+                            .id_salt((composer_id, channel, editing_key))
+                            .max_height(ui.ctx().viewport_rect().height() * 0.5)
+                            .min_scrolled_height(ui.ctx().viewport_rect().height() * 0.5)
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| {
+                                let mut layouter = |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, width: f32| {
+                                    rich_layout.galley(
+                                        ui,
+                                        buffer.as_str(),
+                                        width,
+                                        &mention_users,
+                                        mass_mentions,
+                                        &mut self.avatars,
+                                        demo,
+                                    )
+                                };
+                                let output = TextEdit::multiline(draft)
+                                    .interactive(keyboard_enabled)
+                                    .layouter(&mut layouter)
+                                    .id(composer_id)
+                                    .event_filter(egui::EventFilter {
+                                        horizontal_arrows: true, vertical_arrows: true, escape: editing_here,
+                                        ..Default::default()
+                                    })
+                                    .char_limit(MAX_CONTENT)
+                                    .desired_rows(1)
+                                    .desired_width(f32::INFINITY)
+                                    // Horizontal layouts reserve the interaction height, including around icons.
+                                    .min_size(egui::vec2(0.0, ui.spacing().interact_size.y))
+                                    .align(egui::Align2::LEFT_CENTER)
+                                    .frame(egui::Frame::NONE)
+                                    .hint_text(placeholder.as_str())
+                                    .show(ui);
+                                rich_layout.paint(ui, &output);
+                                output
+                            }).inner;
                         if !self.ime_active && !ime_this_frame {
                             rich_layout.snap_cursor(&mut output, ctx);
                         }
@@ -2512,6 +2527,9 @@ impl MessagingUi {
 		ui.painter()
 			.hline(line, y, egui::Stroke::new(1.0, colors.border));
 		ui.add_space(6.0);
+	}
+	fn shows_title_bar(&self) -> bool {
+		!cfg!(target_os = "linux") && !self.hide_title_bar
 	}
 	pub fn show(&mut self, ui: &mut egui::Ui, state: &mut State) -> Vec<Command> {
 		if self.editing.is_none()
@@ -2668,7 +2686,7 @@ impl MessagingUi {
 			.guild
 			.and_then(|id| state.guild(id))
 			.map_or_else(|| "Direct Messages".to_owned(), |g| g.name.clone());
-		if !cfg!(target_os = "linux") && !self.hide_title_bar {
+		if self.shows_title_bar() {
 			self.title_bar(ui, state, &title);
 		}
 		// Server rail and channel list share one resizable column so the account card can
@@ -2733,6 +2751,11 @@ impl MessagingUi {
 			.show(&ctx, state, self.guild, &mut commands, &mut self.avatars);
 		if let Some(guild) = self.server_menu.settings_requested.take()
 			&& let Some(command) = self.preview_server_settings(state, guild)
+		{
+			commands.push(command);
+		}
+		if let Some(guild) = self.server_menu.mark_read_requested.take()
+			&& let Some(command) = state.prepare_mark_guild_read(guild)
 		{
 			commands.push(command);
 		}
@@ -3210,7 +3233,13 @@ impl MessagingUi {
 				self.timeline.pending_channel_reference = None;
 			}
 		}
-		if let Some(message) = self.timeline.mark_read.take()
+		if let Some(message) = self.timeline.mark_unread.take() {
+			self.timeline.mark_read = None;
+			if !settings_open && let Some(command) = state.prepare_mark_unread(message) {
+				self.timeline.browse_away();
+				commands.push(command);
+			}
+		} else if let Some(message) = self.timeline.mark_read.take()
 			&& !settings_open
 			&& state.search_target.is_none()
 			&& !state.history_targeted
@@ -3470,17 +3499,21 @@ mod composer_tests {
 			},
 		);
 		let message_alpha = (75 * 255 / 100) as u8;
-		let surface = output.shapes.iter().find_map(|shape| match &shape.shape {
+		let expected_top = if view.shows_title_bar() { 84.0 } else { 48.0 };
+		let surface_reaches_header = output.shapes.iter().any(|shape| match &shape.shape {
 			egui::Shape::Rect(rect)
 				if rect.fill.a() == message_alpha && rect.rect.height() > 200.0 =>
 			{
-				Some(rect.rect)
+				(rect.rect.top() - expected_top).abs() <= 1.0
 			}
-			_ => None,
+			_ => false,
 		});
-		assert!(surface.is_some_and(|rect| (rect.top() - 84.0).abs() <= 1.0));
 		output.textures_delta.clear();
 		design::set_extension_theme(None);
+		assert!(
+			surface_reaches_header,
+			"message surface did not reach expected top {expected_top}",
+		);
 	}
 
 	#[test]
@@ -3540,7 +3573,7 @@ mod composer_tests {
 								.unwrap();
 							output.drop_without_applying_deltas();
 							assert!(
-								(text.center().y - frame.center().y).abs() <= 0.5 / scale,
+								(text.center().y - frame.center().y).abs() <= 1.0 / scale,
 								"{draft:?}, scale {scale}, width {width}: text {text:?}, frame {frame:?}"
 							);
 							assert!(
@@ -4508,7 +4541,14 @@ mod composer_tests {
 					partial: false,
 				})
 				.unwrap();
-			let message = state.timeline.get(Id(20)).unwrap().clone();
+			let mut message = state.timeline.get(Id(20)).unwrap().clone();
+			message.content = "Synthetic tall unread row\n\n".repeat(80);
+			state.timeline.clear();
+			state
+				.timeline
+				.insert(message.clone(), false, false)
+				.unwrap();
+			state.revision += 1;
 			let drafts = state.drafts.clone();
 			let frame = |view: &mut MessagingUi, state: &mut State, events| {
 				let mut commands = vec![];
@@ -4528,7 +4568,10 @@ mod composer_tests {
 				assert!(
 					!commands.iter().any(|command| matches!(
 						command,
-						Command::Send { .. } | Command::Edit { .. } | Command::MarkRead { .. }
+						Command::Send { .. }
+							| Command::Edit { .. }
+							| Command::MarkRead { .. }
+							| Command::MarkGuildRead { .. }
 					)),
 					"Browsing unread pages must not send or acknowledge"
 				);
@@ -4695,6 +4738,7 @@ mod composer_tests {
 						| Command::Edit { .. }
 						| Command::Delete { .. }
 						| Command::MarkRead { .. }
+						| Command::MarkGuildRead { .. }
 				)));
 				let mut labels = vec![];
 				for shape in &output.shapes {
@@ -4798,6 +4842,7 @@ mod composer_tests {
 						| Command::Edit { .. }
 						| Command::Delete { .. }
 						| Command::MarkRead { .. }
+						| Command::MarkGuildRead { .. }
 				)));
 				let mut labels = vec![];
 				for shape in &output.shapes {

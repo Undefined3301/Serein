@@ -1,4 +1,6 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+#[cfg(feature = "demo")]
+mod access_marks_demo;
 mod app_settings;
 mod audio;
 mod avatars;
@@ -70,6 +72,11 @@ fn main() -> eframe::Result {
 				std::process::exit(2);
 			})
 		});
+	#[cfg(feature = "demo")]
+	if demo && std::env::args().any(|arg| arg == "--demo-check-access-marks") {
+		access_marks_demo::check();
+		return Ok(());
+	}
 	#[cfg(feature = "demo")]
 	if demo && std::env::args().any(|arg| arg == "--demo-check-switcher") {
 		dm_demo::check();
@@ -923,6 +930,7 @@ impl Desktop {
 				} else {
 					let mut state = test_support::demo_state();
 					test_support::seed_demo_folder_mosaic(&mut state);
+					test_support::seed_access_marks(&mut state);
 					state
 				}
 			};
@@ -1076,6 +1084,7 @@ impl Desktop {
 				messaging
 					.channel_preferences
 					.set(model::Shortcut::Favorite, model::Id(20), true);
+			messaging.show_hidden_channels = true;
 		}
 		#[cfg(feature = "demo")]
 		if frame_sample.is_some() {
@@ -2210,12 +2219,20 @@ impl Desktop {
 					channel,
 					message,
 					request,
+					..
 				} => Event::ReadState(client_core::read_state::Event::Result {
 					channel,
 					message,
 					request,
 					result: Ok(()),
 				}),
+				Command::MarkGuildRead { guild, request } => {
+					Event::ReadState(client_core::read_state::Event::GuildAck {
+						guild,
+						request,
+						result: Ok(()),
+					})
+				}
 				Command::Reactions(command) => {
 					use client_core::reactions::{Command as R, Event as E};
 					Event::Reactions(match command {
@@ -3003,8 +3020,10 @@ impl Desktop {
 					let generation = self.state.generation + 1;
 					self.state = test_support::demo_state();
 					test_support::seed_demo_folder_mosaic(&mut self.state);
+					test_support::seed_access_marks(&mut self.state);
 					self.state.generation = generation;
 					self.messaging.clear();
+					self.messaging.show_hidden_channels = true;
 				}
 				ui.add_space(8.0);
 				ui.vertical_centered(|ui| {
@@ -3468,21 +3487,29 @@ impl Desktop {
 					_ => full_window = true,
 				}
 			}
+			let guild_ack = matches!(
+				&event.event,
+				Event::ReadState(client_core::read_state::Event::GuildAck {
+					guild,
+					request,
+					result: Ok(()),
+				}) if self.state.pending_guild_ack(*guild, *request)
+			);
 			if event.generation == self.state.generation
 				&& (invalidate
 					|| event.event.changes_access()
-					|| matches!(
-						&event.event,
-						Event::NotificationPreferences(_)
-							| Event::ChannelAction(_)
-							| Event::UserAction(_)
-							| Event::Disconnected | Event::ReadState(
-							client_core::read_state::Event::Ack { .. }
-						) | Event::ReadState(client_core::read_state::Event::Result {
+					|| guild_ack || matches!(
+					&event.event,
+					Event::NotificationPreferences(_)
+						| Event::ChannelAction(_)
+						| Event::UserAction(_)
+						| Event::Disconnected
+						| Event::ReadState(client_core::read_state::Event::Ack { .. })
+						| Event::ReadState(client_core::read_state::Event::Result {
 							result: Ok(()),
 							..
 						})
-					)) {
+				)) {
 				self.notifications.dismiss();
 			}
 			self.state.apply(event);

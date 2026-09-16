@@ -8,6 +8,7 @@ pub mod forum;
 pub mod gifs;
 pub mod guild_folders;
 pub mod permissions;
+pub use permissions::ChannelAccess;
 #[cfg(test)]
 mod permissions_tests;
 
@@ -147,6 +148,11 @@ pub enum Command {
 	MarkRead {
 		channel: Id,
 		message: Id,
+		request: u64,
+		manual: bool,
+	},
+	MarkGuildRead {
+		guild: Id,
 		request: u64,
 	},
 	Reactions(reactions::Command),
@@ -1250,6 +1256,7 @@ impl State {
 			channel,
 			message,
 			request,
+			..
 		} = command
 		{
 			let _ = self.apply_read_state(read_state::Event::Result {
@@ -1259,6 +1266,14 @@ impl State {
 				result: Err(auth::Failure::RateLimited),
 			});
 			self.read_state.status = Some((channel, "Work queue full; read marker was not sent"));
+			return;
+		}
+		if let Command::MarkGuildRead { guild, request } = command {
+			let _ = self.apply_read_state(read_state::Event::GuildAck {
+				guild,
+				request,
+				result: Err(auth::Failure::RateLimited),
+			});
 			return;
 		}
 		if let Command::Reactions(command) = command {

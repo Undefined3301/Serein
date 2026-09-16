@@ -1,3 +1,4 @@
+use crate::channel_marks::{self, Emphasis};
 use crate::design::LazyHover;
 use crate::{MessagingUi, design};
 use client_core::{
@@ -90,6 +91,7 @@ impl MessagingUi {
 		state: &State,
 		channel: &model::Channel,
 		selected: bool,
+		draggable: bool,
 	) -> egui::Response {
 		let colors = design::palette(ui);
 		let call = state
@@ -99,14 +101,18 @@ impl MessagingUi {
 			.filter(|c| c.channel == channel.id);
 		let connected = call.is_some_and(|c| matches!(c.phase, Phase::Waiting | Phase::Connected));
 		let elapsed = call.and_then(elapsed_label);
-		// A channel the account cannot view stays visible but inert, as before the restyle.
-		let viewable = state.can_view(channel.id);
+		let access = state.channel_access(channel.id);
+		let viewable = !access.hidden();
 		let (rect, response) = ui
 			.push_id(channel.id, |ui| {
 				ui.allocate_exact_size(
 					egui::vec2(ui.available_width(), 34.0),
 					if viewable {
-						egui::Sense::click()
+						if draggable {
+							egui::Sense::click_and_drag()
+						} else {
+							egui::Sense::click()
+						}
 					} else {
 						egui::Sense::hover()
 					},
@@ -121,41 +127,56 @@ impl MessagingUi {
 			ui.painter()
 				.rect_filled(row, 8, crate::design::row_highlight(ui, colors.hover, 1.0));
 		}
-		let text_color = if !viewable {
-			colors.muted.gamma_multiply(0.6)
-		} else if connected {
-			colors.accent
-		} else if selected || hovered {
-			colors.text_strong
-		} else {
-			colors.muted
-		};
-		crate::icons::paint(
-			ui.painter(),
-			crate::icons::Icon::Speaker,
-			egui::Rect::from_center_size(
-				row.left_center() + egui::vec2(18.0, 0.0),
-				egui::Vec2::splat(20.0),
-			),
-			text_color,
+		let text_color = channel_marks::tint(
+			&colors,
+			access,
+			if !viewable {
+				Emphasis::Unavailable
+			} else if connected {
+				Emphasis::Connected
+			} else if selected || hovered {
+				Emphasis::Focused
+			} else {
+				Emphasis::Idle
+			},
 		);
+		let glyph = egui::Rect::from_center_size(
+			row.left_center() + egui::vec2(18.0, 0.0),
+			egui::Vec2::splat(20.0),
+		);
+		crate::icons::paint(ui.painter(), crate::icons::Icon::Speaker, glyph, text_color);
+		channel_marks::paint(
+			ui.painter(),
+			access,
+			row,
+			glyph,
+			text_color,
+			if selected {
+				colors.selected
+			} else if hovered {
+				crate::design::row_highlight(ui, colors.hover, 1.0)
+			} else {
+				colors.sidebar
+			},
+		);
+		let marks = channel_marks::trailing(access);
 		let elapsed_width = if elapsed.is_some() { 64.0 } else { 0.0 };
 		let name = ui.painter().layout(
 			channel.name.clone(),
 			egui::FontId::new(15.0, design::medium_family(ui.ctx())),
 			text_color,
-			(row.width() - 40.0 - elapsed_width).max(10.0),
+			(row.width() - 40.0 - elapsed_width - marks).max(10.0),
 		);
 		let name_rect = egui::Rect::from_min_size(
 			egui::pos2(row.left() + 34.0, row.center().y - name.size().y * 0.5),
-			egui::vec2(row.width() - 40.0 - elapsed_width, name.size().y),
+			egui::vec2(row.width() - 40.0 - elapsed_width - marks, name.size().y),
 		);
 		ui.painter()
 			.with_clip_rect(name_rect)
 			.galley(name_rect.min, name, text_color);
 		if let Some(elapsed) = &elapsed {
 			ui.painter().text(
-				row.right_center() - egui::vec2(8.0, 0.0),
+				row.right_center() - egui::vec2(8.0 + marks, 0.0),
 				egui::Align2::RIGHT_CENTER,
 				elapsed,
 				egui::FontId::monospace(11.0),
@@ -172,16 +193,18 @@ impl MessagingUi {
 				viewable,
 				selected,
 				format!(
-					"{} voice channel{}",
+					"{} voice channel{}{}",
 					channel.name,
+					channel_marks::label(access),
 					if connected { ", connected" } else { "" }
 				),
 			)
 		});
 		response.on_hover_text_with(|| {
 			format!(
-				"{} · View voice channel{}",
+				"{} · View voice channel{}{}",
 				channel.name,
+				channel_marks::label(access),
 				if connected { " · Connected" } else { "" }
 			)
 		})

@@ -452,7 +452,31 @@ impl State {
 				.max_by(|a, b| a.cmp_hierarchy(b)),
 		)
 	}
+}
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChannelAccess {
+	hidden: bool,
+	muted: bool,
+	limited: bool,
+}
+
+impl ChannelAccess {
+	pub fn hidden(self) -> bool {
+		self.hidden
+	}
+	pub fn muted(self) -> bool {
+		self.muted
+	}
+	pub fn limited(self) -> bool {
+		self.limited
+	}
+	pub fn dim(self) -> bool {
+		self.hidden || self.muted
+	}
+}
+
+impl State {
 	pub(crate) fn member_list_id(&self, channel: &model::Channel) -> Option<String> {
 		// Threads use a different member protocol; never borrow their parent's list.
 		if matches!(channel.kind, 10..=12) {
@@ -478,15 +502,8 @@ impl State {
 			return matches!(channel.kind, 1 | 3).then_some(true);
 		};
 		self.guild(guild)?;
+		let target = self.overwrite_target(channel)?;
 		let guild = self.permissions.guilds.get(&guild)?;
-		let target = if matches!(channel.kind, 10..=12) {
-			let parent = channel.parent_id?;
-			self.channel(parent)
-				.filter(|c| c.guild == Some(guild.id) && matches!(c.kind, 0 | 5 | 15 | 16))?
-				.id
-		} else {
-			channel.id
-		};
 		let overwrites = self
 			.permissions
 			.channels
@@ -518,6 +535,56 @@ impl State {
 	}
 	pub fn can_view(&self, channel: Id) -> bool {
 		self.permission(channel, p::VIEW_CHANNEL) == Some(true)
+	}
+	fn overwrite_target(&self, channel: &model::Channel) -> Option<Id> {
+		if matches!(channel.kind, 10..=12) {
+			let parent = channel.parent_id?;
+			self.channel(parent)
+				.filter(|c| c.guild == channel.guild && matches!(c.kind, 0 | 5 | 15 | 16))
+				.map(|c| c.id)
+		} else {
+			Some(channel.id)
+		}
+	}
+	fn everyone_view(&self, channel: Id) -> Option<bool> {
+		let channel = self.channel(channel)?;
+		let guild_id = channel.guild?;
+		let target = self.overwrite_target(channel)?;
+		let guild = self.permissions.guilds.get(&guild_id)?;
+		let everyone = guild
+			.roles
+			.as_ref()?
+			.iter()
+			.find(|role| role.id == guild.id)?;
+		let overwrites = self
+			.permissions
+			.channels
+			.get(&target)
+			.filter(|c| c.guild == guild.id)
+			.and_then(|c| c.overwrites.as_deref())?;
+		p::everyone_can_view(everyone.bits, guild.id, overwrites)
+	}
+	pub fn channel_access(&self, channel: Id) -> ChannelAccess {
+		let hidden = self.permission(channel, p::VIEW_CHANNEL) != Some(true);
+		let Some(target) = self.channel(channel) else {
+			return ChannelAccess {
+				hidden,
+				muted: false,
+				limited: false,
+			};
+		};
+		if target.guild.is_none() {
+			return ChannelAccess {
+				hidden,
+				muted: self.dm_muted(channel) == Some(true),
+				limited: false,
+			};
+		}
+		ChannelAccess {
+			hidden,
+			muted: self.guild_channel_muted(channel) == Some(true),
+			limited: self.everyone_view(channel) == Some(false),
+		}
 	}
 	pub fn can_read_history(&self, channel: Id) -> bool {
 		self.permission(channel, p::VIEW_CHANNEL | p::READ_MESSAGE_HISTORY) == Some(true)

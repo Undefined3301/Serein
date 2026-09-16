@@ -198,6 +198,38 @@ impl State {
 		}
 		Ok(())
 	}
+	pub fn lights_guild_rail(&self, channel: &model::Channel) -> bool {
+		channel.kind != 2
+			&& self.channel_unread(channel) == Some(true)
+			&& !self.muted_for_guild_rail(channel)
+	}
+
+	pub fn muted_for_guild_rail(&self, channel: &model::Channel) -> bool {
+		let Some(guild) = channel.guild else {
+			return false;
+		};
+		if self
+			.notification_preferences
+			.settings
+			.get(&Some(guild))
+			.is_some_and(|setting| setting.muted == Some(true))
+		{
+			return true;
+		}
+		let mut current = Some(channel.id);
+		for _ in 0..8 {
+			let Some(id) = current else {
+				break;
+			};
+			if self.guild_channel_muted(id) == Some(true) {
+				return true;
+			}
+			current = self
+				.channel(id)
+				.and_then(|c| c.parent_id.filter(|p| *p != id));
+		}
+		false
+	}
 	pub fn guild_channel_muted(&self, channel: Id) -> Option<bool> {
 		let guild = self.channel(channel)?.guild?;
 		let setting = self.notification_preferences.settings.get(&Some(guild));

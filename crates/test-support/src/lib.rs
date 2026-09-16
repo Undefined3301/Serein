@@ -489,6 +489,20 @@ pub fn demo_state() -> State {
 		.permissions
 		.replace(permission_snapshot(&state))
 		.unwrap();
+	state
+		.apply_notification_preferences(client_core::notifications::Event::Settings {
+			entries: vec![client_core::notifications::Setting {
+				guild: Some(Id(10)),
+				muted: Some(false),
+				level: Some(3),
+				suppress_everyone: Some(false),
+				suppress_roles: Some(false),
+				channels: vec![(Id(21), Some(true), Some(3))],
+				channel_mute_until: vec![],
+			}],
+			replace: true,
+		})
+		.unwrap();
 	state.select(Id(20));
 	load_page(&mut state, None);
 	state.apply(Envelope {
@@ -783,6 +797,92 @@ pub fn empty_channel_demo_state(long_name: bool) -> State {
 	state
 }
 
+pub fn seed_access_marks(state: &mut State) {
+	use model::permissions::{Overwrite, Role, VIEW_CHANNEL};
+	const GUILD: Id = Id(10);
+	const STAFF: Id = Id(11);
+	const ACCESS: Id = Id(60);
+	let channel = |id, kind, parent, position, name: &str| Channel {
+		last_message: None,
+		id: Id(id),
+		guild: Some(GUILD),
+		parent_id: parent,
+		position,
+		name: name.into(),
+		kind,
+		recipients: vec![],
+		icon: None,
+		member_list_id: None,
+		message_count: None,
+	};
+	state.channels.extend([
+		channel(60, 4, None, 2, "ACCESS"),
+		channel(61, 0, Some(ACCESS), 0, "staff-notes"),
+		channel(62, 0, Some(ACCESS), 1, "secret"),
+		channel(63, 2, Some(ACCESS), 2, "locked-hangout"),
+		channel(64, 2, Some(ACCESS), 3, "vault"),
+		channel(65, 0, Some(ACCESS), 4, "unknown-room"),
+	]);
+	let mut snapshot = permission_snapshot(state);
+	if let Some(guild) = snapshot.guilds.iter_mut().find(|guild| guild.id == GUILD) {
+		if let Some(roles) = guild.roles.as_mut() {
+			roles.push(Role {
+				id: STAFF,
+				bits: 0,
+				name: "Contributors".into(),
+				color: 0,
+				position: 1,
+				hoist: false,
+			});
+		}
+		if let Some(member) = guild.member.as_mut() {
+			member.roles.push(STAFF);
+		}
+	}
+	let deny_everyone = Overwrite {
+		id: GUILD,
+		kind: 0,
+		allow: 0,
+		deny: VIEW_CHANNEL,
+	};
+	let allow_staff = Overwrite {
+		id: STAFF,
+		kind: 0,
+		allow: VIEW_CHANNEL,
+		deny: 0,
+	};
+	let deny_member = Overwrite {
+		id: state.user.as_ref().map_or(Id(1), |user| user.id),
+		kind: 1,
+		allow: 0,
+		deny: VIEW_CHANNEL,
+	};
+	for channel in &mut snapshot.channels {
+		match channel.id.0 {
+			61 | 63 => channel.overwrites = Some(vec![deny_everyone, allow_staff]),
+			62 => channel.overwrites = Some(vec![deny_everyone]),
+			64 => channel.overwrites = Some(vec![deny_member]),
+			_ => {}
+		}
+	}
+	snapshot.channels.retain(|channel| channel.id != Id(65));
+	state.permissions.replace(snapshot).unwrap();
+	state
+		.apply_notification_preferences(client_core::notifications::Event::Settings {
+			entries: vec![client_core::notifications::Setting {
+				guild: Some(GUILD),
+				muted: Some(false),
+				level: Some(3),
+				suppress_everyone: Some(false),
+				suppress_roles: Some(false),
+				channels: vec![(Id(21), Some(true), Some(3)), (Id(25), Some(true), Some(3))],
+				channel_mute_until: vec![],
+			}],
+			replace: true,
+		})
+		.unwrap();
+	state.revision += 1;
+}
 pub fn seed_demo_folder_mosaic(state: &mut State) {
 	const EXTRA: [(u64, &str, &str); 4] = [
 		(11, "North lab", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
@@ -949,7 +1049,8 @@ pub fn permission_snapshot(state: &State) -> model::permissions::Snapshot {
 		| p::CONNECT
 		| p::SPEAK
 		| p::USE_VAD
-		| p::MANAGE_THREADS;
+		| p::MANAGE_THREADS
+		| p::MANAGE_CHANNELS;
 	p::Snapshot {
 		guilds: state
 			.guilds
@@ -1297,6 +1398,7 @@ mod tests {
 			channel,
 			message,
 			request,
+			..
 		} = state.prepare_mark_read(latest).unwrap()
 		else {
 			panic!()
@@ -1859,6 +1961,7 @@ mod tests {
 			channel,
 			message,
 			request,
+			..
 		} = state.prepare_mark_read(Id(500)).unwrap()
 		else {
 			panic!()
