@@ -817,8 +817,8 @@ impl TimelineView {
 			ui.weak("Message history is unavailable with current permission information.");
 		}
 		if history_available && state.freshness == model::Freshness::Loading && empty {
-			loading_messages(ui);
 			let area = ui.available_rect_before_wrap().intersect(ui.clip_rect());
+			loading_messages(ui);
 			session.bind(ui, ui.id().with(("timeline", state.selected)), area);
 			return;
 		} else if empty && history_available && !welcome {
