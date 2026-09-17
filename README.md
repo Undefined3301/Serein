@@ -47,7 +47,7 @@ Pre-compiled releases for macOS, Linux, and Windows are published on GitHub [Rel
 
 | Platform | Format | Architectures | Details |
 |---|---|---|---|
-| **Windows** | `-Setup.exe`, `.zip` | `x86_64` | Per-user NSIS installer (recommended) or standalone portable archive |
+| **Windows** | `-Setup.exe`, `.zip` | `x86_64`, `aarch64` | Per-user NSIS installer (recommended) or standalone portable archive |
 | **macOS** | Homebrew Cask, `.zip` | Apple Silicon (`aarch64`) | Signed and notarized `.app` bundle |
 | **Linux** | Flatpak (recommended), Repositories (`apt`, `dnf`, `zypper`, `pacman`), `.AppImage` | `x86_64` | Flatpak with automatic updates; signed package repositories; portable AppImage |
 
@@ -107,14 +107,14 @@ Keep the AppImage in a writable directory to receive in-app updates via **Settin
 <summary><h3>🪟 Windows (Installer, PowerShell, Portable)</h3></summary>
 
 #### 1. Setup Installer (Recommended)
-Download `serein-<version>-Windows-X64-Setup.exe` from [Releases](https://github.com/ViceVerse-cz/rustcord/releases) and run it:
+Download the `Windows-X64-Setup.exe` or `Windows-ARM64-Setup.exe` asset for your system from [Releases](https://github.com/ViceVerse-cz/rustcord/releases) and run it:
 - Installs per-user to `%LOCALAPPDATA%\Programs\Serein` without requiring administrator/UAC elevation.
 - Automatically registers Start Menu shortcuts and configures AppUserModelID (`cz.viceverse.serein`) for native Windows toast notifications.
 - Registers in Windows Settings (Installed Apps / Add or Remove Programs) with full uninstall support.
 - Fully compatible with in-app self-updates: updates automatically synchronize the registered version.
 
 #### 2. Standalone PowerShell Setup
-Extract `serein-<version>-Windows-X64.zip` and run:
+Extract the `Windows-X64.zip` or `Windows-ARM64.zip` asset for your system and run:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\setup.ps1
 ```
@@ -124,7 +124,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Uninstall
 ```
 
 #### 3. Portable Archive
-Extract `serein-<version>-Windows-X64.zip` anywhere and launch `serein.exe`. To enable native desktop notifications:
+Extract the `Windows-X64.zip` or `Windows-ARM64.zip` asset for your system anywhere and launch `serein.exe`. To enable native desktop notifications:
 ```powershell
 powershell -File .\install-notifications.ps1
 ```

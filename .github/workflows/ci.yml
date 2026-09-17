@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest, ubuntu-latest]
+        os: [macos-latest, windows-latest, windows-11-arm, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7.0.1
@@ -46,7 +46,7 @@ jobs:
         run: cargo xtask package
       - uses: actions/upload-artifact@v7.0.1
         with:
-          name: serein-${{ runner.os }}-unsigned
+          name: serein-${{ runner.os }}-${{ runner.arch }}-unsigned
           path: dist/
   security:
     if: github.event_name == 'push' || github.event.pull_request.draft == false

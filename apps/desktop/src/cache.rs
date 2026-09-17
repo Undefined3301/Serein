@@ -50,6 +50,7 @@ fn message_bytes(messages: &Vec<Message>) -> usize {
 	messages.iter().map(Message::bytes).sum::<usize>()
 		+ messages.capacity().saturating_sub(messages.len()) * size_of::<Message>()
 }
+#[allow(clippy::large_enum_variant)]
 pub enum Operation {
 	LoadAppPreferences,
 	SaveAppPreferences(Box<local_store::AppPreferences>),
@@ -91,6 +92,7 @@ pub enum Operation {
 	ClearHistory,
 	Forget,
 }
+#[allow(clippy::large_enum_variant)]
 pub enum Outcome {
 	AppPreferences(Result<Box<local_store::AppPreferences>, StoreError>),
 	AppPreferencesSaved(Result<(), StoreError>),

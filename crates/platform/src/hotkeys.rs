@@ -18,6 +18,12 @@ pub struct Hotkeys {
 	status: &'static str,
 }
 
+impl Default for Hotkeys {
+	fn default() -> Self {
+		Self::new()
+	}
+}
+
 impl Hotkeys {
 	pub fn new() -> Self {
 		if cfg!(target_os = "linux")
@@ -104,12 +110,6 @@ impl Hotkeys {
 
 	pub fn status(&self) -> &'static str {
 		self.status
-	}
-}
-
-impl Default for Hotkeys {
-	fn default() -> Self {
-		Self::new()
 	}
 }
 

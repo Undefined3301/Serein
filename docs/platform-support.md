@@ -1,6 +1,6 @@
 # Platform support and packaging
 
-Target platforms are Windows, macOS and Linux. **macOS arm64, Windows x64 and Linux x64 have local build evidence.** macOS has native visual checks; Windows has offline tests and a process/window startup smoke check only. Minimum OS versions, other architectures, real screen-reader support and native login-method support are not certified.
+Target platforms are Windows, macOS and Linux. **macOS arm64, Windows x64 and Linux x64 have local build evidence.** The release workflow also targets Windows arm64 on a native GitHub Actions runner; build and runtime validation remain pending. macOS has native visual checks; Windows has offline tests and a process/window startup smoke check only. Minimum OS versions, other architectures, real screen-reader support and native login-method support are not certified.
 
 Windows defaults to DirectX 12 to avoid reported startup access violations in Intel's
 Vulkan driver (`igvk64.dll`). The existing `WGPU_BACKEND` environment override remains
