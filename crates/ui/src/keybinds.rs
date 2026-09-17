@@ -459,7 +459,7 @@ mod tests {
 		);
 		let ctx = egui::Context::default();
 		let mut matched = false;
-		ctx.run_ui(
+		let _ = ctx.run_ui(
 			egui::RawInput {
 				events: vec![Event::Key {
 					key: Key::V,
