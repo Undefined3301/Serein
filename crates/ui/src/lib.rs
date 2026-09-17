@@ -2658,12 +2658,12 @@ impl MessagingUi {
 						.iter()
 						.any(|event| matches!(event, egui::Event::Ime(_)))
 			}) && ctx.input_mut(|input| {
-				crate::keybinds::pressed(
-					input,
-					self.keybinds.chord(model::KeybindAction::SwitchConversation),
-				)
-			})
-		{
+			crate::keybinds::pressed(
+				input,
+				self.keybinds
+					.chord(model::KeybindAction::SwitchConversation),
+			)
+		}) {
 			self.switcher.open(&ctx);
 		}
 		self.switcher_frame = self.switcher.is_open();

@@ -2,12 +2,12 @@
 pub mod account;
 pub mod archives;
 mod channel_preferences;
+pub mod keybinds;
 pub mod messaging_permissions;
 pub mod notification_preferences;
 pub mod notification_settings;
-pub mod keybinds;
-pub use keybinds::{KeybindAction, Keybinds, KeyChord};
 pub use channel_preferences::{ChannelPreferences, PreferenceEdit, Shortcut};
+pub use keybinds::{KeyChord, KeybindAction, Keybinds};
 pub mod forum;
 pub mod gifs;
 pub mod guild_folders;

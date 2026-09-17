@@ -3766,8 +3766,11 @@ impl eframe::App for Desktop {
 		);
 		self.messaging.sync_reading_zoom(ctx);
 		self.poll(ctx);
-		self.hotkeys
-			.sync(self.messaging.keybinds.chord(model::KeybindAction::PushToTalk));
+		self.hotkeys.sync(
+			self.messaging
+				.keybinds
+				.chord(model::KeybindAction::PushToTalk),
+		);
 		self.messaging.global_keybind_status = self.hotkeys.status();
 		self.hotkeys.poll();
 		if self.updater.sync(
