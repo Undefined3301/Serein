@@ -159,6 +159,13 @@ when no call is active; late updates cannot repopulate an inaccessible channel.
 
 ## Diagnosing a call that never opens audio
 
+Windows call playback uses the selected speaker's default shared-mode mix format,
+with the existing resampler converting 48 kHz call audio when needed. This avoids
+choosing a converted format solely by enumeration order. Speaker-open errors
+distinguish busy, disconnected, unsupported-format and permission failures when
+the audio backend identifies them. This fast local change still needs a retry on
+an affected Windows device; it does not establish that every reported failure is fixed.
+
 Call progress distinguishes requesting allocation, connecting to the voice server, checking the
 UDP network path, securing audio, and opening audio devices. Negotiation errors identify the
 missing server Hello/Ready, transport key, DAVE group or transition execution. These are bounded,
@@ -299,9 +306,62 @@ suppression. These signals do not establish Krisp-equivalent real-world quality.
 
 ## Screen sharing
 
-In a connected call, select **Share your screen**, choose a display/window, 720p or 1080p, 15/30/60 fps and cursor visibility, then select **Share screen**. The screen button changes to **Stop sharing** while starting/sharing; it also remains available in the compact call controls. System audio is not included; call microphone controls remain independent. All presets are selectable without Nitro, but Discord acceptance and sustained frame rate are not guaranteed.
+In a connected call, select **Share your screen**, choose a display/window, 720p or 1080p, 15/30/60 fps, cursor visibility and optional **Share system audio**, then select **Share screen**. The screen button changes to **Stop sharing** while starting/sharing; it also remains available in the compact call controls. Call microphone controls remain independent. All presets are selectable without Nitro, but Discord acceptance and sustained frame rate are not guaranteed.
 
 Capture uses macOS 14+ ScreenCaptureKit (screen-recording permission in System Settings) or Windows Graphics Capture. Source discovery alone does not start streaming. Closing or minimizing a selected source may pause frames or end capture, according to the native API. The initial Windows adapter accepts source dimensions up to 3840×2160. Changes to screen-server metadata, lost video permission, leaving the call and logout stop sharing. The sender never starts itself after reconnection.
+
+Linux uses the desktop ScreenCast portal and PipeWire. Share Screen opens the system
+screen/window picker after the quality dialog; source discovery never opens that picker.
+The default is 720p30. The worker tries VA-API, NVENC with GPU scaling, NVENC with CPU
+scaling, then the existing OpenH264 software encoder. The call stage identifies the
+active encoder and software fallback. GPU buffers stay native where driver/plugin
+negotiation permits; zero-copy is not guaranteed, especially across GPUs. Local preview
+is capped at 640×360/10 fps and suspended when minimized or viewing another channel.
+ScreenCast-capable portal backends are required on both Wayland and X11; there is no
+separate X11 capture fallback. AV1/H.265 sending is not included.
+
+System audio defaults off on Linux and Windows. It shares other applications' playback,
+even when sharing one window, and excludes Serein's own audio, including call playback
+and watched streams. Exclusion happens at capture on the sender: a viewer cannot remove
+their voice once another sender has mixed it into stream audio. Other apps' notifications
+and audio remain included. macOS retains ScreenCaptureKit's current-process exclusion.
+
+Linux captures individual playback streams through PulseAudio's per-stream monitor API,
+also implemented by PipeWire's PulseAudio server. It excludes Serein and streams whose
+application identity cannot be established; it never falls back to a whole-output monitor
+or microphone. The ScreenCast portal grants video only; audio uses the existing desktop
+audio access, including Flatpak's PulseAudio socket permission. A separate bounded worker
+handles discovery, capture and mixing outside video encoding and rendering. No applications
+are moved between outputs and no virtual device is installed.
+
+Windows uses native process loopback with `PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE`,
+excluding Serein and its child processes across outputs. This requires Windows build 20348+
+(Windows 11 or Windows Server 2022; ordinary Windows 10 22H2 is older). Unsupported systems
+or failed isolation report an audio error; turn audio off to share video alone. There is no
+whole-output fallback. Neither adapter records to disk.
+
+Native contracts: [PulseAudio per-stream monitoring](https://www.freedesktop.org/wiki/Software/PulseAudio/Documentation/Developer/Clients/WritingVolumeControlUIs/)
+and [Microsoft process-loopback capture](https://learn.microsoft.com/en-us/samples/microsoft/windows-classic-samples/applicationloopbackaudio-sample/).
+
+Both feed the existing stream RTC connection with 48 kHz stereo Opus at 128 kbps and
+DAVE/transport encryption, independently of microphone mute. Capture output is gated
+by secure readiness. The transport keeps at most 100 ms pending, sends one 20 ms frame
+per tick, and clears queued/pending PCM on encryption transitions or a 100 ms stall.
+Capture buffers carry their encryption generation; late buffers from an earlier
+generation are discarded even if a pause and restart happen between worker iterations.
+Stop sharing and call teardown release audio together with the screen capture.
+
+The offline debug command is `cargo run --offline --locked -p discord-voice --example linux_screen`.
+It compiles the actual portal/pipeline/worker modules on Linux with GStreamer,
+checks pre-cancellation without D-Bus, and exercises synthetic preview, the secure-readiness
+gate, stereo audio, bounded slow-consumer behavior, oversized-buffer rejection and software
+H.264. It never captures a desktop or opens an audio device. Native Linux portal interaction,
+VA-API/NVENC, package installation, performance and Discord viewing remain unverified.
+Windows process exclusion, Linux application selection and actual remote sound still
+require owner-controlled tests; synthetic samples do not establish those outcomes.
+Use two clients with headphones, enable audio on the sender, play another app and speak
+from the viewer: the app should be audible without the viewer's voice returning in the
+stream. Repeat while starting/stopping apps, changing outputs, rekeying and stopping sharing.
 
 The native demo (`cargo run --locked -p serein -- --demo --demo-voice`) exposes a synthetic picker without OS source discovery or capture. Live screen sharing requires the same owner-controlled login gate as voice testing. See [compatibility and limits](discord-compatibility.md#outgoing-screen-sharing--september-11-2026).
 
@@ -328,8 +388,15 @@ These paths have synthetic coverage; native camera/screen capture and live Disco
 viewing still require owner-operated validation.
 
 AVFoundation on macOS, Media Foundation on Windows and V4L2 on Linux capture
-640×480 frames, capped at 15 encoded frames/second; OpenH264 encodes on a
-worker with a 600 kbit/s target (not a measured bandwidth guarantee). macOS retains one pending
+640×480 frames, capped at 15 encoded frames/second, encoded on a worker with a
+600 kbit/s target (not a measured bandwidth guarantee). The worker prefers the platform
+hardware H.264 encoder, the same VideoToolbox and Media Foundation encoders screen sharing
+uses, and VA-API or NVENC through a private GStreamer pipeline on Linux. OpenH264 remains
+the fallback when no hardware encoder is available and when one fails mid-capture, which
+switches the remaining capture to software rather than ending it. Every path requests the
+Baseline profile and codes each picture as an IDR, so the wire format is unchanged; a
+hardware encoder whose output is not independently decodable is rejected in favor of the
+software one. macOS retains one pending
 BGRA frame (1,228,800 bytes). Windows validates each native buffer against a 3,194,880-byte
 ceiling (including row padding), requests one source buffer and queues at most one
 921,600-byte RGB frame. Linux requests two mapped buffers, accepts at most four of
@@ -384,3 +451,165 @@ The virtual-camera fallback uses the documented DirectShow
 and [sample grabber](https://learn.microsoft.com/en-us/windows/win32/directshow/using-the-sample-grabber).
 Linux follows the kernel's [V4L2 capture interface](https://www.kernel.org/doc/html/latest/userspace-api/media/v4l/capture.c.html).
 Both feed the existing camera transport; no Discord wire behavior changed in this extension.
+
+### Screen-share audio diagnostics
+
+The existing opt-in `SEREIN_VOICE_DIAGNOSTICS=1` reporter now also emits `StreamSend`
+and `StreamReceive` summaries. `StreamSend` encode calls count captured 20 ms audio
+frames encoded, encrypted and sent. `StreamReceive` receive calls count accepted
+DAVE audio packets; mix calls count decoded frames offered to the parent call's output.
+StreamReceive drops count audio/video DAVE decryption failures or a full playback/
+decoder handoff queue. `video_send` counts complete encrypted H.264 frames sent;
+`video_receive` counts decrypted frames accepted by the decoder queue, not displayed frames.
+Each stream report also counts ticks with the transport key, DAVE ready, group ready,
+pending transition, waiting, announced, capture ready and audio enabled flags set,
+plus audio chunks observed in the capture queue before draining. These distinguish
+closed security gates, missing capture data and active outbound video. Tick counts
+reset every report; receiver capture-ready and queued-audio counts are always zero.
+Windows also emits `ScreenAudio`: `capture_read` counts successful native buffer reads,
+`capture_queue` counts chunks handed to the stream, `stalls` counts 50-ms event
+timeouts, and `drops` counts packets rejected by the ready/epoch/queue gates. Initial
+start and epoch restarts emit bounded checkpoints before/after the native calls;
+`capture_restart` counts completed starts/restarts, while `resets` counts attempted
+epoch restarts. This separates missing wakeups, empty native buffers and blocked
+restart calls without logging audio. Dropped packets before stream readiness are expected.
+On an encryption epoch change, Windows recreates the process-loopback client instead
+of restarting it with Stop/Reset/Start. Each client's captured audio retains its original
+epoch until disposal, so queued samples cannot cross the encryption transition.
+Zero sender encode calls means no PCM reached the secure sender; sender activity with
+zero receiver receive calls narrows the failure to forwarding, mapping or decryption.
+Successful receives/mixes with no sound narrows it to silent source PCM or parent
+playback/device gates. These counts do not prove audible sound and do not contain PCM,
+participant IDs, credentials or signaling contents. The existing eight-report queue and
+8,192-report / 8-MiB process-lifetime limits still apply. Enable it on both endpoints
+only for the owner's deliberate test, then disable it after collecting the summaries.
+
+### Remote video diagnostics
+
+Every report line carries `at_ms`, milliseconds since the first reporter started, so
+lines from different scopes can be ordered. `Transport` (call camera video) and
+`StreamReceive` (watching a screen share) lines append a `video:` group whenever any
+remote video counter is non-zero. Each counter names one place a picture can be lost
+between the UDP socket and the display, so a frozen viewer is diagnosed from one line:
+
+- `packets` / `rtx`: video RTP packets (payload 101) accepted by the transport cipher,
+  and retransmission packets (payload 102), which Serein does not yet use. Many `rtx`
+  packets mean the media server sees loss on the path.
+- `open_failed`: packets of any payload rejected by the transport AEAD.
+- `not_ready`: video packets received before the DAVE session was ready or from a
+  user outside the group; expected briefly after joining or an epoch change.
+- `unknown_ssrc`: packets on a video SSRC no sender announced.
+- `incomplete` / `complete`: pictures the RFC 6184 depacketizer discarded (sequence gap
+  or missing marker) versus intact encrypted access units.
+- `decrypt_failed`: access units that failed DAVE decryption.
+- `gated`: predicted pictures rejected because a keyframe is still owed after loss.
+- `queue_full`: frames dropped because the decoder thread was behind.
+- `keyframes` / `keyframes_without_params`: keyframes handed to the decoder, and how
+  many lacked inline SPS/PPS. A rebuilt decoder cannot start from those.
+- `pli_sent`: Picture Loss Indications sent (at most one per owed sender per 500 ms).
+- `awaiting_ticks`: 20 ms ticks spent waiting for at least one sender's keyframe.
+- `decoder_errors`: decoder failures reported by the decoder thread.
+- `pictures`: decoded pictures delivered to the display sink.
+- `picture_gap_ms`: the longest gap between delivered pictures in the window (a
+  maximum, not a sum). Zero until the first picture is delivered.
+- `stall_ticks`: ticks where a source was announced but no picture had arrived for a
+  second. Each of those ticks asks every announced sender for a keyframe.
+
+A `signal:` group appears on the same lines whenever any signaling counter is non-zero.
+It records opcodes only, never their contents, so a handshake that never completes names
+its own missing step: `text` and `binary` count all received events, `other` counts text
+opcodes without a dedicated slot, and `ready` (2), `session` (4), `clients` (11),
+`sender` (12), `prepare_transition` (21), `execute_transition` (22), `prepare_epoch` (24),
+`external_sender` (binary 25), `proposals` (binary 27) and `commit` (binary 29/30) count
+the negotiation. Outbound messages are `key_package_sent`, `transition_ready_sent` (23),
+`subscribe_sent` (12) and `sink_wants_sent` (15). Only `execute_transition` makes DAVE
+ready, so a stream that reports a transport key with `dave_ready=0` and no
+`execute_transition` stalled in the MLS handshake rather than in media.
+
+Two recovery paths depend on these counters. A viewer refreshes its video sink wants
+every five seconds, and every second while stalled, because Discord stops forwarding
+video when that subscription lapses. Separately, video that stops cleanly leaves nothing
+marked lost, so no per-picture signal would ever request recovery; after a second without
+a decoded picture every announced sender is asked for a keyframe until one arrives.
+Both are visible as `sink_wants_sent`, `stall_ticks` and `pli_sent`.
+
+When Discord itself ends a stream, its `STREAM_DELETE` carries a `reason`. Both the
+sharer's status and the viewer's notice now show a message derived from it (for example
+"Discord reported the stream as ended") instead of the same text a local stop shows, and
+an unrecognised value still reads "Discord ended the stream". A `user_requested` deletion
+stays silent because it is the local stop acknowledging. With the diagnostics variable set,
+the bounded raw value is also printed as `[Serein voice Stream] discord_delete_reason=…`.
+
+Linux application audio reports under `ScreenAudio` as well: `capture_restart` counts
+completed application enumerations, `capture_read` monitor reads, `capture_queue` chunks
+handed to the stream, `resets` epoch or roster resets, `stalls` 100 ms stalls, and
+`app_inputs`, `app_captures`, `app_excluded`, `app_chunks` count the applications the
+enumeration allowed, monitor captures started, applications excluded after a failed
+capture, and mixed chunks sent. `app_inputs=0` across a share means no other application
+exposed a PulseAudio stream with `application.process.id` and
+`application.process.binary`, so there was nothing to capture; `app_excluded` rising with
+`app_captures` means the server refuses the isolated monitor for that application.
+`app_captures` rising while `app_chunks` stays zero means captures start but the
+enumerate/verify handshake never completes, which `resets` confirms when it matches `wakes`.
+
+`app_ready` counts captures whose monitors all connected, the step before the confirming
+enumeration; `app_captures` rising while `app_ready` stays zero means the monitors never
+connect, and both rising while `app_chunks` stays zero means the confirmation keeps
+restarting.
+
+Per-application capture attaches to one sink input through PulseAudio's monitor-stream
+interface. Sink-input indices are recycled as applications restart their streams, so an
+attachment can name an index that is already gone; such an attachment never connects and
+never fails either. Each attachment is therefore tracked on its own: it is dropped after a
+second without connecting and retried from the next listing under a freshly listed index,
+and it is only mixed once a later listing shows the same application still holding that
+index. Applications are listed every 500 ms regardless of what the server reports, because
+a roster that changes continuously must not stop the confirmations. `app_dropped` counts
+attachments discarded this way; a steady trickle is normal for an application that keeps
+restarting its stream, while `app_dropped` matching `app_captures` with `app_ready` at zero
+means no attachment ever connects. Compare against
+`parec --monitor-stream=INDEX -d SINK.monitor`, which uses the same interface.
+
+Linux screen capture reports under `ScreenVideo`: `receive` counts pictures taken from the
+pipeline, `encode` times the software encoder, `drops` counts pictures left in the pipeline
+because the transport had not drained the previous one, and `stalls` counts passes where the
+pipeline offered nothing. A share that freezes with `stalls` high and `drops` at zero means
+the desktop stopped producing pictures; `drops` rising instead means the encoder or the
+transport is behind and the pipeline is being held back, which throttles the capture source
+until it drains. Software encoding a desktop is the usual reason for the latter, so compare
+`encode` against the frame interval before concluding anything about the network.
+
+A capture source with nothing new to send still emits a keepalive picture once a second, so
+a frozen share shows as a run of seconds carrying only that keepalive rather than a gap
+between pictures. Such a run is reported once it ends as
+`[Serein voice Screen] capture_slow_ms=… withheld=…`. A `withheld` of zero means the desktop
+stopped producing pictures while the transport was keeping up, which is a compositor or
+portal matter; a non-zero `withheld` means the pipeline was held back waiting for the
+transport to drain, which throttles the capture source until it catches up.
+
+Three lines name why a share ended, because the status only shows the most recent message
+and a later stop overwrites it: `[Serein voice Screen] capture_stopped=…` from the capture
+worker, `stream_transport_stopped=…` from its RTC connection, and `share_stopped=…` for the
+message the desktop finally acted on. Read them in that order; the first is the cause and
+the others usually follow from it.
+
+Reading a freeze: `packets` rising with `pictures` at zero and `picture_gap_ms` growing
+confirms the viewer is starved, not the display. High `incomplete` with `gated` and
+`awaiting_ticks` near the full window and `pli_sent` rising but `keyframes` at zero
+means the sender is not honoring keyframe requests. `keyframes` rising alongside
+`keyframes_without_params` and `decoder_errors` means the decoder cannot restart from
+the sender's keyframes. `packets` at zero with `awaiting_ticks` high means the media
+server stopped forwarding. These are counts only; no video, identifiers or signaling
+contents are recorded.
+
+On Windows, use `Start-Process` to attach stderr to the GUI executable; direct shell
+redirection can leave an empty file. After closing the previous test instance, run
+the intended build on each endpoint with separate output files:
+
+```powershell
+$env:SEREIN_VOICE_DIAGNOSTICS="1"
+Start-Process .\dist\serein.exe -RedirectStandardError "$PWD\stream-debug-retest.log" -Wait
+```
+
+Start sharing promptly after launch so the bounded diagnostic budget covers the test.
+Keep these local logs out of commits.

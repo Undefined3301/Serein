@@ -651,6 +651,46 @@ fn creation_date(id: Id) -> Option<String> {
 		.map(|date| crate::local_time::local(date).date().to_string())
 }
 
+fn role_chips(ui: &mut egui::Ui, theme: &Theme, state: &State, guild: &model::GuildProfile) {
+	let Some(roles) = state.guild_roles(guild.guild) else {
+		return;
+	};
+	let max_width = ui.available_width();
+	ui.horizontal_wrapped(|ui| {
+		ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+		for role in roles
+			.iter()
+			.rev()
+			.filter(|role| role.id != guild.guild && guild.roles.contains(&role.id))
+		{
+			let galley = ui.painter().layout_no_wrap(
+				role.name.clone(),
+				egui::FontId::proportional(12.0),
+				theme.text,
+			);
+			let size = vec2(
+				(galley.size().x + 25.0).min(max_width),
+				galley.size().y + 6.0,
+			);
+			let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
+			ui.painter().rect_filled(rect, 6, theme.chip);
+			let color = if role.color == 0 {
+				theme.muted
+			} else {
+				rgb(role.color)
+			};
+			ui.painter()
+				.circle_filled(pos2(rect.left() + 10.0, rect.center().y), 4.0, color);
+			ui.painter().with_clip_rect(rect.shrink(3.0)).galley(
+				pos2(rect.left() + 18.0, rect.center().y - galley.size().y * 0.5),
+				galley,
+				theme.text,
+			);
+			response.on_hover_text(&role.name);
+		}
+	});
+}
+
 /// Shows the popout beside `anchor`; returns an action when the card wants to change or close.
 #[allow(clippy::too_many_arguments)]
 pub fn show(
@@ -1014,6 +1054,18 @@ pub fn show(
 													action = Some(Action::Profile(user));
 												}
 											}
+											if let Some(guild) = data.guild.as_ref()
+												&& state.guild_roles(guild.guild).is_some_and(
+													|roles| {
+														roles.iter().any(|role| {
+															role.id != guild.guild
+																&& guild.roles.contains(&role.id)
+														})
+													},
+												) {
+												section(ui, &theme, &mut sections, "ROLES");
+												role_chips(ui, &theme, state, guild);
+											}
 											section(ui, &theme, &mut sections, "MEMBER SINCE");
 											ui.horizontal_wrapped(|ui| {
 												ui.spacing_mut().item_spacing.x = 6.0;
@@ -1225,10 +1277,19 @@ pub fn synthetic(user: &User, guild: Option<Id>) -> model::UserProfile {
             name: "synthetic-profile".into(),
             verified: true,
         }],
-        mutual_guilds: guild
+		mutual_guilds: guild
             .map(|id| vec![model::ProfileGuild { id, nick: None }])
             .unwrap_or_default(),
-        guild: None,
+		guild: guild.map(|guild| model::GuildProfile {
+			guild,
+			roles: vec![],
+			nick: None,
+			avatar: None,
+			banner: None,
+			bio: String::new(),
+			pronouns: String::new(),
+			joined_at: Some("2026-01-01T00:00:00Z".into()),
+		}),
         theme_colors: Some([0x1f3a4d, 0x3b2a5e]),
         clan: Some(model::ClanTag {
             guild: guild.unwrap_or(Id(10)),
@@ -1755,6 +1816,138 @@ mod tests {
 				));
 			},
 		);
+		output.drop_without_applying_deltas();
+	}
+
+	#[test]
+	fn server_profile_shows_assigned_known_roles() {
+		let mut state = test_support::demo_state();
+		for (id, name, color, position) in [
+			(Id(101), "Maintainer", 0x5865f2, 2),
+			(Id(102), "Contributor", 0, 1),
+		] {
+			state.apply(client_core::Envelope {
+				generation: state.generation,
+				event: client_core::Event::Permissions(client_core::permissions::Event::Role {
+					guild: Id(10),
+					role: model::permissions::Role {
+						id,
+						bits: 0,
+						name: name.into(),
+						color,
+						position,
+						hoist: false,
+					},
+				}),
+			});
+		}
+		let user = test_support::message(1, Id(20)).author;
+		let mut data = synthetic(&user, Some(Id(10)));
+		data.guild.as_mut().unwrap().roles = vec![Id(101), Id(102), Id(999)];
+		let profile = ProfileView {
+			user: user.id,
+			guild: Some(Id(10)),
+			request: 1,
+			loading: false,
+			error: None,
+			data: Some(data),
+		};
+		let ctx = egui::Context::default();
+		let mut images = Avatars::default();
+		let mut opening = None;
+		let mut painted = String::new();
+		for _ in 0..3 {
+			let output = ctx.run_ui(input(vec2(700.0, 800.0), vec![]), |ui| {
+				show(
+					ui,
+					&user,
+					Some(&profile),
+					&state,
+					&mut images,
+					&mut opening,
+					&mut FormatCache::default(),
+					true,
+					pos2(20.0, 70.0),
+				);
+			});
+			for shape in &output.shapes {
+				text(&shape.shape, &mut painted);
+			}
+			output.drop_without_applying_deltas();
+		}
+		assert!(painted.contains("ROLES"), "{painted}");
+		assert!(painted.contains("Maintainer"), "{painted}");
+		assert!(painted.contains("Contributor"), "{painted}");
+		assert!(!painted.contains("Role 999"), "{painted}");
+	}
+
+	#[test]
+	fn role_chips_wrap_complete_items_onto_new_rows() {
+		let mut state = test_support::demo_state();
+		let roles = [
+			(Id(101), "Maintainer"),
+			(Id(102), "Contributor"),
+			(Id(103), "Release Manager"),
+			(Id(104), "Documentation"),
+			(Id(105), "Community Helper"),
+			(Id(106), "Bug Hunter"),
+		];
+		for (position, (id, name)) in roles.iter().enumerate() {
+			state.apply(client_core::Envelope {
+				generation: state.generation,
+				event: client_core::Event::Permissions(client_core::permissions::Event::Role {
+					guild: Id(10),
+					role: model::permissions::Role {
+						id: *id,
+						bits: 0,
+						name: (*name).into(),
+						color: 0x5865f2,
+						position: position as i32,
+						hoist: false,
+					},
+				}),
+			});
+		}
+		let guild = model::GuildProfile {
+			guild: Id(10),
+			roles: roles.iter().map(|(id, _)| *id).collect(),
+			nick: None,
+			avatar: None,
+			banner: None,
+			bio: String::new(),
+			pronouns: String::new(),
+			joined_at: None,
+		};
+		let ctx = egui::Context::default();
+		design::apply(&ctx);
+		let output = ctx.run_ui(input(vec2(180.0, 300.0), vec![]), |ui| {
+			ui.set_width(180.0);
+			let theme = Theme::new(&design::palette(ui), None);
+			role_chips(ui, &theme, &state, &guild);
+		});
+		let chips: Vec<_> = output
+			.shapes
+			.iter()
+			.filter_map(|shape| match &shape.shape {
+				egui::Shape::Rect(rect) if rect.corner_radius == CornerRadius::same(6) => {
+					Some(rect.rect)
+				}
+				_ => None,
+			})
+			.collect();
+		assert_eq!(chips.len(), roles.len());
+		assert!(
+			chips.iter().skip(1).any(|chip| chip.top() > chips[0].top()),
+			"roles should occupy more than one row: {chips:?}"
+		);
+		for (index, chip) in chips.iter().enumerate() {
+			for other in chips.iter().skip(index + 1) {
+				assert!(
+					!chip.intersects(*other),
+					"role chips overlap: {chip:?} {other:?}"
+				);
+			}
+		}
 		output.drop_without_applying_deltas();
 	}
 

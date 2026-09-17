@@ -254,6 +254,10 @@ pub struct MessagingUi {
 	pub voice_microphone_unavailable: bool,
 	pub voice_push_to_talk: bool,
 	pub voice_noise_suppression: bool,
+	/// Device-local application shortcuts; the desktop host mirrors the global binding.
+	pub keybinds: model::Keybinds,
+	keybind_capture: Option<model::KeybindAction>,
+	pub global_keybind_status: &'static str,
 	/// Server folders the owner left open; restored from device preferences at startup.
 	pub expanded_folders: Vec<u64>,
 	pub voice_ptt_active: bool,
@@ -323,6 +327,18 @@ impl MessagingUi {
 	/// True while a drive needs the cursor position, including outside the window.
 	pub fn tracking_pointer(&self) -> bool {
 		self.scroll.tracking()
+	}
+
+	/// Returns whether the configured push-to-talk chord is held in the focused window.
+	pub fn push_to_talk_down(&self, ctx: &egui::Context) -> bool {
+		ctx.input(|input| {
+			input.focused
+				&& !ctx.egui_wants_keyboard_input()
+				&& crate::keybinds::down(
+					input,
+					self.keybinds.chord(model::KeybindAction::PushToTalk),
+				)
+		})
 	}
 
 	pub fn take_group_icon_request(&mut self) -> Option<(u64, Id, u64)> {
@@ -1757,13 +1773,11 @@ impl MessagingUi {
 			&& ctx.memory(|memory| memory.has_focus(ui.make_persistent_id("message-input")))
 			&& state.drafts.get(&channel).is_none_or(String::is_empty)
 			&& ctx.input_mut(|input| {
-				let up = !input.events.iter().any(ime_updates_text)
-					&& input.events.iter().any(|event| {
-						matches!(event, egui::Event::Key {
-							key: egui::Key::ArrowUp, pressed: true, repeat: false, modifiers, ..
-						} if *modifiers == egui::Modifiers::NONE)
-					});
-				up && input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)
+				!input.events.iter().any(ime_updates_text)
+					&& crate::keybinds::pressed_exact(
+						input,
+						self.keybinds.chord(model::KeybindAction::EditLastMessage),
+					)
 			}) && let Some(message) = state
 			.timeline
 			.iter()
@@ -2141,13 +2155,10 @@ impl MessagingUi {
 			&& !ime_this_frame
 			&& ctx.memory(|m| m.has_focus(composer_id))
 			&& ctx.input_mut(|i| {
-				// consume_key matches Shift/Alt too; only a deliberate plain Enter sends.
-				let send = i.events.iter().any(|event| {
-					matches!(event, egui::Event::Key {
-						key: egui::Key::Enter, pressed: true, repeat: false, modifiers, ..
-					} if *modifiers == egui::Modifiers::NONE)
-				});
-				send && i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+				crate::keybinds::pressed_exact(
+					i,
+					self.keybinds.chord(model::KeybindAction::SendMessage),
+				)
 			});
 		let placeholder = state.channel(channel).map_or_else(
 			|| "Message".to_owned(),
@@ -2335,7 +2346,7 @@ impl MessagingUi {
                             && !self.ime_active
                             && !ime_this_frame
                             && ctx.memory(|m| m.has_focus(composer_id))
-                            && let Some(style) = formatting::Style::consume(ctx)
+							&& let Some(style) = formatting::Style::consume(ctx, &self.keybinds)
                         {
                             let mut edit_state =
                                 egui::text_edit::TextEditState::load(ctx, composer_id).unwrap_or_default();
@@ -2646,7 +2657,12 @@ impl MessagingUi {
 						.events
 						.iter()
 						.any(|event| matches!(event, egui::Event::Ime(_)))
-			}) && ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::K))
+			}) && ctx.input_mut(|input| {
+				crate::keybinds::pressed(
+					input,
+					self.keybinds.chord(model::KeybindAction::SwitchConversation),
+				)
+			})
 		{
 			self.switcher.open(&ctx);
 		}
@@ -3452,8 +3468,7 @@ impl MessagingUi {
 		self.voice_ptt_active = self.voice_push_to_talk
 			&& state.voice.active.is_some()
 			&& !state.demo
-			&& !ctx.egui_wants_keyboard_input()
-			&& ctx.input(|input| input.focused && input.key_down(egui::Key::V));
+			&& self.push_to_talk_down(&ctx);
 		self.scroll.clear_if_unbound(&ctx);
 		self.scroll.paint(&ctx);
 		if !commands.is_empty() {

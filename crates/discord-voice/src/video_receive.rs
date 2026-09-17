@@ -5,6 +5,7 @@ use std::{
 	collections::HashMap,
 	sync::{
 		Arc, Mutex,
+		atomic::{AtomicU64, Ordering},
 		mpsc::{Receiver, SyncSender, TrySendError, sync_channel},
 	},
 };
@@ -35,6 +36,14 @@ pub type VideoSink = Arc<dyn Fn(RemoteFrame<'_>) + Send + Sync>;
 pub(crate) struct DecoderQueue {
 	send: SyncSender<(Encoded, tokio::sync::OwnedSemaphorePermit)>,
 	bytes: Arc<tokio::sync::Semaphore>,
+	/// Decoded pictures delivered to the sink and decoder failures, for diagnostics only.
+	pub counters: Arc<DecoderCounters>,
+}
+
+#[derive(Default)]
+pub(crate) struct DecoderCounters {
+	pub pictures: AtomicU64,
+	pub errors: AtomicU64,
 }
 
 /// A cleartext Annex-B access unit handed to the decoder thread.
@@ -42,6 +51,30 @@ pub(crate) struct Encoded {
 	pub user: u64,
 	pub data: Vec<u8>,
 	pub keyframe: bool,
+}
+
+/// True when the cleartext Annex-B access unit carries both an SPS and a PPS, so a freshly
+/// created decoder can start from it.
+pub(crate) fn has_parameter_sets(frame: &[u8]) -> bool {
+	let (mut sps, mut pps) = (false, false);
+	let mut at = 0;
+	while at + 4 <= frame.len() {
+		let size = if frame[at..].starts_with(&[0, 0, 0, 1]) {
+			4
+		} else if frame[at..].starts_with(&[0, 0, 1]) {
+			3
+		} else {
+			at += 1;
+			continue;
+		};
+		match frame.get(at + size).map(|nal| nal & 0x1f) {
+			Some(7) => sps = true,
+			Some(8) => pps = true,
+			_ => {}
+		}
+		at += size;
+	}
+	sps && pps
 }
 
 /// True when the cleartext Annex-B access unit carries an IDR slice.
@@ -73,6 +106,8 @@ pub(crate) struct Assembler {
 	fragmenting: bool,
 	broken: bool,
 	started: bool,
+	// Preserve loss across frame resets until Receivers schedules recovery.
+	lost: bool,
 }
 impl Assembler {
 	/// Feed one packet; returns a complete access unit when the marker closes an intact frame.
@@ -85,6 +120,7 @@ impl Assembler {
 	) -> Option<Vec<u8>> {
 		if self.started && timestamp != self.timestamp {
 			// A new picture started before the previous marker arrived: drop the partial one.
+			self.lost = true;
 			self.reset_frame();
 			self.timestamp = timestamp;
 		}
@@ -102,11 +138,13 @@ impl Assembler {
 		if !self.broken && self.append(payload).is_err() {
 			self.broken = true;
 		}
+		self.lost |= self.broken;
 		if !marker {
 			return None;
 		}
 		let complete = (!self.broken && !self.fragmenting && !self.frame.is_empty())
 			.then(|| std::mem::take(&mut self.frame));
+		self.lost |= complete.is_none();
 		self.reset_frame();
 		self.started = false;
 		complete
@@ -194,6 +232,15 @@ pub(crate) struct Receivers {
 	sources: Vec<(u32, u64, Assembler)>,
 	/// Users whose decoder lost a reference picture; only a keyframe restarts their video.
 	awaiting_keyframe: Vec<u64>,
+	/// Depacketizer outcomes since the last `take_stats`, for diagnostics.
+	stats: ReceiveStats,
+}
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct ReceiveStats {
+	pub unknown_ssrc: u64,
+	pub incomplete: u64,
+	pub complete: u64,
 }
 impl Receivers {
 	/// Bind an announced video SSRC to a user; zero clears that user's sources.
@@ -243,6 +290,25 @@ impl Receivers {
 				.map(|(ssrc, _, _)| *ssrc)
 		})
 	}
+	/// Whether any sender still owes this receiver a keyframe.
+	pub fn awaiting(&self) -> bool {
+		!self.awaiting_keyframe.is_empty()
+	}
+	/// Whether any video source has been announced for this connection.
+	pub fn has_sources(&self) -> bool {
+		!self.sources.is_empty()
+	}
+	/// Ask every announced sender for a keyframe. Used when video stops without the
+	/// depacketizer seeing loss, which no per-picture signal would ever reveal.
+	pub fn require_all_keyframes(&mut self) {
+		for index in 0..self.sources.len() {
+			self.require_keyframe(self.sources[index].1);
+		}
+	}
+	/// Drains the depacketizer counters.
+	pub fn take_stats(&mut self) -> ReceiveStats {
+		std::mem::take(&mut self.stats)
+	}
 	/// Whether a decoded access unit may be decoded: keyframes always, predictions only
 	/// while the reference chain is intact.
 	pub fn accept(&mut self, user: u64, keyframe: bool) -> bool {
@@ -261,9 +327,20 @@ impl Receivers {
 		marker: bool,
 		payload: &[u8],
 	) -> Option<(u64, Vec<u8>)> {
-		let (_, user, assembler) = self.sources.iter_mut().find(|(s, _, _)| *s == ssrc)?;
-		let frame = assembler.push(sequence, timestamp, marker, payload)?;
-		Some((*user, frame))
+		let Some((_, user, assembler)) = self.sources.iter_mut().find(|(s, _, _)| *s == ssrc)
+		else {
+			self.stats.unknown_ssrc += 1;
+			return None;
+		};
+		let user = *user;
+		let frame = assembler.push(sequence, timestamp, marker, payload);
+		let lost = std::mem::take(&mut assembler.lost);
+		self.stats.incomplete += u64::from(lost);
+		self.stats.complete += u64::from(frame.is_some());
+		if lost {
+			self.require_keyframe(user);
+		}
+		frame.map(|frame| (user, frame))
 	}
 }
 
@@ -274,14 +351,17 @@ pub(crate) fn spawn_decoder(sink: VideoSink) -> Result<(DecoderQueue, Lost), &'s
 	let (send, receive) = sync_channel(64);
 	let lost: Lost = Arc::new(Mutex::new(Vec::new()));
 	let report = lost.clone();
+	let counters = Arc::new(DecoderCounters::default());
+	let thread_counters = counters.clone();
 	std::thread::Builder::new()
 		.name("remote-video".into())
-		.spawn(move || decode_loop(receive, sink, report))
+		.spawn(move || decode_loop(receive, sink, report, thread_counters))
 		.map_err(|_| "Could not start the video decoder thread")?;
 	Ok((
 		DecoderQueue {
 			send,
 			bytes: Arc::new(tokio::sync::Semaphore::new(QUEUE_BYTES)),
+			counters,
 		},
 		lost,
 	))
@@ -321,11 +401,18 @@ enum Backend {
 	Software(openh264::decoder::Decoder),
 }
 impl Backend {
-	fn new(prefer_hardware: bool, user: u64, sink: &VideoSink) -> Option<Self> {
+	fn new(
+		prefer_hardware: bool,
+		user: u64,
+		sink: &VideoSink,
+		counters: &Arc<DecoderCounters>,
+	) -> Option<Self> {
 		if prefer_hardware {
 			let sink = sink.clone();
+			let counters = counters.clone();
 			let deliver: platform::video::LiveSink = Box::new(move |frame| {
 				if bounded(frame.width as usize, frame.height as usize).is_ok() {
+					counters.pictures.fetch_add(1, Ordering::Relaxed);
 					sink(RemoteFrame {
 						user,
 						width: frame.width,
@@ -374,6 +461,7 @@ fn decode_loop(
 	receive: Receiver<(Encoded, tokio::sync::OwnedSemaphorePermit)>,
 	sink: VideoSink,
 	lost: Lost,
+	counters: Arc<DecoderCounters>,
 ) {
 	let mut decoders: HashMap<u64, Backend> = HashMap::new();
 	// Users whose hardware decoder rejected the stream fall back to software.
@@ -394,9 +482,13 @@ fn decode_loop(
 			if decoders.len() >= MAX_DECODERS {
 				continue;
 			}
-			let Some(decoder) =
-				Backend::new(!software_only.contains(&frame.user), frame.user, &sink)
-			else {
+			let Some(decoder) = Backend::new(
+				!software_only.contains(&frame.user),
+				frame.user,
+				&sink,
+				&counters,
+			) else {
+				counters.errors.fetch_add(1, Ordering::Relaxed);
 				continue;
 			};
 			decoders.insert(frame.user, decoder);
@@ -409,6 +501,7 @@ fn decode_loop(
 			Err(()) => {
 				// Corrupt or lost data: a fresh decoder waits for the next keyframe. A
 				// hardware decoder that fails on a keyframe is replaced by software.
+				counters.errors.fetch_add(1, Ordering::Relaxed);
 				decoders.remove(&frame.user);
 				if hardware && frame.keyframe && !software_only.contains(&frame.user) {
 					software_only.push(frame.user);
@@ -423,6 +516,7 @@ fn decode_loop(
 			}
 		};
 		let (width, height) = decoded;
+		counters.pictures.fetch_add(1, Ordering::Relaxed);
 		sink(RemoteFrame {
 			user: frame.user,
 			width,
@@ -458,6 +552,60 @@ fn bounded(width: usize, height: usize) -> Result<(u32, u32), ()> {
 mod tests {
 	use super::*;
 	#[test]
+	fn a_silent_stall_can_request_keyframes_without_observed_loss() {
+		let mut receivers = Receivers::default();
+		receivers.announce(7, 700).unwrap();
+		receivers.announce(8, 800).unwrap();
+		// A clean keyframe from each sender leaves nothing owed.
+		assert!(receivers.push(700, 1, 900, true, &[0x65, 1]).is_some());
+		assert!(receivers.accept(7, true));
+		assert!(receivers.push(800, 1, 900, true, &[0x65, 1]).is_some());
+		assert!(receivers.accept(8, true));
+		assert!(!receivers.awaiting());
+		assert_eq!(receivers.take_stats().incomplete, 0);
+		// Video simply stops: no loss is observed, so only the stall path recovers it.
+		assert!(receivers.has_sources());
+		receivers.require_all_keyframes();
+		assert!(receivers.awaiting());
+		assert_eq!(
+			receivers.keyframe_requests().collect::<Vec<_>>(),
+			vec![700, 800]
+		);
+	}
+
+	#[test]
+	fn parameter_set_detection_needs_both_sps_and_pps() {
+		assert!(has_parameter_sets(&[
+			0, 0, 0, 1, 0x67, 1, 0, 0, 1, 0x68, 2, 0, 0, 0, 1, 0x65, 3
+		]));
+		assert!(!has_parameter_sets(&[
+			0, 0, 0, 1, 0x67, 1, 0, 0, 0, 1, 0x65, 3
+		]));
+		assert!(!has_parameter_sets(&[0, 0, 0, 1, 0x65, 3]));
+		assert!(!has_parameter_sets(&[]));
+	}
+
+	#[test]
+	fn receiver_stats_count_unknown_incomplete_and_complete_pictures() {
+		let mut receivers = Receivers::default();
+		receivers.announce(7, 700).unwrap();
+		assert!(receivers.push(999, 1, 900, true, &[0x65, 1]).is_none());
+		assert!(receivers.push(700, 1, 900, true, &[0x65, 1]).is_some());
+		assert!(receivers.push(700, 3, 1800, true, &[0x41, 1]).is_none());
+		let stats = receivers.take_stats();
+		assert_eq!(
+			(stats.unknown_ssrc, stats.incomplete, stats.complete),
+			(1, 1, 1)
+		);
+		assert!(receivers.awaiting());
+		let stats = receivers.take_stats();
+		assert_eq!(
+			(stats.unknown_ssrc, stats.incomplete, stats.complete),
+			(0, 0, 0)
+		);
+	}
+
+	#[test]
 	fn single_stap_and_fragmented_nal_units_rebuild_annex_b() {
 		let mut assembler = Assembler::default();
 		// SPS + PPS aggregated, then a fragmented IDR slice, all in one picture.
@@ -491,6 +639,31 @@ mod tests {
 			sequence = sequence.wrapping_add(1);
 		}
 		assert!(huge.push(sequence, 1, true, &chunk).is_none());
+	}
+	#[test]
+	fn packet_loss_requests_a_keyframe_before_accepting_predictions() {
+		for missing_marker in [false, true] {
+			let mut receivers = Receivers::default();
+			receivers.announce(7, 700).unwrap();
+			assert!(receivers.push(700, 1, 900, true, &[0x65, 1]).is_some());
+			assert!(receivers.accept(7, true));
+			assert!(receivers.keyframe_requests().next().is_none());
+			if missing_marker {
+				assert!(receivers.push(700, 2, 1800, false, &[0x41, 1]).is_none());
+				// A new timestamp exposes an unfinished prior picture even without a sequence gap.
+				assert!(receivers.push(700, 3, 2700, true, &[0x41, 2]).is_some());
+			} else {
+				assert!(receivers.push(700, 3, 1800, true, &[0x41, 1]).is_none());
+			}
+			assert_eq!(receivers.keyframe_requests().collect::<Vec<_>>(), vec![700]);
+			assert!(!receivers.accept(7, false));
+			assert!(receivers.push(700, 4, 3600, true, &[0x41, 3]).is_some());
+			assert!(!receivers.accept(7, false));
+			assert!(receivers.push(700, 5, 4500, true, &[0x65, 4]).is_some());
+			assert!(receivers.accept(7, true));
+			assert!(receivers.keyframe_requests().next().is_none());
+			assert!(receivers.accept(7, false));
+		}
 	}
 	#[test]
 	fn receivers_bind_ssrcs_to_users_within_the_source_limit() {
@@ -540,7 +713,7 @@ mod tests {
 				.unwrap()
 				.push((frame.user, frame.width, frame.height, frame.rgba.to_vec()));
 		});
-		let mut decoder = Backend::new(true, 9, &sink).expect("hardware backend");
+		let mut decoder = Backend::new(true, 9, &sink, &Arc::default()).expect("hardware backend");
 		assert!(matches!(decoder, Backend::Hardware(_)));
 		let mut scratch = Vec::new();
 		for _ in 0..3 {
@@ -594,7 +767,7 @@ mod tests {
 			let sink: VideoSink = Arc::new(move |_| {
 				seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 			});
-			let mut decoder = Backend::new(hardware, 1, &sink).unwrap();
+			let mut decoder = Backend::new(hardware, 1, &sink, &Arc::default()).unwrap();
 			let mut scratch = Vec::new();
 			// Session start-up (IOSurface, Metal) is a one-time cost; time steady state only.
 			let _ = decoder.decode(&frames[0], &mut scratch);

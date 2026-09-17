@@ -44,6 +44,40 @@ No speed improvement is claimed. The production build was launched for owner
 testing; this is not synthetic screenshot or live interoperability evidence.
 Packaging passed; the existing OpenH264 LNK4255 warning was nonfatal. NSIS is
 unavailable, so these are unsigned portable packages rather than installers.
+# Stream audio call-playback exclusion - September 15, 2026
+
+Baseline `a28b646` and the exclusion implementation in PR #230 were packaged with
+`cargo xtask package`, standard release with voice and no demo/developer features,
+Rust 1.98.1, macOS 27.0 (26A428), Apple M1 Pro / 16 GiB. Baseline output was copied
+to a separate directory before edits. One package measurement per revision; both
+local ad-hoc signatures passed verification.
+
+| Metric / method | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Packaged executable, bytes | 66,716,336 | 66,716,336 | 0 |
+| Installed bundle, sum of files | 72,623,733 | 72,626,189 | +2,456 (+0.0034%) |
+| ZIP, `ditto -c -k --keepParent` | 43,389,158 | 43,390,952 | +1,794 (+0.0041%) |
+
+The macOS executable is unchanged; package growth is notices/provenance. This does
+not measure Linux/Windows binary size, capture CPU, RSS or end-to-end A/V latency.
+Those native desktop measurements remain unavailable, and no speed improvement is claimed.
+
+Linux now owns at most 32 application monitors with 100 ms / 38,400 bytes of pending
+PCM each, plus the existing four-chunk transport queue. Discovery admits at most 256
+entries and one in-flight request. Mixing uses a fixed 10 ms cadence on one worker;
+with no eligible apps it sends no audio and waits up to 100 ms for native events.
+Windows uses one native process-loopback worker and the existing bounded audio queue.
+Native server/driver allocations are additional; these are payload limits, not RSS.
+
+An additional temporary harness compiled the actual Linux adapter against a private
+PulseAudio 17 server on this Mac, loading only `module-null-sink` and a private UNIX
+protocol socket (`-n`, no default or hardware modules). `pacat` supplied synthetic
+48 kHz float stereo: game `(0.125, 0.25)`, Serein `(0.5, -0.5)`, 100 ms playback latency
+and 20 ms process time. The final run, after three seconds warmup, delivered
+144,000 stereo frames in three seconds, all at the game's expected amplitude. No sample exceeded
+the game-only bounds when Serein playback appeared. Rekey, application removal,
+Serein-only idle and stop also passed. This verifies the Pulse API with synthetic
+signals; it is not Linux/PipeWire hardware, Discord interoperability or a latency benchmark.
 
 # Theme editor readability - September 15, 2026
 
@@ -543,6 +577,70 @@ No owner-account or live load test was performed. Account budgets are finite com
 allocation estimates (128 MiB navigation/permission and 64 MiB permission sub-budget),
 not whole-process memory guarantees; decoding and old/new state replacement add peak memory.
 
+## Linux and Windows stream audio — September 15, 2026
+
+Compared baseline `0628052` with stream-audio commit `79d1bc0` on macOS 27.0
+(26A428), Apple M1 Pro, 16 GiB RAM, Rust 1.98.1. Both use `cargo xtask package`:
+the standard release build including voice, without demo/developer-session features.
+Baseline output was preserved in a detached worktree before building the changed tree.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Packaged macOS executable bytes | 66,409,328 | 66,410,496 | +1,168 (+0.0018%) |
+| Installed app bundle bytes | 72,316,725 | 72,317,893 | +1,168 (+0.0016%) |
+| Compressed app ZIP bytes | 43,275,334 | 43,277,237 | +1,903 (+0.0044%) |
+
+One build per revision; executable file size after the packaging strip/sign step.
+This measures the shared audio transport changes on macOS, not the size or runtime
+cost of the Linux/Windows adapters. Installed size sums regular files in `Serein.app`;
+ZIP uses `ditto -c -k --keepParent`. Compression varies with binary content and metadata;
+these tiny deltas do not establish a runtime improvement. No Rust dependency was added.
+
+Capture uses four bounded PCM chunks (up to 38,400 bytes each); the sender reserves
+38,400 PCM bytes and sends one 20 ms stereo Opus frame per tick. Linux adds four
+bounded appsink buffers and a separate event-driven audio worker. These are component
+limits, not RSS measurements. Synthetic checks exercise audio gates, rekey generation
+tags, queue pressure, malformed PCM, pacing and cancellation without opening devices.
+
+Linux/Windows hardware capture CPU, RSS, A/V latency and native before/after UI
+screenshots remain unmeasured because those desktop sessions are unavailable here.
+The macOS demo does not execute either new native adapter; no native performance
+improvement or live interoperability is claimed. Windows cross-checking on this Mac
+also stopped in existing native Opus/OpenH264 build scripts (missing Visual Studio
+generator / incompatible host C++ flags), before checking the Windows adapter.
+
+The follow-up after owner testing moves Windows frame admission ahead of D3D11
+readback. Capture is capped at the selected frame rate, and no new staging texture,
+GPU-to-CPU copy, or raw-frame allocation is performed while the one-frame queue is
+occupied. Windows OpenH264 uses its low-complexity mode. Before this change those
+costs ran for every compositor callback and frame-rate/queue dropping happened only
+after readback. At 1920x1080 BGRA, each avoided readback and subsequent copy is
+8,294,400 bytes; a 3840x2160 source is 33,177,600 bytes. These are buffer sizes and
+work bounds derived from the dimensions, not throughput measurements.
+
+Native Windows frame time, CPU/RSS, GPU copy load and viewer FPS remain unmeasured on
+this macOS host. The owner observed severe lag at 1080p60 before this follow-up; the
+new result requires another Windows measurement.
+
+The next follow-up prefers a Windows Media Foundation hardware H.264 transform and
+falls back to the existing OpenH264 encoder when hardware activation, encoding, or a
+forced keyframe fails. It keeps the existing bounded CPU BGRA-to-NV12 conversion and
+GPU readback, so this offloads H.264 compression but is not a zero-copy pipeline.
+The native transform and fallback source both produce the same bounded Annex-B stream.
+Actual NVIDIA encoder selection, viewer FPS, sender CPU and stop/start stability still
+require owner testing on Windows hardware.
+
+The standard macOS release package at the preceding `0e7d2a3` revision versus this
+follow-up changed from 66,716,336 to 66,716,480 executable bytes (+144), from
+72,626,189 to 72,626,333 installed bundle bytes (+144), and from 43,390,952 to
+43,393,402 ZIP bytes (+2,450). One package per revision used the same host and
+`cargo xtask package`; ZIP compression noise is not a speed improvement or regression.
+
+The hardware-encoder follow-up, compared with that preceding package, is 66,716,320
+executable bytes (-160), 72,626,173 installed bundle bytes (-160), and 43,393,952
+ZIP bytes (+550). The Windows-only Media Foundation module is excluded from this
+macOS package; these measurements cover only the small shared encoder selection change.
+
 
 ## 2026-09-15: gallery preview, customization and selection
 
@@ -613,3 +711,109 @@ Matched Windows x64, Rust 1.98.1 MSVC, standard voice-enabled packages contain t
 Both builds passed with the same nonfatal OpenH264 LNK4255 warning. `makensis` is unavailable,
 so these are unsigned portable distributions. Native UI measurements remain unavailable because
 desktop capture/control is disabled and Orca is absent; no runtime performance claim is made.
+## Linux and Windows stream audio — September 15, 2026
+
+Compared baseline `0628052` with the stream-audio implementation on macOS 27.0
+(26A428), Apple M1 Pro, 16 GiB RAM, Rust 1.98.1. Both use `cargo xtask package`:
+the standard release build including voice, without demo/developer-session features.
+Baseline output was preserved in a detached worktree before building the changed tree.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Packaged macOS executable bytes | 66,409,328 | 66,410,496 | +1,168 (+0.0018%) |
+| Installed app bundle bytes | 72,316,725 | 72,317,893 | +1,168 (+0.0016%) |
+| Compressed app ZIP bytes | 43,275,334 | 43,277,237 | +1,903 (+0.0044%) |
+
+One build per revision; executable file size after the packaging strip/sign step.
+This measures the shared audio transport changes on macOS, not the size or runtime
+cost of the Linux/Windows adapters. Installed size sums regular files in `Serein.app`;
+ZIP uses `ditto -c -k --keepParent`. Compression varies with binary content and metadata;
+these tiny deltas do not establish a runtime improvement. No Rust dependency was added.
+
+Capture uses four bounded PCM chunks (up to 38,400 bytes each); the sender reserves
+38,400 PCM bytes and sends one 20 ms stereo Opus frame per tick. Linux adds four
+bounded appsink buffers and a separate event-driven audio worker. These are component
+limits, not RSS measurements. Synthetic checks exercise audio gates, rekey generation
+tags, queue pressure, malformed PCM, pacing and cancellation without opening devices.
+
+Linux/Windows hardware capture CPU, RSS, A/V latency and native before/after UI
+screenshots remain unmeasured because those desktop sessions are unavailable here.
+The macOS demo does not execute either new native adapter; no native performance
+improvement or live interoperability is claimed. Windows cross-checking on this Mac
+also stopped in existing native Opus/OpenH264 build scripts (missing Visual Studio
+generator / incompatible host C++ flags), before checking the Windows adapter.
+## 2026-09-15: stream packet markers and keyframe recovery
+
+| Metric / method | Baseline `0a8f0ab` | After | Delta |
+| --- | ---: | ---: | ---: |
+| Release executable bytes | 72,557,568 | 72,576,000 | +18,432 (+0.0254%) |
+| Full portable package bytes | 76,626,644 | 76,645,076 | +18,432 (+0.0241%) |
+| ZIP bytes, Optimal | 43,288,437 | 43,294,686 | +6,249 (+0.0144%) |
+
+Standard voice-enabled `cargo xtask package` on Windows 11 Home build 26200,
+AMD Ryzen 7 7800X3D, 33,410,678,784 bytes RAM, pinned Rust 1.98.1 MSVC.
+One package per revision; 187 files each. Baseline `0a8f0ab` was built from the
+unchanged checkout and preserved before editing. The after column is this follow-up.
+Package size sums regular files; ZIP uses PowerShell Compress-Archive Optimal.
+Both packages built successfully. The after release build took 2m 38s.
+OpenH264 linker LNK4255 warnings were nonfatal; missing `makensis` means these
+are unsigned portable packages, without an NSIS installer.
+
+Soundshare marking adds eight bytes per audio RTP packet. The idle screen recovery
+retains one current raw snapshot, bounded to 33,177,600 bytes; fitted 720p/1080p
+snapshots use 3,686,400/8,294,400 bytes. These are component bounds, not RSS measures.
+No dependency was added. Ordinary idle screens do not encode extra frames.
+
+Native media CPU/RSS, GPU use and end-to-end audio/video latency remain unmeasured:
+native desktop control/capture is disabled in this session, and no owner-operated
+live stream was run. The two-endpoint encrypted localhost test checks media delivery,
+not capture or speakers. No speed, hardware-capture or live interoperability claim
+follows from package sizes or the passing test.
+
+### 2026-09-16: stream diagnostic follow-up
+
+| Metric / method | Baseline `b445aae` | After | Delta |
+| --- | ---: | ---: | ---: |
+| Release executable bytes | 72,576,000 | 72,578,560 | +2,560 (+0.0035%) |
+| Full portable package bytes | 76,645,076 | 76,647,636 | +2,560 (+0.0033%) |
+| ZIP bytes, Optimal | 43,294,686 | 43,295,117 | +431 (+0.0010%) |
+
+Same Windows host, pinned toolchain, standard voice-enabled package and size method
+as above; one package per revision, 187 files each. The baseline package was preserved
+before this edit. The follow-up package built in a separate checkout in 3m 20s;
+NSIS remains unavailable. No dependency change. Diagnostic reports retain their
+eight-item queue and process-wide 128-report / 64-KiB output limits. Disabled
+diagnostics still evaluate a few state flags/atomic loads on the 50-Hz stream tick.
+CPU/RSS and end-to-end media latency remain unmeasured; no speed improvement is claimed.
+
+### Windows loopback recreation follow-up
+
+Against the preserved `14456e9` package, the same standard Windows release package
+has a 72,580,608-byte executable (+2,048), 76,649,684 total package bytes (+2,048),
+and a 43,295,212-byte Optimal ZIP (+95); still 187 files. Native capture clients are
+released and recreated sequentially on encryption epoch changes, preserving existing
+packet and queue bounds. No dependency change. The owner confirmed audible shared
+browser audio; the release sender log records about 50 audio packets/s and 19–22
+video frames/s after negotiation. These are sender counters from one owner test,
+not a controlled performance comparison or proof of smooth viewer playback.
+The owner still reports intermittent lag; the subsequently supplied viewer log stops
+accepting audio and video while the main call continues.
+
+### Idle media UDP keepalive follow-up
+
+Against preserved `be42b72`, the release executable is 72,583,680 bytes (+3,072),
+the portable package totals 76,652,756 bytes (+3,072), and its Optimal ZIP is
+43,297,676 bytes (+2,464); still 187 files. Same host, toolchain and compression
+method as above, one package per revision. Compilation/linking completed, but
+`cargo xtask package` could not replace the running `target/release/serein.exe`
+(Windows access denied). The newly linked `target/release/deps/serein.exe` was
+copied into the existing standard `dist` resources and zipped; SHA-256 verified
+that the packaged executable matches the linked output. The running build was
+left untouched. This is a manually refreshed portable package, not a successful
+rerun of the standard packaging command.
+
+The keepalive adds eight UDP payload bytes per connection every five seconds
+after discovery (1.6 bytes/s, excluding network headers), with no queue, extra
+thread or dependency. The localhost test verifies repeated idle-viewer pings and
+subsequent encrypted audio/video delivery. Live freeze recovery, CPU/RSS and
+end-to-end latency remain unmeasured; no playback improvement is claimed yet.

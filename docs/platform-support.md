@@ -2,6 +2,12 @@
 
 Target platforms are Windows, macOS and Linux. **macOS arm64, Windows x64 and Linux x64 have local build evidence.** macOS has native visual checks; Windows has offline tests and a process/window startup smoke check only. Minimum OS versions, other architectures, real screen-reader support and native login-method support are not certified.
 
+Windows defaults to DirectX 12 to avoid reported startup access violations in Intel's
+Vulkan driver (`igvk64.dll`). The existing `WGPU_BACKEND` environment override remains
+available (for example, `dx12` or `vulkan`). Affected users confirmed that forcing
+DX12 launches successfully; the new default still needs native Windows validation.
+macOS and Linux retain their existing backend defaults.
+
 The custom title strip requests a native window move on the initial primary-button press,
 including over its nonselectable context title. It does not wait for egui's text/drag threshold.
 Caption buttons and other clickable title-strip controls keep their own actions; Windows
@@ -155,3 +161,24 @@ automatically updates the Windows uninstall `DisplayVersion` registry key upon
 successful upgrade. Native helpers wait for the old process to exit, retain a rollback
 copy during replacement, and relaunch Serein. A failed recovery leaves its backup
 available with a visible recovery path on the next update attempt.
+
+## Linux screen sharing
+
+Screen sharing requires PipeWire, a ScreenCast-capable portal backend for the current
+desktop (GNOME, KDE or the compositor-specific backend), and GStreamer Base/Good plus
+the PipeWire source plugin. GStreamer 1.24+ is recommended; GPU scaling/encoding also
+needs the applicable VA, NVCodec and OpenGL plugins and working driver support.
+Native packages declare the PipeWire and Base runtime plugins; hardware codec availability
+still depends on distribution packaging and drivers. The software fallback reuses bundled
+OpenH264. Flatpak needs compatible plugins/GPU access inside its runtime; no extra sandbox
+permission or host socket access is added. Native Linux validation remains pending.
+
+Optional Linux stream audio uses native `libpulse` per-application monitoring on
+PulseAudio or PipeWire's PulseAudio server. Source builds need the libpulse development
+package (`libpulse-dev`, `pulseaudio-libs-devel`, `libpulse-devel` or Arch's `libpulse`).
+The existing Flatpak PulseAudio socket permission covers this access; the ScreenCast
+portal's PipeWire remote grants video only. Windows uses native process loopback on
+build 20348+ (Windows 11 / Server 2022), with a visible audio error on older systems.
+Both exclude Serein's playback and capture other applications even when sharing one
+window. There is no whole-output fallback. Hardware exclusion and receiving sound in
+an official client remain unverified.

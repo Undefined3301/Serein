@@ -14,7 +14,7 @@ The composer schedules one visible expiry deadline and performs no animation or 
 - `client-core`: single UI-thread state owner, generation-tagged events, composer/send lifecycle, navigation and freshness. Network callbacks never mutate it directly.
 - `session-cache`: one active 500-message / 4 MiB timeline, bounded patches/tombstones. Inactive history goes to `local-store`; no unbounded RAM cache per channel.
 - `discord-api`: fixed Discord origin, verified TLS, no redirects, cookies or proxy discovery, four concurrent REST permits, bounded response bodies and conservative shared service cooldown.
-- `discord-gateway`: independent Tokio task; JSON without compression, Hello/ACK/heartbeats, Identify/Resume, bounded retry lifecycle. UI queue overload stops the connection instead of silently losing message mutations.
+- `discord-gateway`: independent Tokio task; JSON without compression, Hello/ACK/heartbeats, Identify/Resume, bounded initial login retries and persistent reconnection with capped backoff after READY. UI queue overload stops the connection instead of silently losing message mutations.
 - `local-store`: SQLite transactions, global disk ceilings, account-isolated messages/drafts. A dedicated worker serializes operations away from rendering.
 - `platform`: OS credential store, temporary Wry login webview and native file-save dialog. No system profile/token extraction. Credential operations are serialized by a dedicated worker to order saves before logout deletion.
 - `ui`: egui panels, viewport virtualization and multiline composition; typed commands only. No network requests or tokens.
@@ -39,7 +39,7 @@ Bundled OFL Noto CJK/Arabic fallbacks add 16.51 MiB raw font data; there is no r
 
 History responses/errors must match the active request and connection state. Recent reload replaces the retained view while preserving mutations observed during the request; back-pagination validates page channel, ID boundary, duplicates and cardinality. At capacity, an older window retains its reading position instead of evicting its anchor for new messages; Reload returns to latest. Successful Resume triggers active-page revalidation. Bulk deletions occupy one bounded event instead of flooding the UI queue.
 
-Known limits: one RAM channel window, a CommonMark subset rather than Discord Markdown parity, conservative shared rate cooldown, six reconnect attempts between stable-ready periods, and full-window cache writes rather than per-message SQL updates. These are implementation limits, not claims of full milestone completion.
+Known limits: one RAM channel window, a CommonMark subset rather than Discord Markdown parity, conservative shared rate cooldown, six initial connection attempts (established sessions keep retrying outages with a delay capped at 32 seconds plus jitter), and full-window cache writes rather than per-message SQL updates. These are implementation limits, not claims of full milestone completion.
 
 The active People pane retains at most 100 service list positions and 128 KiB of member metadata. DM participants are retained with navigation; guild member subscriptions are on demand and remain unofficial/live-unverified. Member events are tagged with the active request and matched to the service list identity; closing or navigating the pane releases its working set.
 

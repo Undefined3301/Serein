@@ -148,11 +148,11 @@ impl Heartbeat {
 	}
 }
 fn next_attempt(attempt: u32, ready_for: Option<Duration>) -> u32 {
-	// A stable connection earns a fresh retry budget; READY/reconnect flapping does not.
+	// Reset backoff only after a stable connection; cap it during prolonged outages.
 	if ready_for.is_some_and(|duration| duration >= Duration::from_secs(60)) {
 		1
 	} else {
-		attempt + 1
+		attempt.saturating_add(1).min(6)
 	}
 }
 fn jitter_ms(max: u64) -> u64 {
@@ -662,7 +662,8 @@ async fn run_inner(
 	let mut inbox = channel_events::Inbox::default();
 	let mut known_guilds = std::collections::BTreeSet::new();
 	let mut voice_open = true;
-	while attempt < 6 {
+	// Initial login is bounded, but an established session must survive long outages.
+	while was_ready || attempt < 6 {
 		if attempt > 0 {
 			calls.disconnected();
 			while voice_controls.try_recv().is_ok() {}
@@ -687,7 +688,7 @@ async fn run_inner(
 		)
 		.await;
 		let Ok(Ok((mut socket, _))) = connection else {
-			attempt += 1;
+			attempt = next_attempt(attempt, None);
 			continue;
 		};
 		let mut compression = compression::Decoder::default();
@@ -710,7 +711,7 @@ async fn run_inner(
 			return Err(failure);
 		}
 		let Ok(Ok(Frame::Text(text))) = hello else {
-			attempt += 1;
+			attempt = next_attempt(attempt, None);
 			continue;
 		};
 		let packet: GatewayPacket =
@@ -742,7 +743,7 @@ async fn run_inner(
 			.await,
 			Ok(Ok(()))
 		) {
-			attempt += 1;
+			attempt = next_attempt(attempt, None);
 			continue;
 		}
 		let mut heartbeat = Heartbeat::default();
@@ -2109,6 +2110,8 @@ mod tests {
 		assert_eq!(next_attempt(5, Some(Duration::from_secs(1))), 6);
 		assert_eq!(next_attempt(5, Some(Duration::from_secs(60))), 1);
 		assert_eq!(next_attempt(5, None), 6);
+		assert_eq!(next_attempt(6, None), 6);
+		assert_eq!(next_attempt(u32::MAX, None), 6);
 		assert_eq!(close_action(4004), Reconnect::Stop);
 		assert_eq!(close_action(4007), Reconnect::Identify);
 		assert_eq!(close_action(1006), Reconnect::Resume);

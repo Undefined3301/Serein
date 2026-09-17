@@ -639,6 +639,11 @@ fn config(device: &cpal::Device, input: bool) -> Result<cpal::SupportedStreamCon
 			.map_err(|_| "Microphone formats are unavailable")?
 			.take(64)
 			.collect()
+	} else if cfg!(target_os = "windows") {
+		// WASAPI advertises converted formats too; enumeration order can pick
+		// 16-bit PCM that a driver rejects. Use its native shared-mode mix format
+		// below and let Playback handle conversion from our 48 kHz frames.
+		Vec::new()
 	} else {
 		device
 			.supported_output_configs()
@@ -735,7 +740,21 @@ where
 			},
 			None,
 		)
-		.map_err(|_| "Could not open speaker device")
+		.map_err(|error| match error.kind() {
+			cpal::ErrorKind::DeviceBusy => {
+				"Could not open speaker device: device is busy; close other audio apps and retry"
+			}
+			cpal::ErrorKind::DeviceNotAvailable | cpal::ErrorKind::StreamInvalidated => {
+				"Could not open speaker device: device disconnected or changed; select another output"
+			}
+			cpal::ErrorKind::UnsupportedConfig => {
+				"Could not open speaker device: audio format is unsupported; check system sound settings"
+			}
+			cpal::ErrorKind::PermissionDenied => {
+				"Could not open speaker device: system denied audio access"
+			}
+			_ => "Could not open speaker device: audio driver failed; check system sound settings",
+		})
 }
 fn amplify(sample: f32, gain: f32) -> f32 {
 	if sample.is_finite() {
