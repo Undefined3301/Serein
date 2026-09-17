@@ -454,7 +454,11 @@ mod tests {
 		assert!(bindings.is_valid());
 		assert_eq!(
 			chord_parts(bindings.chord(KeybindAction::SwitchConversation)).join(" + "),
-			"Ctrl + K"
+			if cfg!(target_os = "macos") {
+				"⌘ + K"
+			} else {
+				"Ctrl + K"
+			}
 		);
 		let ctx = egui::Context::default();
 		let mut matched = false;
