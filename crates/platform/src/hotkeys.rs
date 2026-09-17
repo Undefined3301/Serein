@@ -107,6 +107,12 @@ impl Hotkeys {
 	}
 }
 
+impl Default for Hotkeys {
+	fn default() -> Self {
+		Self::new()
+	}
+}
+
 fn native_hotkey(chord: &KeyChord) -> Option<HotKey> {
 	if !chord.is_valid() {
 		return None;

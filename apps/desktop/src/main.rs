@@ -3196,7 +3196,7 @@ impl Desktop {
 					self.app_settings.loaded = result.is_ok();
 					if !self.app_settings.state.touched {
 						match result {
-							Ok(value) => self.app_settings.current = value.clone(),
+							Ok(value) => self.app_settings.current = value.as_ref().clone(),
 							Err(_) => self.app_settings.state.failed = true,
 						}
 						if !self.state.demo && !self.fixture_only {

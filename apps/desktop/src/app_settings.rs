@@ -15,7 +15,7 @@ impl Settings {
 			cache.queue(
 				generation,
 				model::Id(0),
-				crate::cache::Operation::SaveAppPreferences(self.current.clone()),
+				crate::cache::Operation::SaveAppPreferences(Box::new(self.current.clone())),
 			)
 		});
 		// A full cache queue must not turn a device preference into a session-only change.
