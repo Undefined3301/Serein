@@ -524,6 +524,7 @@ fn show_system(
 	state: &State,
 	profile: &mut Option<model::User>,
 	user_action: &mut Option<crate::user_menu::Action>,
+	surface: &mut crate::select::Surface,
 ) {
 	{
 		let colors = crate::design::palette(ui);
@@ -531,29 +532,41 @@ fn show_system(
 			ui.spacing_mut().item_spacing = egui::vec2(0.0, 2.0);
 			for segment in &system.segments {
 				if !segment.strong {
-					ui.label(RichText::new(&segment.text).color(colors.muted));
+					let (pos, galley, response) =
+						egui::Label::new(RichText::new(&segment.text).color(colors.muted))
+							.wrap()
+							.selectable(false)
+							.layout_in_ui(ui);
+					surface.run(ui, &response, pos, galley, Vec::new());
 					continue;
 				}
 				let text = crate::design::medium(ui, &segment.text, 15.0).color(colors.text_strong);
 				let Some(user) = &segment.user else {
-					ui.add(egui::Label::new(text));
+					let (pos, galley, response) = egui::Label::new(text)
+						.wrap()
+						.selectable(false)
+						.layout_in_ui(ui);
+					surface.run(ui, &response, pos, galley, Vec::new());
 					continue;
 				};
 				let response = ui
 					.add(egui::Label::new(text).sense(egui::Sense::click()))
 					.on_hover_cursor(egui::CursorIcon::PointingHand);
+				surface.keep(&response);
 				crate::user_menu::show(&response, state, user, profile, user_action);
 				if response.clicked() {
 					*profile = Some(user.clone());
 				}
 			}
 			ui.add_space(8.0);
-			ui.label(
-				RichText::new(format!("{:02}:{:02}", time.hour(), time.minute()))
-					.size(12.0)
-					.color(colors.muted),
-			)
-			.on_hover_text_with(|| format!("{time} UTC"));
+			let stamp = ui
+				.label(
+					RichText::new(format!("{:02}:{:02}", time.hour(), time.minute()))
+						.size(12.0)
+						.color(colors.muted),
+				)
+				.on_hover_text_with(|| format!("{time} UTC"));
+			surface.keep(&stamp);
 		});
 	}
 }
@@ -1340,6 +1353,7 @@ impl TimelineView {
 											state,
 											profile,
 											&mut self.user_action,
+											&mut surface,
 										);
 									}
 									let body = egui::Frame::NONE
