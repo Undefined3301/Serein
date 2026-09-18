@@ -1068,7 +1068,7 @@ impl MessagingUi {
 				let response = ui.interact(
 					empty,
 					ui.scope_id().with(("server-channel-area", guild)),
-					egui::Sense::click(),
+					crate::design::menu_anchor_sense(),
 				);
 				let mut next = hide_muted;
 				self.channel_menu

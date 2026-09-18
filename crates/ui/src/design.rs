@@ -780,6 +780,14 @@ pub fn eyebrow(ui: &egui::Ui, text: impl Into<String>, color: Color32) -> RichTe
 	semibold(ui, text.into().to_uppercase(), 12.0).color(color)
 }
 
+fn is_activate_target(sense: egui::Sense) -> bool {
+	sense.senses_click() && (!sense.senses_drag() || sense.is_focusable())
+}
+
+pub(crate) fn menu_anchor_sense() -> egui::Sense {
+	egui::Sense::focusable_noninteractive()
+}
+
 // Registered once per context, including when appearance settings reapply the theme.
 struct ClickableCursor;
 impl egui::Plugin for ClickableCursor {
@@ -788,17 +796,13 @@ impl egui::Plugin for ClickableCursor {
 	}
 	fn on_end_pass(&mut self, ui: &mut egui::Ui) {
 		let ctx = ui.ctx();
-		// Text, resize, drag and other explicitly chosen cursors take precedence.
 		if ctx.output(|output| output.cursor_icon) != egui::CursorIcon::Default {
 			return;
 		}
 		let hovered = ctx.interaction_snapshot(|snapshot| snapshot.hovered.clone());
 		if hovered.into_iter().any(|id| {
 			ctx.read_response(id).is_some_and(|response| {
-				response.enabled()
-					&& response.hovered()
-					&& response.sense.senses_click()
-					&& !response.sense.senses_drag()
+				response.enabled() && response.hovered() && is_activate_target(response.sense)
 			})
 		}) {
 			ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -1377,7 +1381,9 @@ mod tests {
 				("button", CursorIcon::PointingHand),
 				("checkbox", CursorIcon::PointingHand),
 				("custom", CursorIcon::PointingHand),
-				("click-drag", CursorIcon::Default),
+				("click-drag", CursorIcon::PointingHand),
+				("chrome", CursorIcon::Default),
+				("menu-anchor", CursorIcon::Default),
 				("disabled", CursorIcon::Default),
 				("disabled-custom", CursorIcon::Default),
 				("hover", CursorIcon::Default),
@@ -1411,6 +1417,8 @@ mod tests {
 											match kind {
 												"hover" => Sense::hover(),
 												"click-drag" => Sense::click_and_drag(),
+												"chrome" => Sense::CLICK | Sense::DRAG,
+												"menu-anchor" => super::menu_anchor_sense(),
 												_ => Sense::click(),
 											},
 										)

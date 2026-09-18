@@ -32,14 +32,31 @@ pub(super) fn popup(response: &egui::Response, id: egui::Id) -> egui::Popup<'_> 
 		&& response
 			.ctx
 			.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::F10));
-	let mut popup = egui::Popup::context_menu(response).id(id);
+	let passive = !response.sense.senses_click();
+	let pointer_opened = if passive {
+		response.container_secondary_clicked()
+	} else {
+		response.secondary_clicked()
+	};
+	let mut popup = if passive {
+		egui::Popup::menu(response)
+			.open_memory(if pointer_opened {
+				Some(egui::SetOpenCommand::Bool(true))
+			} else if response.container_clicked() {
+				Some(egui::SetOpenCommand::Bool(false))
+			} else {
+				None
+			})
+			.at_pointer_fixed()
+	} else {
+		egui::Popup::context_menu(response)
+	}
+	.id(id);
 	if keyboard {
 		popup = popup
 			.open_memory(Some(egui::SetOpenCommand::Bool(true)))
 			.at_position(response.rect.right_bottom());
-	} else if !response.secondary_clicked()
-		&& egui::Popup::position_of_id(&response.ctx, id).is_none()
-	{
+	} else if !pointer_opened && egui::Popup::position_of_id(&response.ctx, id).is_none() {
 		// Keyboard-opened menus have no remembered pointer position.
 		popup = popup.at_position(response.rect.right_bottom());
 	}

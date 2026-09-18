@@ -234,6 +234,22 @@ impl MessagingUi {
 		})
 	}
 
+	fn remember_profile_trigger(&mut self, user: &model::User, rect: egui::Rect) {
+		if self.profile.as_ref().is_some_and(|open| open.id == user.id) {
+			self.profile_trigger = Some(rect);
+		}
+	}
+
+	fn toggle_profile(&mut self, user: &model::User) {
+		if self.profile.as_ref().is_some_and(|open| open.id == user.id) {
+			self.profile = None;
+			self.profile_link = None;
+			self.profile_anchor = None;
+		} else {
+			self.profile = Some(user.clone());
+		}
+	}
+
 	pub(super) fn voice_participant(
 		&mut self,
 		ui: &mut egui::Ui,
@@ -248,71 +264,88 @@ impl MessagingUi {
 		ui.push_id(
 			("voice-participant", entry.channel, entry.participant.user),
 			|ui| {
-				ui.horizontal(|ui| {
-					ui.set_min_height(34.0);
-					ui.spacing_mut().item_spacing.x = 6.0;
-					let avatar = if let Some(user) = user {
-						self.avatars.show(ui, user, 28.0, state.demo)
-					} else {
-						design::avatar(ui, name, 28.0)
-					};
-					if self.is_speaking(state, entry.channel, &entry.participant) {
-						speaking_avatar(ui, &avatar, name);
+				let (rect, row) = ui.allocate_exact_size(
+					egui::vec2(ui.available_width(), 34.0),
+					egui::Sense::click(),
+				);
+				row.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name));
+				let hovered = row.contains_pointer() || row.has_focus();
+				if hovered {
+					ui.painter().rect_filled(
+						rect.shrink2(egui::vec2(0.0, 1.0)),
+						8,
+						crate::design::row_highlight(ui, colors.hover, 1.0),
+					);
+				}
+				let name_color = if hovered {
+					colors.text_strong
+				} else {
+					colors.muted
+				};
+				let mut inner = ui.new_child(
+					egui::UiBuilder::new()
+						.max_rect(rect)
+						.layout(egui::Layout::left_to_right(egui::Align::Center)),
+				);
+				inner.spacing_mut().item_spacing.x = 6.0;
+				let avatar = match user {
+					Some(user) => self.avatars.show_plain(&mut inner, user, 28.0, state.demo),
+					None => {
+						let (r, response) = inner
+							.allocate_exact_size(egui::Vec2::splat(28.0), egui::Sense::hover());
+						design::paint_avatar(&inner, name, 28.0, r);
+						response.on_hover_text(name)
 					}
-					self.voice_participant_menu(&avatar, state, entry);
-					if avatar.clicked()
-						&& let Some(user) = user
-					{
-						self.profile = Some(user.clone());
+				};
+				if self.is_speaking(state, entry.channel, &entry.participant) {
+					speaking_avatar(&inner, &avatar, name);
+				}
+				inner.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+					if entry.participant.deafened {
+						status_icon(
+							ui,
+							true,
+							if entry.participant.server_deafened {
+								"Deafened by server"
+							} else {
+								"Deafened"
+							},
+						);
 					}
-					ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-						if entry.participant.deafened {
-							status_icon(
-								ui,
-								true,
-								if entry.participant.server_deafened {
-									"Deafened by server"
-								} else {
-									"Deafened"
-								},
-							);
-						}
-						if entry.participant.muted {
-							status_icon(
-								ui,
-								false,
-								if entry.participant.server_muted {
-									"Muted by server"
-								} else {
-									"Microphone muted"
-								},
-							);
-						}
-						if entry.participant.streaming {
-							live_badge(ui);
-						}
-						let response = ui
-							.allocate_ui_with_layout(
-								egui::vec2(ui.available_width(), 28.0),
-								egui::Layout::left_to_right(egui::Align::Center),
-								|ui| {
-									ui.add(
-										egui::Label::new(RichText::new(name).color(colors.muted))
-											.truncate()
-											.sense(egui::Sense::click()),
-									)
-								},
+					if entry.participant.muted {
+						status_icon(
+							ui,
+							false,
+							if entry.participant.server_muted {
+								"Muted by server"
+							} else {
+								"Microphone muted"
+							},
+						);
+					}
+					if entry.participant.streaming {
+						live_badge(ui);
+					}
+					ui.allocate_ui_with_layout(
+						egui::vec2(ui.available_width(), 28.0),
+						egui::Layout::left_to_right(egui::Align::Center),
+						|ui| {
+							ui.add(
+								egui::Label::new(RichText::new(name).color(name_color))
+									.truncate()
+									.selectable(false),
 							)
-							.inner
 							.on_hover_text(name);
-						self.voice_participant_menu(&response, state, entry);
-						if response.clicked()
-							&& let Some(user) = user
-						{
-							self.profile = Some(user.clone());
-						}
-					});
+						},
+					);
 				});
+				self.voice_participant_menu(&row, state, entry);
+				if let Some(user) = user {
+					self.remember_profile_trigger(user, row.rect);
+					if row.clicked() {
+						self.toggle_profile(user);
+					}
+				}
 			},
 		);
 	}
@@ -845,10 +878,11 @@ impl MessagingUi {
 			}
 		}
 		self.voice_participant_menu(&avatar, state, entry);
-		if avatar.clicked()
-			&& let Some(user) = user
-		{
-			self.profile = Some(user.clone());
+		if let Some(user) = user {
+			self.remember_profile_trigger(user, avatar.rect);
+			if avatar.clicked() {
+				self.toggle_profile(user);
+			}
 		}
 		// Discord's LIVE pill marks a streamer on every tile size; strip tiles get a small one
 		// so it never covers the avatar.

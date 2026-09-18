@@ -194,6 +194,7 @@ pub struct MessagingUi {
 	reading_zoom_draft: Option<u16>,
 	/// Where the open profile was requested from; the popout is placed beside it.
 	profile_anchor: Option<(Id, egui::Pos2)>,
+	profile_trigger: Option<egui::Rect>,
 	friend_removal: Option<(u64, model::User)>,
 	members_narrow_open: bool,
 	member_reload_requested: bool,
@@ -2658,6 +2659,7 @@ impl MessagingUi {
 		}
 		self.timeline.audio.seen = false;
 		self.timeline.video.seen = false;
+		self.profile_trigger = None;
 		let mut commands = Vec::new();
 		let ctx = ui.ctx().clone();
 		self.extensions.reset_theme_shortcut(&ctx);
@@ -3522,10 +3524,21 @@ impl MessagingUi {
 					commands.push(state.clear_profile());
 				}
 				Some(profiles::Action::Close) => {
-					self.profile = None;
-					self.profile_link = None;
-					self.profile_anchor = None;
-					commands.push(state.clear_profile());
+					let keep = self.profile_trigger.is_some_and(|rect| {
+						ctx.input(|input| {
+							input.pointer.any_pressed()
+								&& input
+									.pointer
+									.interact_pos()
+									.is_some_and(|pos| rect.contains(pos))
+						})
+					});
+					if !keep {
+						self.profile = None;
+						self.profile_link = None;
+						self.profile_anchor = None;
+						commands.push(state.clear_profile());
+					}
 				}
 				Some(profiles::Action::Retry) => {
 					if let Some(command) = state.request_profile(user.id, profile_guild) {
