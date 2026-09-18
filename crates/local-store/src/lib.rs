@@ -385,7 +385,7 @@ impl LocalStore {
 		}
 		Ok(())
 	}
-	/// Application-wide opt-in; an absent override keeps ordinary window minimization.
+	/// Application-wide opt-out; an absent override keeps the tray icon enabled.
 	pub fn minimize_to_tray(&self) -> Result<bool> {
 		let stored = self
 			.0
@@ -401,21 +401,21 @@ impl LocalStore {
 			)
 			.optional()?;
 		match stored {
-			None => Ok(false),
+			None => Ok(true),
 			Some(Some(enabled)) => Ok(enabled),
 			Some(None) => Err(StoreError::Incompatible),
 		}
 	}
 	pub fn save_minimize_to_tray(&self, enabled: bool) -> Result<()> {
 		if enabled {
-			self.0.execute(
-				"INSERT INTO minimize_to_tray(singleton,enabled) VALUES(1,1)
-                ON CONFLICT(singleton) DO UPDATE SET enabled=1",
-				[],
-			)?;
-		} else {
 			self.0
 				.execute("DELETE FROM minimize_to_tray WHERE singleton=1", [])?;
+		} else {
+			self.0.execute(
+				"INSERT INTO minimize_to_tray(singleton,enabled) VALUES(1,0)
+                ON CONFLICT(singleton) DO UPDATE SET enabled=0",
+				[],
+			)?;
 		}
 		Ok(())
 	}
@@ -1411,7 +1411,7 @@ mod tests {
 		assert_eq!(store.load_channel(Id(1), Id(2)).unwrap()[0].kind, 255);
 	}
 	#[test]
-	fn minimize_to_tray_is_bounded_opt_in_surviving_restart_and_logout() {
+	fn minimize_to_tray_is_bounded_opt_out_surviving_restart_and_logout() {
 		let root = std::env::temp_dir().join(format!(
 			"serein-synthetic-minimize-to-tray-{}",
 			std::process::id()
@@ -1419,20 +1419,20 @@ mod tests {
 		std::fs::create_dir_all(&root).unwrap();
 		let path = root.join("test.sqlite3");
 		let store = LocalStore::open(&path).unwrap();
-		assert!(!store.minimize_to_tray().unwrap());
+		assert!(store.minimize_to_tray().unwrap());
 		store
 			.0
 			.execute_batch("DROP TABLE minimize_to_tray;")
 			.unwrap();
 		drop(store);
 		let store = LocalStore::open(&path).unwrap();
-		assert!(!store.minimize_to_tray().unwrap());
-		store.save_minimize_to_tray(true).unwrap();
-		store.save_minimize_to_tray(true).unwrap();
+		assert!(store.minimize_to_tray().unwrap());
+		store.save_minimize_to_tray(false).unwrap();
+		store.save_minimize_to_tray(false).unwrap();
 		assert!(
 			store
 				.0
-				.execute("INSERT INTO minimize_to_tray VALUES(2,1)", [])
+				.execute("INSERT INTO minimize_to_tray VALUES(2,0)", [])
 				.is_err()
 		);
 		assert!(
@@ -1443,15 +1443,15 @@ mod tests {
 		);
 		drop(store);
 		let mut store = LocalStore::open(&path).unwrap();
-		assert!(store.minimize_to_tray().unwrap());
+		assert!(!store.minimize_to_tray().unwrap());
 		store.forget_account(Id(1)).unwrap();
-		assert!(store.minimize_to_tray().unwrap());
+		assert!(!store.minimize_to_tray().unwrap());
 		store.0.execute_batch("PRAGMA query_only=ON;").unwrap();
 		assert_eq!(
-			store.save_minimize_to_tray(false),
+			store.save_minimize_to_tray(true),
 			Err(StoreError::Unavailable)
 		);
-		assert!(store.minimize_to_tray().unwrap());
+		assert!(!store.minimize_to_tray().unwrap());
 		store
 			.0
 			.execute_batch("PRAGMA query_only=OFF; PRAGMA ignore_check_constraints=ON;")
@@ -1466,7 +1466,7 @@ mod tests {
 				.unwrap();
 			assert_eq!(store.minimize_to_tray(), Err(StoreError::Incompatible));
 		}
-		store.save_minimize_to_tray(false).unwrap();
+		store.save_minimize_to_tray(true).unwrap();
 		let count: u32 = store
 			.0
 			.query_row("SELECT count(*) FROM minimize_to_tray", [], |row| {
@@ -1476,7 +1476,7 @@ mod tests {
 		assert_eq!(count, 0);
 		drop(store);
 		let store = LocalStore::open(&path).unwrap();
-		assert!(!store.minimize_to_tray().unwrap());
+		assert!(store.minimize_to_tray().unwrap());
 		store
 			.0
 			.execute_batch("DROP TABLE minimize_to_tray;")

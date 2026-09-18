@@ -111,16 +111,22 @@ provider rejection and missing native webview runtimes fail visibly. macOS/Linux
 live CAPTCHA acceptance remains unverified. Widget
 loading and synthetic checks do not establish live Discord challenge acceptance.
 
-## Opt-in tray icon (September 13, 2026)
+## Opt-out tray icon (September 13, 2026)
 
-Windows General settings offer Show Serein in System Tray, off by default. Minimizing
+Windows General settings offer Show Serein in System Tray, on by default; turning it off
+falls back to ordinary window minimize/close. Minimizing
 keeps the window in the taskbar, including taskbar clicks and automatic startup. The icon supports
 keyboard/mouse restore and a Show Serein / Quit menu. Quit uses the normal unsaved
-work/download exit checks; the window Close button retains normal exit behavior.
-Disabling removes the tray icon without changing the window's minimized state.
+work/download exit checks; while the icon is live, the window Close button hides the
+window instead of exiting, and Serein keeps running with its logic ticking so
+notifications and calls continue. Show restores the window. Disabling the setting,
+or a tray that reports itself unavailable, restores a hidden window immediately, so
+Close can never strand the application without a way back.
 The adapter uses existing user32/Shell APIs and dependencies, with no background
 polling. A synthetic native Windows test verifies registration,
-minimize/restore, own-window taskbar recovery, Quit event and cleanup. macOS uses a native menu bar icon with Show Serein / Quit actions; minimized windows
+minimize/restore, own-window taskbar recovery, Quit event and cleanup. macOS uses a native menu bar icon with Show Serein / Quit actions; it draws Serein's own
+mark (`assets/brand/serein-tray.png`, rendered from the brand SVG) as an 18-point template
+image, so the system tints it for light, dark and highlighted menu bars. Minimized windows
 remain in the Dock. Linux retains an explicitly disabled control.
 
 ## Opt-in automatic startup
@@ -132,7 +138,7 @@ Windows Startup Apps can override this registration. Disable startup before dele
 a portable installation, or re-enable it after moving the executable.
 Minimized launches stay in the taskbar even when the saved tray preference is enabled;
 the tray can attach safely after a minimized launch. Tray failures leave the window
-recoverable. The Close button still exits, and the tray Quit action retains unsaved
+recoverable. Without a tray icon the Close button still exits, and the tray Quit action retains unsaved
 work checks. macOS registers a per-user `~/Library/LaunchAgents/cz.viceverse.serein.startup.plist`
 for the next graphical login, with the same launch flags. Turning it off removes only
 that file. It does not launch a second client when enabled or restart after Quit.
