@@ -12,6 +12,16 @@ const MAX_LINKS: usize = 16;
 const MAX_SPOILERS: u8 = 32;
 const MAX_BLOCKS: usize = 32;
 
+/// True when the raw source escapes the token at `at` with an odd run of backslashes.
+fn escaped(source: &str, at: usize) -> bool {
+	source[..at]
+		.bytes()
+		.rev()
+		.take_while(|b| *b == b'\\')
+		.count()
+		% 2 == 1
+}
+
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 struct Style {
 	strong: bool,
@@ -29,6 +39,8 @@ struct Style {
 	role: Option<Id>,
 	mass_mention: bool,
 	channel: Option<Id>,
+	/// Discord `<t:seconds[:style]>` reference: rendered fresh each frame, never at parse time.
+	timestamp: Option<(i64, u8)>,
 	no_autolink: bool,
 	spoiler: Option<u8>,
 	/// Fenced code block index; the block widget replaces these spans when shown.
@@ -823,7 +835,31 @@ impl Formatted {
 		let mut consumed = 0;
 		let mut raw_cursor = 0;
 		for (start, _) in text.match_indices(['<', '@']) {
+			if start < consumed {
+				continue;
+			}
 			let reference = &text[start..];
+			if let Some((seconds, kind, len)) = model::timestamp_prefix(reference) {
+				let token = &text[start..start + len];
+				let Some(raw_start) = source[raw_cursor..].find(token).map(|i| i + raw_cursor)
+				else {
+					continue;
+				};
+				raw_cursor = raw_start + len;
+				if escaped(source, raw_start) {
+					continue;
+				}
+				self.push_autolinks(&text[consumed..start], style);
+				self.push(
+					token,
+					Style {
+						timestamp: Some((seconds, kind)),
+						..style
+					},
+				);
+				consumed = start + len;
+				continue;
+			}
 			let is_role = reference.starts_with("<@&");
 			let (id, len, is_channel, mass_mention) =
 				if let Some(len) = model::mass_mention_prefix(reference) {
@@ -850,12 +886,7 @@ impl Formatted {
 				continue;
 			};
 			raw_cursor = raw_start + len;
-			if source[..raw_start]
-				.bytes()
-				.rev()
-				.take_while(|b| *b == b'\\')
-				.count() % 2 == 1
-			{
+			if escaped(source, raw_start) {
 				continue;
 			}
 			self.push_autolinks(&text[consumed..start], style);
@@ -934,6 +965,15 @@ impl Formatted {
 	) {
 		let (channels, channel, guilds, roles) = references;
 		let (images, demo, revealed) = media;
+		// Relative timestamps age without input; a coarse tick keeps them honest without a timer.
+		if self
+			.spans
+			.iter()
+			.any(|(_, style)| matches!(style.timestamp, Some((_, b'R'))))
+		{
+			ui.ctx()
+				.request_repaint_after(std::time::Duration::from_secs(20));
+		}
 		ui.allocate_ui_with_layout(
 			egui::vec2(ui.available_width(), 0.0),
 			egui::Layout::left_to_right(egui::Align::Min).with_main_wrap(true),
@@ -1094,7 +1134,10 @@ impl Formatted {
 					};
 					// Role pills share the surrounding text's galley, including wrapping and emoji heights.
 					let resolved;
-					let spans = if spans.iter().any(|(_, style)| style.role.is_some()) {
+					let spans = if spans
+						.iter()
+						.any(|(_, style)| style.role.is_some() || style.timestamp.is_some())
+					{
 						resolved = spans
 							.iter()
 							.map(|(text, style)| {
@@ -1109,6 +1152,12 @@ impl Formatted {
 											mass_mention: true,
 											..*style
 										},
+									)
+								} else if let Some((seconds, kind)) = style.timestamp {
+									(
+										crate::local_time::discord_timestamp(seconds, kind)
+											.unwrap_or_else(|| text.clone()),
+										*style,
 									)
 								} else {
 									(text.clone(), *style)
@@ -1620,6 +1669,12 @@ impl Formatted {
 					Some(_) => (text.clone(), muted.clone()),
 					None => ("#unknown-channel".into(), pill.clone()),
 				}
+			} else if let Some((seconds, kind)) = style.timestamp {
+				(
+					crate::local_time::discord_timestamp(seconds, kind)
+						.unwrap_or_else(|| text.clone()),
+					muted.clone(),
+				)
 			} else if style.mass_mention {
 				(text.clone(), pill.clone())
 			} else {
@@ -1690,7 +1745,7 @@ impl Formatted {
 			color,
 			background: if style.mass_mention {
 				colors.mention_bg
-			} else if style.code {
+			} else if style.timestamp.is_some() || style.code {
 				visuals.code_bg_color
 			} else {
 				egui::Color32::TRANSPARENT
@@ -3033,6 +3088,44 @@ mod tests {
 			.count();
 		assert_eq!(highlighted, 2);
 		output.drop_without_applying_deltas();
+	}
+	#[test]
+	fn timestamps_render_the_formatted_instant_not_the_raw_token() {
+		let parsed = Formatted::parse(
+			"<t:1700000000:R> <t:1700000000> `<t:1700000000:t>` \\<t:1:t> <t:1:z> <t:abc:t>",
+		);
+		let stamps: Vec<_> = parsed
+			.spans
+			.iter()
+			.filter_map(|(text, style)| style.timestamp.map(|stamp| (text.as_str(), stamp)))
+			.collect();
+		assert_eq!(
+			stamps,
+			vec![
+				("<t:1700000000:R>", (1_700_000_000, b'R')),
+				("<t:1700000000>", (1_700_000_000, b'f')),
+			]
+		);
+		let ctx = egui::Context::default();
+		let mut output = ctx.run_ui(Default::default(), |ui| {
+			ui.set_width(400.0);
+			parsed.show(ui, &mut None);
+		});
+		output.textures_delta.clear();
+		output.drop_without_applying_deltas();
+		let mut job = LayoutJob::default();
+		ctx.run_ui(Default::default(), |ui| {
+			parsed.append_inline_preview(&mut job, ui, &[], &[], &[]);
+		})
+		.drop_without_applying_deltas();
+		assert!(job.text.contains("ago"), "relative style: {}", job.text);
+		assert!(
+			job.text.contains("November 14, 2023"),
+			"default style: {}",
+			job.text
+		);
+		// Code spans, escapes and unknown styles keep the literal source.
+		assert_eq!(job.text.matches("<t:").count(), 4, "{}", job.text);
 	}
 	#[test]
 	fn mention_highlights_include_unknown_users_in_both_themes() {
