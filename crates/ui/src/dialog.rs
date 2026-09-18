@@ -402,17 +402,33 @@ fn enter_after_shown_frame(
 	choice: &mut Option<Choice>,
 ) {
 	let key = dialog_id.with("shown-committed-frame");
-	let shown_committed_frame = ctx.data(|data| data.get_temp::<()>(key).is_some());
+	let frame = ctx.cumulative_frame_nr();
+	let shown_committed_frame = ctx
+		.data(|data| data.get_temp::<u64>(key))
+		.is_some_and(|previous| previous + 1 == frame);
 	if enabled
 		&& shown_committed_frame
 		&& choice.is_none()
-		&& ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
-	{
+		&& ctx.input_mut(|input| {
+			let pressed = input.events.iter().any(|event| {
+				matches!(
+					event,
+					egui::Event::Key {
+						key: egui::Key::Enter,
+						pressed: true,
+						repeat: false,
+						modifiers,
+						..
+					} if *modifiers == egui::Modifiers::NONE
+				)
+			});
+			pressed && input.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+		}) {
 		*choice = Some(Choice::Confirmed);
 	}
 	if choice.is_some() {
-		ctx.data_mut(|data| data.remove_temp::<()>(key));
+		ctx.data_mut(|data| data.remove_temp::<u64>(key));
 	} else if !ctx.will_discard() {
-		ctx.data_mut(|data| data.insert_temp(key, ()));
+		ctx.data_mut(|data| data.insert_temp(key, frame));
 	}
 }
