@@ -2244,6 +2244,59 @@ impl Desktop {
 			});
 			return;
 		}
+		// A forum post with files takes the same staged-upload path as a message.
+		if let Command::CreatePost {
+			parent,
+			attachments,
+			request,
+			..
+		} = &command
+			&& !attachments.is_empty()
+		{
+			let (parent, request) = (*parent, *request);
+			let available = !self.state.demo
+				&& self.state.can_attach_post(parent)
+				&& !self.fixture_only
+				&& self.state.auth == AuthState::Authenticated
+				&& self.state.gateway_connected
+				&& self.state.selected == Some(parent)
+				&& self.connection.is_some();
+			if available
+				&& let Some(source) = self.uploads.take_source(self.state.generation, parent)
+			{
+				let (progress, receive) =
+					tokio::sync::watch::channel(discord_api::upload::Status::Preparing);
+				let (cancel, _) = tokio::sync::watch::channel(false);
+				if self.uploads.begin_upload(receive, cancel.clone()).is_ok() {
+					let request = uploads::UploadRequest {
+						command,
+						source,
+						progress,
+						cancel,
+					};
+					self.messaging.attachment = None;
+					if let Err(error) = self.connection.as_ref().unwrap().uploads.try_send(request)
+					{
+						let request = error.into_inner();
+						request
+							.progress
+							.send_replace(discord_api::upload::Status::Failed(
+								"Upload queue full; reselect the file",
+							));
+						self.state.command_rejected(request.command);
+					}
+					return;
+				}
+			}
+			self.state.apply_post(
+				parent,
+				request,
+				Err(Failure::ProtocolAt(
+					"Post not created; reconnect and reselect the attachment",
+				)),
+			);
+			return;
+		}
 		if let Command::History {
 			channel,
 			before: None,
@@ -4157,10 +4210,10 @@ impl eframe::App for Desktop {
 		let upload_allowed = self.state.user.is_some()
 			&& self.state.gateway_connected
 			&& self.state.freshness == model::Freshness::Fresh;
-		let can_attach = self
-			.state
-			.selected
-			.is_some_and(|channel| self.state.can_attach(channel));
+		// A forum container carries its own attachment permission for a post's first message.
+		let can_attach = self.state.selected.is_some_and(|channel| {
+			self.state.can_attach(channel) || self.state.can_attach_post(channel)
+		});
 		if let Some(paste) = &self.clipboard
 			&& let Some(result) = paste.poll()
 		{
@@ -4511,11 +4564,9 @@ impl eframe::App for Desktop {
 				self.state.selected,
 				self.state.user.is_some() && self.state.gateway_connected,
 			);
-			if !self
-				.state
-				.selected
-				.is_some_and(|channel| self.state.can_attach(channel))
-			{
+			if !self.state.selected.is_some_and(|channel| {
+				self.state.can_attach(channel) || self.state.can_attach_post(channel)
+			}) {
 				self.uploads.cancel();
 			}
 			if let Some(index) = self.messaging.remove_attachment_index.take() {
@@ -4555,7 +4606,7 @@ impl eframe::App for Desktop {
 			}
 			if std::mem::take(&mut self.messaging.attach_requested)
 				&& let Some(channel) = self.state.selected
-				&& self.state.can_attach(channel)
+				&& (self.state.can_attach(channel) || self.state.can_attach_post(channel))
 				&& let Err(error) = self.uploads.start_choose(
 					self.state.generation,
 					channel,

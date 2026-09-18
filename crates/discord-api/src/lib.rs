@@ -532,9 +532,18 @@ impl DiscordApi {
 				guild,
 				title,
 				content,
+				attachments,
 				request,
 			} => {
-				let result = self.create_post(parent, guild, &title, &content).await;
+				// Files are staged by the upload worker, which owns the whole post request.
+				let result = if attachments.is_empty() {
+					self.create_post(parent, guild, &title, &content, None)
+						.await
+				} else {
+					Err(Failure::ProtocolAt(
+						"Upload unavailable; reselect the file to retry",
+					))
+				};
 				Event::PostCreated {
 					parent,
 					request,
@@ -1081,25 +1090,33 @@ impl DiscordApi {
 }
 impl DiscordApi {
 	/// Documented forum post creation: one thread with its starter message. Never auto-retried.
-	async fn create_post(
+	pub(crate) async fn create_post(
 		&self,
 		parent: model::Id,
 		guild: model::Id,
 		title: &str,
 		content: &str,
+		attachments: Option<Vec<serde_json::Value>>,
 	) -> Result<model::Channel, Failure> {
 		let title = title.trim();
 		if title.is_empty()
 			|| title.chars().count() > client_core::forum::MAX_TITLE
-			|| content.trim().is_empty()
+			|| (content.trim().is_empty() && attachments.is_none())
 			|| content.chars().count() > client_core::MAX_CONTENT
 		{
 			return Err(Failure::Capacity);
 		}
+		let mut message = serde_json::json!({
+			"content": content,
+			"allowed_mentions": allowed_mentions(content, None),
+		});
+		if let Some(attachments) = attachments {
+			message["attachments"] = serde_json::json!(attachments);
+		}
 		let body = serde_json::json!({
 			"name": title,
 			"auto_archive_duration": 4320,
-			"message": {"content": content, "allowed_mentions": allowed_mentions(content, None)},
+			"message": message,
 		});
 		self.request(
 			Method::POST,

@@ -238,6 +238,15 @@ const GIF_DEBOUNCE: f64 = 0.3;
 impl Picker {
 	/// The same bundled Unicode catalog and cells, without composer or network actions.
 	pub(crate) fn unicode_button(&mut self, ui: &mut egui::Ui, selected: &mut Option<String>) {
+		self.unicode_button_with(ui, selected, true);
+	}
+	/// `removable` offers clearing the choice; insertion targets have nothing to clear.
+	pub(crate) fn unicode_button_with(
+		&mut self,
+		ui: &mut egui::Ui,
+		selected: &mut Option<String>,
+		removable: bool,
+	) {
 		let button = if let Some(image) = selected
 			.as_deref()
 			.and_then(|emoji| crate::emoji::image(ui.ctx(), emoji, 22.0))
@@ -279,7 +288,7 @@ impl Picker {
 				{
 					self.filter();
 				}
-				if ui.button("Remove emoji").clicked() {
+				if removable && ui.button("Remove emoji").clicked() {
 					*selected = None;
 					ui.close();
 				}

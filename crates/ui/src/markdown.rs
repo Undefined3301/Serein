@@ -126,6 +126,50 @@ fn has_artwork(spans: &[(String, Style)]) -> bool {
 		false
 	})
 }
+/// Discord draws a message that carries nothing but emoji at roughly three times the body
+/// size. More than a couple of dozen of them stay inline, as they do in the official client.
+const MAX_JUMBO: usize = 27;
+fn only_emoji(spans: &[(String, Style)], blocks: &[CodeBlock], mentions: usize) -> bool {
+	if !blocks.is_empty() || mentions > 0 {
+		return false;
+	}
+	let mut count = 0;
+	for (text, style) in spans {
+		if style.code
+			|| style.block.is_some()
+			|| style.link.is_some()
+			|| style.timestamp.is_some()
+			|| style.channel.is_some()
+			|| style.mention.is_some()
+			|| style.role.is_some()
+			|| style.mass_mention
+			|| style.heading > 0
+			|| style.small
+			|| style.quote
+		{
+			return false;
+		}
+		let mut offset = 0;
+		while offset < text.len() {
+			if let Some((_, len)) = crate::emoji::custom_prefix(&text[offset..]) {
+				count += 1;
+				offset += len;
+				continue;
+			}
+			let cluster = text[offset..]
+				.graphemes(true)
+				.next()
+				.expect("remaining text");
+			if crate::emoji::lookup(cluster).is_some() {
+				count += 1;
+			} else if !cluster.chars().all(char::is_whitespace) {
+				return false;
+			}
+			offset += cluster.len();
+		}
+	}
+	(1..=MAX_JUMBO).contains(&count)
+}
 /// One fenced block: its display text plus highlighting computed once at parse time.
 pub struct CodeBlock {
 	/// Sanitised fence info word, shown when no known language matches it.
@@ -144,6 +188,8 @@ pub struct Formatted {
 	mention_count: usize,
 	/// Set when any span renders artwork, whose line is taller than the body font.
 	artwork: bool,
+	/// Set when the whole message is emoji, which Discord draws at a larger size.
+	jumbo: bool,
 	pub links: Vec<String>,
 	pub limited: bool,
 	pub spoilers: bool,
@@ -445,6 +491,7 @@ impl Formatted {
 			limited: end < source.len(),
 			spoilers: false,
 			artwork: false,
+			jumbo: false,
 		};
 		let mut stack = Vec::new();
 		let mut style = Style::default();
@@ -752,6 +799,7 @@ impl Formatted {
 			}
 		}
 		output.artwork = has_artwork(&output.spans);
+		output.jumbo = only_emoji(&output.spans, &output.blocks, output.mention_count);
 		output
 	}
 	fn limited_literal(input: &str, concealed: bool) -> Self {
@@ -769,8 +817,10 @@ impl Formatted {
 			limited: true,
 			spoilers: concealed,
 			artwork: false,
+			jumbo: false,
 		};
 		formatted.artwork = has_artwork(&formatted.spans);
+		formatted.jumbo = only_emoji(&formatted.spans, &formatted.blocks, formatted.mention_count);
 		formatted
 	}
 	fn push_spoiler_literal(
@@ -936,6 +986,10 @@ impl Formatted {
 			consumed = start + len;
 		}
 		self.push_autolinks(&text[consumed..], style);
+	}
+	/// True when the message is only emoji, so the caller can draw it at the larger size.
+	pub fn jumbo(&self) -> bool {
+		self.jumbo
 	}
 	#[cfg(test)]
 	pub fn show(&self, ui: &mut egui::Ui, opening: &mut Option<String>) {
@@ -1836,6 +1890,30 @@ mod tests {
 			"English مرحبا!"
 		);
 		assert!(bidi_spans(&[("English only".into(), style)]).is_none());
+	}
+
+	#[test]
+	fn messages_made_only_of_emoji_are_drawn_larger() {
+		for source in [
+			"\u{1f600}",
+			"\u{1f600} \u{1f389}\n\u{1f388}",
+			"<:serein_wave:9001>",
+			"**\u{1f600}**",
+		] {
+			assert!(Formatted::parse(source).jumbo(), "{source}");
+		}
+		for source in [
+			"",
+			"hi \u{1f600}",
+			"`\u{1f600}`",
+			"# \u{1f600}",
+			"<@9001> \u{1f600}",
+			"https://example.com \u{1f600}",
+			"plain text",
+			&"\u{1f600}".repeat(MAX_JUMBO + 1),
+		] {
+			assert!(!Formatted::parse(source).jumbo(), "{source}");
+		}
 	}
 
 	#[test]

@@ -1733,23 +1733,29 @@ impl TimelineView {
 													&& crate::embeds::standalone_media_links(
 														message,
 													)) {
-												formatted.show_references(
-													ui,
-													&mut self.opening,
-													&message.mentions,
-													profile,
-													(
-														&state.channels,
-														&mut self.channel_reference,
-														&state.guilds,
-														crate::mentions::known_roles(
-															state,
-															message.channel,
+												let jumbo = formatted.jumbo();
+												ui.scope(|ui| {
+													if jumbo {
+														crate::design::jumbo_emoji(ui);
+													}
+													formatted.show_references(
+														ui,
+														&mut self.opening,
+														&message.mentions,
+														profile,
+														(
+															&state.channels,
+															&mut self.channel_reference,
+															&state.guilds,
+															crate::mentions::known_roles(
+																state,
+																message.channel,
+															),
 														),
-													),
-													(avatars, state.demo, &mut text),
-													&mut surface,
-												);
+														(avatars, state.demo, &mut text),
+														&mut surface,
+													);
+												});
 											}
 											if formatted.limited {
 												ui.label(

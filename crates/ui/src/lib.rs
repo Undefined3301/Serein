@@ -3133,16 +3133,27 @@ impl MessagingUi {
 					}
 				}
 				if selected_forum {
+					// A post's first message uses the same upload tray as the composer.
+					let textures = self.attachment_textures(ui.ctx());
+					let files = self.selected_files();
 					let view = shortcuts::ShortcutView::new(
 						&self.channel_preferences,
 						self.shortcuts_available(state),
 					);
+					let mut staged = forum::Staged {
+						files: &files,
+						textures: &textures,
+						choose: &mut self.attach_requested,
+						remove: &mut self.remove_attachment_index,
+						clear: &mut self.remove_attachment_requested,
+						busy: self.upload_busy,
+					};
 					self.forum.show(
 						ui,
 						state,
 						channel,
 						&mut commands,
-						&mut self.scroll,
+						(&mut self.scroll, &mut staged),
 						(&mut self.channel_menu, view),
 					);
 					return;

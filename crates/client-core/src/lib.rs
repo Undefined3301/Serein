@@ -108,6 +108,8 @@ pub enum Command {
 		guild: Id,
 		title: String,
 		content: String,
+		/// Filenames staged for the starter message, in selection order; empty sends text only.
+		attachments: Vec<String>,
 		request: u64,
 	},
 	ForumPosts {

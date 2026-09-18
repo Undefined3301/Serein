@@ -69,6 +69,10 @@ pub struct ReadState {
 	pub(crate) status: Option<(Id, &'static str)>,
 }
 impl ReadState {
+	/// True once a complete service snapshot arrived, so a channel without a row was never read.
+	pub(crate) fn known(&self) -> bool {
+		self.known
+	}
 	pub fn status(&self, channel: Id) -> Option<&'static str> {
 		self.status
 			.filter(|(id, _)| *id == channel)

@@ -775,6 +775,13 @@ pub fn semibold(ui: &egui::Ui, text: impl Into<String>, size: f32) -> RichText {
 pub fn medium(ui: &egui::Ui, text: impl Into<String>, size: f32) -> RichText {
 	RichText::new(text).font(FontId::new(size, medium_family(ui.ctx())))
 }
+/// Emoji-only messages: Discord paints their artwork at about three times the body size.
+/// Scaling the body style grows every inline emoji slot with it, text included.
+pub(crate) fn jumbo_emoji(ui: &mut egui::Ui) {
+	if let Some(font) = ui.style_mut().text_styles.get_mut(&egui::TextStyle::Body) {
+		font.size *= 1.875;
+	}
+}
 /// Uppercase section heading used above channel categories and member groups.
 pub fn eyebrow(ui: &egui::Ui, text: impl Into<String>, color: Color32) -> RichText {
 	semibold(ui, text.into().to_uppercase(), 12.0).color(color)
