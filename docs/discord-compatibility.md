@@ -1447,10 +1447,13 @@ route were checked against live responses; game-to-Gateway publication remains u
 
 ### Visible chat author roles
 
-Visible guild message authors use a separate bounded Gateway opcode 8 `user_ids`
-lookup, sharing the mention search transport and its one-second send interval.
-This fills role colors when history omits membership and the author is outside
-People's retained member list. Up to 100 visible authors are requested at once;
-failed lookups retain the normal fallback color. Profile cards already request
-guild membership through the profile endpoint. Normal-account Gateway behavior
-remains unofficial and live compatibility is unverified by the synthetic check.
+Guild history already carries `member.roles` on each message when Discord sends
+it. Those IDs are the first-paint color source and are stored with the account
+history window. A separate bounded Gateway opcode 8 `user_ids` lookup, sharing
+the mention search transport and its one-second send interval, refreshes
+membership when history omits it or a live row changes. Up to 100 visible
+authors are requested at once. Empty live rows do not wipe a message snapshot.
+Failed lookups keep the snapshot or the normal fallback color. Profile cards
+already request guild membership through the profile endpoint. Normal-account
+Gateway behavior remains unofficial and live compatibility is unverified by the
+synthetic check.

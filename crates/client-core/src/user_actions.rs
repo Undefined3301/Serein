@@ -190,7 +190,9 @@ impl State {
 						.flatten()
 						.find(|m| m.user.id == message.author.id)
 				});
-			let nick = member.map_or(message.author_nick.as_deref(), |m| m.nick.as_deref());
+			let nick = member
+				.and_then(|m| m.nick.as_deref().filter(|nick| !nick.is_empty()))
+				.or(message.author_nick.as_deref());
 			if let Some(nick) = nick.filter(|nick| !nick.is_empty()) {
 				return nick;
 			}

@@ -415,28 +415,29 @@ impl State {
 		}
 		let guild = self.channel(message.channel)?.guild?;
 		let roles = self
+			.live_author_roles(guild, message.channel, message.author.id)
+			.unwrap_or(message.author_roles.as_slice());
+		self.display_roles(guild, roles).1.map(|role| role.color)
+	}
+	fn live_author_roles(&self, guild: Id, channel: Id, user: Id) -> Option<&[Id]> {
+		let member = self
 			.members
 			.as_ref()
-			.filter(|list| list.guild == Some(guild) && list.channel == message.channel)
+			.filter(|list| list.guild == Some(guild) && list.channel == channel)
 			.and_then(|list| {
 				list.rows
 					.iter()
 					.flatten()
-					.find(|member| member.user.id == message.author.id)
+					.find(|member| member.user.id == user)
 			})
 			.or_else(|| {
 				let view = &self.member_search[1];
-				view.request.as_ref().filter(|request| {
-					request.guild == guild && request.channel == message.channel
-				})?;
-				view.rows
-					.iter()
-					.find(|member| member.user.id == message.author.id)
-			})
-			.map_or(message.author_roles.as_slice(), |member| {
-				member.roles.as_slice()
-			});
-		self.display_roles(guild, roles).1.map(|role| role.color)
+				view.request
+					.as_ref()
+					.filter(|request| request.guild == guild && request.channel == channel)?;
+				view.rows.iter().find(|member| member.user.id == user)
+			})?;
+		(!member.roles.is_empty()).then_some(member.roles.as_slice())
 	}
 	fn display_roles(
 		&self,

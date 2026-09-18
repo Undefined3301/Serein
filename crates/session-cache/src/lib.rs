@@ -5,6 +5,17 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const MAX_MESSAGES: usize = 500;
 pub const MAX_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_MUTATIONS: usize = 1024;
+
+fn keep_author_membership(message: &mut Message, roles: &[Id], nick: Option<&str>) {
+	if message.author_roles.is_empty() && !roles.is_empty() {
+		message.author_roles = roles.to_vec();
+	}
+	if message.author_nick.is_none()
+		&& let Some(nick) = nick.filter(|n| !n.is_empty())
+	{
+		message.author_nick = Some(nick.to_owned());
+	}
+}
 #[derive(Default)]
 pub struct Timeline {
 	// None preserves only the position of a message deleted while it was loaded.
@@ -36,6 +47,40 @@ impl Timeline {
 	}
 	pub fn get_display(&self, id: Id) -> Option<&Message> {
 		self.messages.get(&id).and_then(Option::as_ref)
+	}
+	/// Copy live membership onto matching authors so a later resident restore still has colors.
+	pub fn apply_author_membership(&mut self, user: Id, roles: &[Id], nick: Option<&str>) -> bool {
+		if user.0 == 0 {
+			return false;
+		}
+		let mut any = false;
+		for message in self.messages.values_mut().flatten() {
+			if message.author.id != user || message.author.webhook {
+				continue;
+			}
+			let next_roles =
+				(!roles.is_empty() && message.author_roles != roles).then(|| roles.to_vec());
+			let next_nick = nick.filter(|n| !n.is_empty()).and_then(|n| {
+				(message.author_nick.as_deref() != Some(n))
+					.then(|| n.chars().take(128).collect::<String>())
+			});
+			if next_roles.is_none() && next_nick.is_none() {
+				continue;
+			}
+			let before = message.bytes();
+			if let Some(roles) = next_roles {
+				message.author_roles = roles;
+			}
+			if let Some(nick) = next_nick {
+				message.author_nick = Some(nick);
+			}
+			self.bytes = self
+				.bytes
+				.saturating_sub(before)
+				.saturating_add(message.bytes());
+			any = true;
+		}
+		any
 	}
 	pub fn set_preserve_deleted_messages(&mut self, enabled: bool) {
 		if self.preserve_deleted_messages == enabled {
@@ -162,6 +207,11 @@ impl Timeline {
 			{
 				return Ok(());
 			}
+			keep_author_membership(
+				&mut message,
+				&previous.author_roles,
+				previous.author_nick.as_deref(),
+			);
 			message.revision = previous.revision
 				+ u64::from(
 					previous.content != message.content
@@ -174,7 +224,9 @@ impl Timeline {
 						|| previous.extra_content != message.extra_content
 						|| previous.embeds != message.embeds
 						|| previous.attachments != message.attachments
-						|| previous.embeds_suppressed != message.embeds_suppressed,
+						|| previous.embeds_suppressed != message.embeds_suppressed
+						|| previous.author_roles != message.author_roles
+						|| previous.author_nick != message.author_nick,
 				);
 		}
 		self.bytes += message.bytes();
@@ -251,6 +303,20 @@ impl Timeline {
 		// A recent-page reload is authoritative for the whole retained view. Preserve only
 		// mutations observed during this request, never missing cached/old RAM records.
 		self.retain_older = older;
+		let prior: BTreeMap<_, _> = self
+			.messages
+			.iter()
+			.filter_map(|(id, message)| {
+				let message = message.as_ref()?;
+				if message.author_roles.is_empty() && message.author_nick.is_none() {
+					return None;
+				}
+				Some((
+					*id,
+					(message.author_roles.clone(), message.author_nick.clone()),
+				))
+			})
+			.collect();
 		if self.replace {
 			self.messages.retain(|id, message| {
 				let keep = self.changed.contains(id)
@@ -262,7 +328,10 @@ impl Timeline {
 				keep
 			});
 		}
-		for item in items {
+		for mut item in items {
+			if let Some((roles, nick)) = prior.get(&item.id) {
+				keep_author_membership(&mut item, roles, nick.as_deref());
+			}
 			self.insert(item, false, older)?;
 		}
 		self.loading = false;

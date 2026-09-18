@@ -2,7 +2,10 @@
 mod channel_preferences;
 use model::{Id, Message, ReadingPreferences, User};
 use rusqlite::{Connection, OptionalExtension, params};
-use std::{collections::BTreeMap, path::Path};
+use std::{
+	collections::{BTreeMap, BTreeSet},
+	path::Path,
+};
 
 const MAX_MEDIA_JSON: usize = 256 * 1024;
 const MAX_WINDOW_BYTES: usize = 4 * 1024 * 1024;
@@ -10,6 +13,22 @@ const NATIVE_SCHEMA: u32 = 16;
 const READABLE_SCHEMA: u32 = 17;
 #[derive(serde::Deserialize)]
 struct CachedMentions(#[serde(deserialize_with = "model::deserialize_mentions")] Vec<User>);
+fn parse_author_roles(raw: &str) -> std::result::Result<Vec<Id>, StoreError> {
+	let values: Vec<String> = serde_json::from_str(raw).map_err(|_| StoreError::Incompatible)?;
+	if values.len() > model::permissions::MAX_MEMBER_ROLES {
+		return Err(StoreError::Capacity);
+	}
+	let mut roles = Vec::with_capacity(values.len());
+	let mut seen = BTreeSet::new();
+	for value in values {
+		let id = value.parse::<Id>().map_err(|_| StoreError::Incompatible)?;
+		if id.0 == 0 || !seen.insert(id) {
+			return Err(StoreError::Incompatible);
+		}
+		roles.push(id);
+	}
+	Ok(roles)
+}
 pub struct LocalStore(Connection);
 /// Device-local controls, bounded independently of account caches.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -285,6 +304,24 @@ impl LocalStore {
         )?;
 		if !has_confirm_external_links {
 			transaction.execute_batch("ALTER TABLE reading_preferences ADD COLUMN confirm_external_links INTEGER NOT NULL DEFAULT 1 CHECK(typeof(confirm_external_links)='integer' AND confirm_external_links IN (0,1));")?;
+		}
+		let has_author_roles: bool = transaction.query_row(
+			"SELECT EXISTS(SELECT 1 FROM pragma_table_info('messages') WHERE name='author_roles')",
+			[],
+			|row| row.get(0),
+		)?;
+		if !has_author_roles {
+			transaction.execute_batch(
+				"ALTER TABLE messages ADD COLUMN author_roles TEXT NOT NULL DEFAULT '[]';",
+			)?;
+		}
+		let has_author_nick: bool = transaction.query_row(
+			"SELECT EXISTS(SELECT 1 FROM pragma_table_info('messages') WHERE name='author_nick')",
+			[],
+			|row| row.get(0),
+		)?;
+		if !has_author_nick {
+			transaction.execute_batch("ALTER TABLE messages ADD COLUMN author_nick TEXT;")?;
 		}
 		transaction.commit()?;
 		Ok(Self(connection))
@@ -573,7 +610,7 @@ impl LocalStore {
 			}
 		}
 		let mut insert = transaction.prepare_cached(
-            "INSERT OR REPLACE INTO messages(account,channel,id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions,extra_content,message_kind,reply_deleted,webhook,account_kind,forwarded) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)")?;
+            "INSERT OR REPLACE INTO messages(account,channel,id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions,extra_content,message_kind,reply_deleted,webhook,account_kind,forwarded,author_roles,author_nick) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23)")?;
 		for message in messages {
 			if previous
 				.get(&message.id)
@@ -584,6 +621,29 @@ impl LocalStore {
 			let mentions =
 				serde_json::to_string(&message.mentions).map_err(|_| StoreError::Incompatible)?;
 			if mentions.len() > 128 * 1024 {
+				return Err(StoreError::Capacity);
+			}
+			if message.author_roles.len() > model::permissions::MAX_MEMBER_ROLES
+				|| message.author_roles.iter().any(|role| role.0 == 0)
+			{
+				return Err(StoreError::Capacity);
+			}
+			let author_roles = serde_json::to_string(
+				&message
+					.author_roles
+					.iter()
+					.map(|role| role.to_string())
+					.collect::<Vec<_>>(),
+			)
+			.map_err(|_| StoreError::Incompatible)?;
+			if author_roles.len() > 16 * 1024 {
+				return Err(StoreError::Capacity);
+			}
+			if message
+				.author_nick
+				.as_ref()
+				.is_some_and(|nick| nick.len() > 512)
+			{
 				return Err(StoreError::Capacity);
 			}
 			let embeds =
@@ -615,13 +675,15 @@ impl LocalStore {
 				message.author.webhook,
 				message.author.kind as u8,
 				message.forwarded,
+				author_roles,
+				message.author_nick.as_deref(),
 			])?;
 		}
 		drop(insert);
 		transaction.execute("INSERT INTO channels VALUES(?1,?2,unixepoch('subsec')*1000) ON CONFLICT(account,channel) DO UPDATE SET touched=excluded.touched",params![account,channel])?;
 		// Global limit: 20 channel windows, 10000 messages AND 48 MiB content, below the 64 MiB database page ceiling.
 		loop {
-			let (channels,bytes):(i64,i64)=transaction.query_row("SELECT (SELECT count(*) FROM channels),(SELECT coalesce(sum(length(CAST(content AS BLOB))+length(CAST(name AS BLOB))+length(CAST(embeds AS BLOB))+length(CAST(attachments AS BLOB))+length(CAST(mentions AS BLOB))+256),0) FROM messages)",[],|r|Ok((r.get(0)?,r.get(1)?)))?;
+			let (channels,bytes):(i64,i64)=transaction.query_row("SELECT (SELECT count(*) FROM channels),(SELECT coalesce(sum(length(CAST(content AS BLOB))+length(CAST(name AS BLOB))+length(CAST(embeds AS BLOB))+length(CAST(attachments AS BLOB))+length(CAST(mentions AS BLOB))+length(CAST(author_roles AS BLOB))+coalesce(length(CAST(author_nick AS BLOB)),0)+256),0) FROM messages)",[],|r|Ok((r.get(0)?,r.get(1)?)))?;
 			if channels <= 20 && bytes <= 48 * 1024 * 1024 {
 				break;
 			}
@@ -644,7 +706,7 @@ impl LocalStore {
 		Ok(())
 	}
 	pub fn load_channel(&self, account: Id, channel: Id) -> Result<Vec<Message>> {
-		let mut query = self.0.prepare("SELECT id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions,extra_content,message_kind,reply_deleted,webhook,account_kind,forwarded FROM messages WHERE account=?1 AND channel=?2 ORDER BY length(id),id LIMIT 500")?;
+		let mut query = self.0.prepare("SELECT id,author,name,content,edited,reply,unsupported,avatar,discriminator,embeds,embeds_suppressed,attachments,mentions,extra_content,message_kind,reply_deleted,webhook,account_kind,forwarded,author_roles,author_nick FROM messages WHERE account=?1 AND channel=?2 ORDER BY length(id),id LIMIT 500")?;
 		let mut rows = query.query(params![account.to_string(), channel.to_string()])?;
 		let mut messages = Vec::new();
 		let mut bytes = 0;
@@ -681,6 +743,7 @@ impl LocalStore {
 				(9, MAX_MEDIA_JSON),
 				(11, MAX_MEDIA_JSON),
 				(12, 128 * 1024),
+				(19, 16 * 1024),
 			] {
 				if row
 					.get_ref(column)?
@@ -691,7 +754,7 @@ impl LocalStore {
 					return Err(StoreError::Capacity);
 				}
 			}
-			for (column, maximum) in [(5, 20), (7, 34)] {
+			for (column, maximum) in [(5, 20), (7, 34), (20, 512)] {
 				if !matches!(row.get_ref(column)?, rusqlite::types::ValueRef::Null)
 					&& row
 						.get_ref(column)?
@@ -730,6 +793,23 @@ impl LocalStore {
 				return Err(StoreError::Capacity);
 			}
 			let parse = |value: String| value.parse::<Id>().map_err(|_| StoreError::Incompatible);
+			let author_roles = parse_author_roles(
+				row.get_ref(19)?
+					.as_str()
+					.map_err(|_| StoreError::Incompatible)?,
+			)?;
+			let author_nick = match row.get_ref(20)? {
+				rusqlite::types::ValueRef::Null => None,
+				rusqlite::types::ValueRef::Text(bytes) => {
+					let nick = std::str::from_utf8(bytes).map_err(|_| StoreError::Incompatible)?;
+					if nick.is_empty() {
+						None
+					} else {
+						Some(nick.chars().take(128).collect())
+					}
+				}
+				_ => return Err(StoreError::Incompatible),
+			};
 			let message = Message {
 				reactions: None,
 				id: parse(row.get(0)?)?,
@@ -754,8 +834,8 @@ impl LocalStore {
 				nonce: None,
 				revision: 0,
 				embeds,
-				author_nick: None,
-				author_roles: vec![],
+				author_nick,
+				author_roles,
 				mention_roles: vec![],
 				mention_everyone: false,
 				suppress_notifications: false,

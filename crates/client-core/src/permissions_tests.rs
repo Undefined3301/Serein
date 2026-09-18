@@ -1359,8 +1359,24 @@ fn member_role_display_tracks_live_role_metadata_and_membership() {
 	});
 	assert_eq!(
 		state.message_author_color(&chat),
-		None,
-		"live membership overrides the message snapshot"
+		Some(0x112233),
+		"empty live membership keeps the message snapshot"
+	);
+	state.members = Some(crate::MemberList {
+		guild: Some(Id(10)),
+		channel: Id(20),
+		request: 1,
+		total: 1,
+		rows: vec![Some(model::Member {
+			roles: vec![Id(12)],
+			..member.clone()
+		})],
+		freshness: Freshness::Fresh,
+	});
+	assert_eq!(
+		state.message_author_color(&chat),
+		Some(0x445566),
+		"populated live membership refreshes the name color"
 	);
 	state.members = None;
 

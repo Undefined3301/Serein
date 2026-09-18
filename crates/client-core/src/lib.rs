@@ -2091,6 +2091,13 @@ impl State {
 				{
 					self.members.as_mut().unwrap().freshness = Freshness::Unavailable;
 				} else {
+					for member in list.rows.iter().flatten() {
+						self.timeline.apply_author_membership(
+							member.user.id,
+							&member.roles,
+							member.nick.as_deref(),
+						);
+					}
 					self.members = Some(list);
 				}
 				Ok(())
