@@ -15,6 +15,10 @@ enum TargetReveal {
 }
 
 const REVEAL_SCROLL_SECS: f32 = 0.3;
+/// Smooth return to the live edge from the jump-to-present control.
+const PRESENT_SCROLL_SECS: f32 = 0.32;
+/// Screens of history a reader must leave behind before the control appears.
+const PRESENT_CONTROL_SCREENS: f32 = 6.0;
 
 #[derive(Clone, Copy)]
 struct RevealScroll {
@@ -44,6 +48,10 @@ pub struct TimelineView {
 	pub(super) reply_target: Option<Id>,
 	pending_reveal: Option<TargetReveal>,
 	reveal_scroll: Option<RevealScroll>,
+	/// Animated return to the live edge: offset it started from and elapsed seconds.
+	present_scroll: Option<(f32, f32)>,
+	/// Where the jump-to-present control was painted this frame, for hit tests in tests.
+	pub(super) present_control: Option<egui::Rect>,
 	highlighted: Option<(Id, f64)>,
 	target_browsing: bool,
 	initial_read_checked: bool,
@@ -552,6 +560,67 @@ fn overlay_bar(
 	bar.spacing_mut().item_spacing.x = 8.0;
 	add(&mut bar);
 }
+/// Round "back to the live edge" control floating over the bottom-right of the conversation.
+fn present_control(ui: &mut egui::Ui, rect: egui::Rect, unread: bool) -> bool {
+	let colors = crate::design::palette(ui);
+	let response = ui.interact(
+		rect,
+		ui.make_persistent_id("timeline-present"),
+		egui::Sense::click(),
+	);
+	let painter = ui.painter();
+	painter.circle_filled(
+		rect.center() + egui::vec2(0.0, 1.5),
+		rect.width() / 2.0,
+		egui::Color32::from_black_alpha(52),
+	);
+	let fill = if unread {
+		colors.accent
+	} else {
+		colors.raised.to_opaque()
+	};
+	let fill = if response.hovered() {
+		fill.gamma_multiply(1.12)
+	} else {
+		fill
+	};
+	painter.circle_filled(rect.center(), rect.width() / 2.0, fill);
+	if !unread {
+		painter.circle_stroke(
+			rect.center(),
+			rect.width() / 2.0 - 0.5,
+			egui::Stroke::new(1.0, colors.border),
+		);
+	}
+	let color = if unread {
+		colors.accent_text
+	} else {
+		colors.text_strong
+	};
+	crate::icons::paint(
+		painter,
+		crate::icons::Icon::ArrowDown,
+		egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(18.0)),
+		color,
+	);
+	if response.has_focus() {
+		painter.circle_stroke(
+			rect.center(),
+			rect.width() / 2.0 + 2.0,
+			egui::Stroke::new(1.0, colors.accent),
+		);
+	}
+	response.widget_info(|| {
+		egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Jump to present")
+	});
+	response
+		.on_hover_text(if unread {
+			"New messages below · jump to present"
+		} else {
+			"Jump to present"
+		})
+		.clicked()
+}
 /// Frameless text action with a trailing arrow glyph, for use inside [`overlay_bar`].
 fn bar_button(
 	ui: &mut egui::Ui,
@@ -920,7 +989,9 @@ impl TimelineView {
 			self.following = false;
 		}
 		let total: f32 = self.rows.iter().map(|(_, height)| height).sum();
-		let end_padding = 16.0;
+		// The typing indicator floats in the reserved strip above the composer; the gap keeps
+		// it from covering the last message, and stays there when nobody is typing.
+		let end_padding = 16.0 + crate::typing::OVERLAY_HEIGHT;
 		self.pending_heights.retain(|nonce, _| {
 			state
 				.pending
@@ -1014,17 +1085,35 @@ impl TimelineView {
 			.id_salt(("timeline", state.selected))
 			.auto_shrink([false, false])
 			.stick_to_bottom(self.following);
+		let live_edge_offset =
+			(total + end_padding + pending_rows.iter().map(|(_, height)| height).sum::<f32>()
+				- ui.available_height())
+			.max(0.0);
 		if std::mem::take(&mut self.jump) {
 			self.reveal_scroll = None;
-			offset = Some(
-				(total + end_padding + pending_rows.iter().map(|(_, height)| height).sum::<f32>()
-					- ui.available_height())
-				.max(0.0),
-			);
+			self.present_scroll = None;
+			offset = Some(live_edge_offset);
 		}
 		let user_scroll = ui.input(|input| input.smooth_scroll_delta().y) + autoscroll_delta;
 		if user_scroll != 0.0 && self.reveal_scroll.take().is_some() {
 			offset = None;
+		}
+		if user_scroll != 0.0 {
+			self.present_scroll = None;
+		}
+		// Jump to present glides back to the live edge instead of teleporting there.
+		if let Some((from, elapsed)) = &mut self.present_scroll {
+			*elapsed += ui.input(|input| input.stable_dt).clamp(1.0 / 240.0, 0.05);
+			let t = *elapsed / PRESENT_SCROLL_SECS;
+			if t >= 1.0 {
+				offset = Some(live_edge_offset);
+				self.present_scroll = None;
+				self.follow_latest();
+				self.jump = false;
+			} else {
+				offset = Some(*from + (live_edge_offset - *from) * ease_out_cubic(t));
+			}
+			ui.ctx().request_repaint();
 		}
 		if let Some(motion) = &mut self.reveal_scroll {
 			motion.elapsed += ui.input(|input| input.stable_dt).clamp(1.0 / 240.0, 0.05);
@@ -1041,10 +1130,7 @@ impl TimelineView {
 		if autoscroll_delta != 0.0 {
 			// Set the viewport before virtualization. A global scroll delta can be consumed
 			// by nested embed scroll areas and moves past the rows laid out this frame.
-			let max_offset =
-				(total + end_padding + pending_rows.iter().map(|(_, height)| height).sum::<f32>()
-					- ui.available_height())
-				.max(0.0);
+			let max_offset = live_edge_offset;
 			let next =
 				(offset.unwrap_or(self.scroll_offset) - autoscroll_delta).clamp(0.0, max_offset);
 			offset = Some(next);
@@ -2289,25 +2375,68 @@ impl TimelineView {
 							.hover_pos()
 							.is_some_and(|pos| output.inner_rect.contains(pos)))
 			}) && state.can_load_older();
-		// Discord-style overlays: an unread strip hangs from the top edge, and a translucent
-		// "older messages" bar floats above the composer while the user is not following. They
-		// are painted after the scroll area so they sit above the messages and win the hit-test.
+		// Discord-style overlays: an unread strip hangs from the top edge, the typing indicator
+		// floats in the reserved strip above the composer, and a round control offers the way
+		// back to the live edge. They are painted after the scroll area so they sit above the
+		// messages and win the hit-test.
 		let colors = crate::design::palette(ui);
 		let area = output.inner_rect;
+		let now = std::time::Instant::now();
+		let typing = state
+			.selected
+			.filter(|channel| crate::typing::active(state, *channel, now));
+		// The bottom edge fades into the composer: one continuous ramp from nothing down to the
+		// chat surface, with no flat band anywhere in it. While someone is typing the ramp runs
+		// tall enough to carry the indicator, and denser once the reader has scrolled away from
+		// the live edge, so the line stays legible over the messages behind it.
+		let fade_height = if typing.is_some() {
+			crate::typing::OVERLAY_HEIGHT + 52.0
+		} else {
+			20.0
+		};
+		let dense = if self.following {
+			colors.chat.gamma_multiply(0.88)
+		} else {
+			colors.chat.to_opaque()
+		};
 		let fade_rect = egui::Rect::from_min_max(
-			egui::pos2(area.left(), (area.bottom() - 12.0).max(area.top())),
+			egui::pos2(area.left(), (area.bottom() - fade_height).max(area.top())),
 			area.right_bottom(),
 		);
 		let mut fade = egui::Mesh::default();
-		fade.colored_vertex(fade_rect.left_top(), egui::Color32::TRANSPARENT);
-		fade.colored_vertex(fade_rect.right_top(), egui::Color32::TRANSPARENT);
-		fade.colored_vertex(fade_rect.right_bottom(), colors.chat.gamma_multiply(0.85));
-		fade.colored_vertex(fade_rect.left_bottom(), colors.chat.gamma_multiply(0.85));
-		fade.add_triangle(0, 1, 2);
-		fade.add_triangle(0, 2, 3);
+		// Stacked strips approximate a smooth ease instead of a straight ramp, which reads as a
+		// visible edge where it starts.
+		const FADE_STEPS: usize = 12;
+		for step in 0..=FADE_STEPS {
+			let t = step as f32 / FADE_STEPS as f32;
+			let y = fade_rect.top() + fade_rect.height() * t;
+			let color = dense.gamma_multiply(t * t * (3.0 - 2.0 * t));
+			fade.colored_vertex(egui::pos2(fade_rect.left(), y), color);
+			fade.colored_vertex(egui::pos2(fade_rect.right(), y), color);
+			if step > 0 {
+				let base = (step as u32 - 1) * 2;
+				fade.add_triangle(base, base + 1, base + 3);
+				fade.add_triangle(base, base + 3, base + 2);
+			}
+		}
 		ui.painter()
 			.with_clip_rect(area)
 			.add(egui::Shape::mesh(fade));
+		if let Some(channel) = typing {
+			crate::typing::overlay(
+				ui,
+				egui::Rect::from_min_max(
+					egui::pos2(
+						area.left() + 16.0,
+						(area.bottom() - crate::typing::OVERLAY_HEIGHT).max(area.top()),
+					),
+					egui::pos2(area.right() - 16.0, area.bottom()),
+				),
+				state,
+				channel,
+				now,
+			);
+		}
 		let browsing_history = state.history_targeted
 			|| state.history_before.is_some()
 			|| state.history_after.is_some();
@@ -2391,52 +2520,34 @@ impl TimelineView {
 		let unread = state
 			.selected
 			.is_some_and(|channel| state.unread(channel) == Some(true));
-		if (!self.following && distance_from_bottom > 3.0 * area.height())
+		self.present_control = None;
+		if (!self.following && distance_from_bottom > PRESENT_CONTROL_SCREENS * area.height())
 			|| (self.target_browsing && !(at_bottom && unread))
 			|| detached_page
 		{
-			let mut present = false;
+			// A round control on the right edge, not a bar across the conversation: it says the
+			// same thing with far less furniture and never covers a message being read.
+			let size = 38.0;
 			let rect = egui::Rect::from_min_size(
-				egui::pos2(area.left() + 16.0, area.bottom() - 30.0),
-				egui::vec2((area.width() - 32.0).max(120.0), 30.0),
+				egui::pos2(
+					area.right() - 16.0 - size,
+					area.bottom() - crate::typing::OVERLAY_HEIGHT - 10.0 - size,
+				),
+				egui::vec2(size, size),
 			);
-			let base = colors.base.to_opaque();
-			overlay_bar(
-				ui,
-				rect,
-				egui::Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), 236),
-				egui::CornerRadius {
-					nw: 8,
-					ne: 8,
-					sw: 0,
-					se: 0,
-				},
-				|ui| {
-					ui.label(
-						RichText::new(if unread {
-							"New messages below"
-						} else {
-							"You're viewing older messages"
-						})
-						.size(13.0)
-						.color(colors.text),
-					);
-					ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-						present = bar_button(
-							ui,
-							"Jump to present",
-							crate::icons::Icon::ArrowDown,
-							colors.text_strong,
-						)
-						.clicked();
-					});
-				},
-			);
+			self.present_control = Some(rect);
+			let present = present_control(ui, rect, unread);
 			if present {
 				if browsing_history {
 					self.latest = true;
 				}
-				self.follow_latest();
+				if distance_from_bottom > 0.5 && !browsing_history {
+					// Glide back so the reader keeps their place in the conversation.
+					self.target_browsing = false;
+					self.present_scroll = Some((output.state.offset.y, 0.0));
+				} else {
+					self.follow_latest();
+				}
 				ui.ctx().request_repaint();
 			}
 		}
@@ -2801,8 +2912,8 @@ mod tests {
 		for _ in 0..5 {
 			banner_frame(&ctx, &mut view, &mut state, vec![], false);
 		}
-		for (distance, expected) in [(1_200.0, false), (2_400.0, true)] {
-			let mut labels = vec![];
+		// Several screens of scrollback pass before the control appears at all.
+		for (distance, expected) in [(1_200.0, false), (3_000.0, false), (4_200.0, true)] {
 			for _ in 0..5 {
 				let offset =
 					view.rows.iter().map(|(_, height)| height).sum::<f32>() - 600.0 - distance;
@@ -2811,20 +2922,12 @@ mod tests {
 				view.jump = false;
 				view.anchor = Some((view.rows[index].0, offset - top));
 				view.revision = u64::MAX;
-				labels = banner_frame(&ctx, &mut view, &mut state, vec![], false);
+				banner_frame(&ctx, &mut view, &mut state, vec![], false);
 			}
-			assert_eq!(
-				labels.iter().any(|(text, _)| text == "Jump to present"),
-				expected
-			);
+			assert_eq!(view.present_control.is_some(), expected);
 		}
-		let labels = banner_frame(&ctx, &mut view, &mut state, vec![], false);
-		let pos = labels
-			.iter()
-			.find(|(text, _)| text == "Jump to present")
-			.unwrap()
-			.1
-			.center();
+		banner_frame(&ctx, &mut view, &mut state, vec![], false);
+		let pos = view.present_control.unwrap().center();
 		for pressed in [true, false] {
 			banner_frame(
 				&ctx,
@@ -2843,9 +2946,14 @@ mod tests {
 			);
 		}
 		assert!(
-			view.following && view.jump,
+			view.present_scroll.is_some(),
 			"Jump to present lost its click when sibling widget IDs changed"
 		);
+		// The glide back to the live edge resumes following without a teleport.
+		for _ in 0..30 {
+			banner_frame(&ctx, &mut view, &mut state, vec![], false);
+		}
+		assert!(view.present_scroll.is_none() && view.following);
 	}
 	#[test]
 	fn pending_rows_share_scroll_and_only_measure_near_viewport() {
@@ -4194,12 +4302,10 @@ mod tests {
 				assert!(state.status.starts_with("Message was not returned"));
 			}
 			// The whole page fits onscreen, but only an explicit latest action resumes auto-read.
-			let labels = frame(&mut view, &mut state, vec![]);
-			let pos = labels
-				.iter()
-				.find(|(text, _)| text.contains("Jump to present"))
-				.unwrap()
-				.1
+			frame(&mut view, &mut state, vec![]);
+			let pos = view
+				.present_control
+				.expect("jump to present control")
 				.center();
 			for pressed in [true, false] {
 				frame(

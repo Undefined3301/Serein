@@ -3156,18 +3156,17 @@ impl MessagingUi {
 								background.chat,
 								design::ImageSection::Composer,
 							))
+							// The bottom inset matches the account card's, so the input and the
+							// account pill sit on one line across the window.
 							.inner_margin(egui::Margin {
 								left: 16,
 								right: 16,
 								top: 2,
-								bottom: 4,
+								bottom: 8,
 							}),
 					)
 					.show(ui, |ui| {
 						self.composer(ui, state, channel, &ctx, &mut commands);
-						// The typing row doubles as the bottom margin, as in Discord.
-						ui.add_space(-2.0);
-						typing::show(ui, state, channel, std::time::Instant::now());
 					});
 				if commands
 					.iter()
@@ -4802,14 +4801,20 @@ mod composer_tests {
 			};
 			let click = |view: &mut MessagingUi, state: &mut State, label: &str| {
 				let (labels, _) = frame(view, state, vec![]);
-				let pos = labels
-					.iter()
-					.find(|(text, _)| {
-						text == label || (label == "Jump to present" && text.ends_with(label))
-					})
-					.expect("navigation control")
-					.1
-					.center();
+				// The return to the live edge is an icon-only control with no painted text.
+				let pos = if label == "Jump to present" {
+					view.timeline
+						.present_control
+						.expect("navigation control")
+						.center()
+				} else {
+					labels
+						.iter()
+						.find(|(text, _)| text == label)
+						.expect("navigation control")
+						.1
+						.center()
+				};
 				let mut commands = vec![];
 				for pressed in [true, false] {
 					commands.extend(
