@@ -435,7 +435,7 @@ impl MessagingUi {
 									unread,
 								);
 							}
-							if count > 0 {
+							if !open && count > 0 {
 								badge(
 									ui,
 									rect.right_bottom() - egui::vec2(8.0, 8.0),
