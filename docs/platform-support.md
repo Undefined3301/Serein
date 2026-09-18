@@ -9,11 +9,11 @@ DX12 launches successfully; the new default still needs native Windows validatio
 macOS and Linux retain their existing backend defaults.
 
 Windows turns off winit's undecorated drop-shadow hack after the window exists, including
-after title-bar changes. egui-winit enables that hack for custom chrome; it shifts
-`WM_NCCALCSIZE` by one pixel while restored, and DXGI then scales the swapchain. Maximizing
-skips the shift, which is why only that state looked sharp. `ViewportBuilder::with_has_shadow`
-is macOS-only and does not disable the Windows hack. Native DPI and eframe's physical
-surface sizing remain unchanged. macOS/Linux window creation is unchanged.
+after title-bar changes. egui-winit enables that hack for custom chrome. While restored it
+adds one pixel to `WM_NCCALCSIZE` top and bottom. Maximizing skips the shift, which is why
+only that state looked sharp. `ViewportBuilder::with_has_shadow` is macOS-only and does not
+disable the Windows hack. Native DPI and eframe's physical surface sizing remain unchanged.
+macOS/Linux window creation is unchanged.
 For offline inspection, run `cargo run --locked -p serein --features demo -- --demo --demo-rendering`.
 The diagnostic shows the physical client size, logical viewport, native/egui scale and WGPU
 surface dimensions sampled by a render callback, plus alternating one-pixel stripes.

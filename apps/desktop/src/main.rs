@@ -966,7 +966,7 @@ fn demo_members(guild: Option<model::Id>, channel: model::Id, request: u64) -> m
 fn align_undecorated_surface(window: &winit::window::Window) {
 	use winit::platform::windows::WindowExtWindows as _;
 	// egui-winit turns on winit's 1px restored-client shift for custom chrome.
-	// DXGI then scales the swapchain. Maximized skips the shift.
+	// Maximized skips the shift.
 	window.set_undecorated_shadow(false);
 }
 

@@ -53,8 +53,6 @@ pub fn install(ctx: &Context) {
 	crate::design::weights_installed(ctx);
 }
 
-/// Inter still ships TrueType instructions. Do not run them. Binning stays on.
-/// Still grayscale, not ClearType.
 fn latin(data: &'static [u8]) -> FontData {
 	let mut font = FontData::from_static(data);
 	font.tweak.hinting = Some(false);

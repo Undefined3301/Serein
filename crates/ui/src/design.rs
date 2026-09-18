@@ -849,8 +849,6 @@ pub fn apply(ctx: &egui::Context) {
 		style.spacing.interact_size.y = f32::from(metrics.control_height.unwrap_or(32));
 		style.spacing.menu_margin = egui::Margin::same(8);
 		style.visuals.panel_fill = p.chat;
-		// Grayscale AA, not ClearType. Hinting off, binning on. Dark gamma 0.5
-		// stays softer than 2c-c^2. Light leaves the transfer function off.
 		style.visuals.text_options.font_hinting = false;
 		style.visuals.text_options.subpixel_binning = true;
 		style.visuals.text_options.color_transfer_function = if theme == egui::Theme::Dark {
