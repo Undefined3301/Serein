@@ -124,15 +124,23 @@ pub fn show(
 				.show(|ui| {
 					ui.set_width(width - 24.0);
 					ui.horizontal_centered(|ui| {
-						let image = reaction
-							.emoji
-							.id
-							.and_then(|id| media.0.custom_image(ui.ctx(), id, 52.0, media.1))
-							.or_else(|| {
-								crate::emoji::image(ui.ctx(), &reaction.emoji.label(), 52.0)
-							})
-							.unwrap_or_else(|| crate::emoji::blank(ui.ctx(), 52.0));
-						ui.add(image);
+						if let Some(image) = match reaction.emoji.id {
+							Some(id) => Some(
+								media
+									.0
+									.custom_image(ui.ctx(), id, 52.0, media.1)
+									.unwrap_or_else(|| crate::emoji::blank(ui.ctx(), 52.0)),
+							),
+							None => crate::emoji::image(ui.ctx(), &reaction.emoji.label(), 52.0),
+						} {
+							ui.add(image);
+						} else {
+							ui.label(
+								egui::RichText::new(reaction.emoji.label())
+									.size(26.0)
+									.color(colors.text_strong),
+							);
+						}
 						ui.add_space(8.0);
 						let summary = if let Some(value) = matching
 							&& !value.users.is_empty()
