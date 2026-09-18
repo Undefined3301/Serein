@@ -3807,9 +3807,9 @@ mod tests {
 					);
 				}
 				assert_eq!(
-				state.reply.take(),
-				Some(client_core::Reply::to(Id(60_000 << 22)))
-			);
+					state.reply.take(),
+					Some(client_core::Reply::to(Id(60_000 << 22)))
+				);
 				assert!(!egui::Popup::is_any_open(&ctx));
 				assert!(view.quick_delete.is_none());
 				assert_eq!(view.heights, heights);
