@@ -1075,6 +1075,7 @@ impl State {
 			confirmed: None,
 		});
 		self.drafts.remove(&channel);
+		self.search_target = None;
 		Some(Command::Send {
 			channel,
 			content,

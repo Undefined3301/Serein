@@ -1542,18 +1542,16 @@ impl Formatted {
 					.map_or_else(|| format!("unknown-role ({id})"), |role| role.name.clone());
 				(format!("@{name}"), pill.clone())
 			} else if let Some(id) = style.channel {
-				let label = channels
-					.iter()
-					.find(|channel| {
-						channel.id == id
-							&& channel.guild.is_some()
-							&& matches!(channel.kind, 0 | 5 | 10..=12 | 15 | 16)
-					})
-					.map_or_else(
-						|| "#unknown-channel".into(),
-						|channel| format!("#{}", channel.name),
-					);
-				(label, pill.clone())
+				match channels.iter().find(|channel| channel.id == id) {
+					Some(channel)
+						if channel.guild.is_some()
+							&& matches!(channel.kind, 0 | 5 | 10..=12 | 15 | 16) =>
+					{
+						(format!("#{}", channel.name), pill.clone())
+					}
+					Some(_) => (text.clone(), muted.clone()),
+					None => ("#unknown-channel".into(), pill.clone()),
+				}
 			} else if style.mass_mention {
 				(text.clone(), pill.clone())
 			} else {
