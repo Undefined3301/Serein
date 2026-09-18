@@ -965,11 +965,11 @@ impl TimelineView {
 			if state.timeline.get(target).is_some() {
 				self.highlighted = Some((target, ui.input(|input| input.time) + 2.0));
 				let viewport_h = area.height();
-				let (first, end, _) = visible_range(
-					&self.rows,
-					self.scroll_offset,
-					self.scroll_offset + viewport_h,
-				);
+				let current_offset = self
+					.scroll_offset
+					.clamp(0.0, (packed - viewport_h).max(0.0));
+				let (first, end, _) =
+					visible_range(&self.rows, current_offset, current_offset + viewport_h);
 				let visible = self.rows[first..end].iter().any(|(id, _)| *id == target);
 				let stay = match reveal {
 					TargetReveal::StayIfVisible => visible,
@@ -981,13 +981,13 @@ impl TimelineView {
 					self.following = false;
 					self.jump = false;
 					let to = centered_offset(&self.rows, target, viewport_h, packed);
-					if (to - self.scroll_offset).abs() < 1.0 {
+					if (to - current_offset).abs() < 1.0 {
 						offset = Some(to);
 						self.reveal_scroll = None;
 					} else {
 						self.reveal_scroll = Some(RevealScroll {
 							target,
-							from: self.scroll_offset,
+							from: current_offset,
 							elapsed: 0.0,
 						});
 					}
