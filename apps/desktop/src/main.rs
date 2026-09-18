@@ -1359,7 +1359,11 @@ impl Desktop {
 		#[cfg(feature = "demo")]
 		if demo_typing {
 			// Reply bar plus an active typing row on the fixture conversation, for screenshots.
-			state.reply = state.timeline.iter().last().map(|message| message.id);
+			state.reply = state
+				.timeline
+				.iter()
+				.last()
+				.map(|message| client_core::Reply::to(message.id));
 			state.status = "Offline fixture · reply bar and typing row shown at startup";
 		}
 		#[cfg(feature = "demo")]
@@ -2791,7 +2795,7 @@ impl Desktop {
 					message.author = self.state.user.clone().unwrap();
 					message.content = content;
 					message.nonce = Some(nonce.clone());
-					message.reply_to = reply;
+					message.reply_to = reply.map(client_core::Reply::target);
 					Event::SendResult {
 						nonce,
 						result: Ok(message),

@@ -466,7 +466,7 @@ async fn cancelled(cancel: &mut watch::Receiver<bool>) {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use client_core::auth::SessionSecret;
+	use client_core::{Reply, auth::SessionSecret};
 	use std::sync::{
 		Arc,
 		atomic::{AtomicU64, Ordering},
@@ -516,7 +516,7 @@ mod tests {
 			channel: model::Id(1),
 			content: String::new(),
 			nonce: "synthetic-upload".into(),
-			reply: Some(model::Id(2)),
+			reply: Some(Reply::to(model::Id(2))),
 		}
 	}
 	async fn request(socket: &mut TcpStream) -> (String, Vec<u8>) {
@@ -610,7 +610,7 @@ mod tests {
                 assert_eq!(body["content"], "");
                 assert_eq!(body["nonce"], "synthetic-upload");
                 assert_eq!(body["attachments"], serde_json::json!([{"id":"0","filename":filename,"uploaded_filename":"synthetic-upload/0/file.txt"},{"id":"1","filename":filename,"uploaded_filename":"synthetic-upload/1/file.txt"}]));
-                assert_eq!(body["allowed_mentions"], serde_json::json!({"parse":[],"users":[],"roles":[],"replied_user":false}));
+                assert_eq!(body["allowed_mentions"], serde_json::json!({"parse":[],"users":[],"roles":[],"replied_user":true}));
                 assert_eq!(body["message_reference"], serde_json::json!({"message_id":"2","channel_id":"1"}));
                 respond(&mut socket, "200 OK", r#"{"id":"3","channel_id":"1","author":{"id":"4","username":"Synthetic"},"nonce":"synthetic-upload"}"#).await;
             });

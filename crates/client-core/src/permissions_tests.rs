@@ -1,4 +1,4 @@
-use crate::{Command, Envelope, Event, State, permissions::Event as PermissionEvent};
+use crate::{Command, Envelope, Event, Reply, State, permissions::Event as PermissionEvent};
 use model::{
 	Channel, ChannelPatch, Freshness, Guild, Id, Message, MessagePatch, Patch, User,
 	permissions as p,
@@ -1083,7 +1083,7 @@ fn thread_target_changes_revoke_content_for_patches_creates_and_snapshots() {
 				panic!()
 			};
 			history(&mut state, Id(30), request, 300);
-			state.reply = Some(Id(300));
+			state.reply = Some(Reply::to(Id(300)));
 			state.drafts.insert(Id(30), "Keep thread draft".into());
 			let Command::History { request, .. } = state.history(None) else {
 				panic!()

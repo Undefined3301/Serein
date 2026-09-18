@@ -21,7 +21,7 @@ mod server_settings;
 pub mod upload;
 mod user_actions;
 use client_core::{
-	Command, Event,
+	Command, Event, Reply,
 	auth::{AuthProvider, Failure, SessionSecret},
 };
 use discord_protocol::*;
@@ -821,7 +821,7 @@ impl DiscordApi {
 						result: Err(Failure::Capacity),
 					};
 				}
-				let body = serde_json::json!({"content": content, "allowed_mentions": allowed_mentions(&content)});
+				let body = serde_json::json!({"content": content, "allowed_mentions": allowed_mentions(&content, None)});
 				let result = self
 					.request(
 						Method::PATCH,
@@ -1056,7 +1056,7 @@ impl DiscordApi {
 		channel: model::Id,
 		content: &str,
 		nonce: &str,
-		reply: Option<model::Id>,
+		reply: Option<Reply>,
 		attachment: Option<Vec<serde_json::Value>>,
 	) -> Result<model::Message, Failure> {
 		if (content.trim().is_empty() && attachment.is_none())
@@ -1064,10 +1064,10 @@ impl DiscordApi {
 		{
 			return Err(Failure::Capacity);
 		}
-		let mut body = serde_json::json!({"content":content,"nonce":nonce,"allowed_mentions":allowed_mentions(content)});
+		let mut body = serde_json::json!({"content":content,"nonce":nonce,"allowed_mentions":allowed_mentions(content, reply)});
 		if let Some(reply) = reply {
 			body["message_reference"] =
-				serde_json::json!({"message_id":reply,"channel_id":channel});
+				serde_json::json!({"message_id":reply.target(),"channel_id":channel});
 		}
 		if let Some(attachment) = attachment {
 			body["attachments"] = serde_json::json!(attachment);
@@ -1108,7 +1108,7 @@ impl DiscordApi {
 		let body = serde_json::json!({
 			"name": title,
 			"auto_archive_duration": 4320,
-			"message": {"content": content, "allowed_mentions": allowed_mentions(content)},
+			"message": {"content": content, "allowed_mentions": allowed_mentions(content, None)},
 		});
 		self.request(
 			Method::POST,
@@ -1865,7 +1865,7 @@ mod tests {
 						channel: model::Id(2),
 						content: "Synthetic reply".into(),
 						nonce: "local".into(),
-						reply: Some(model::Id(50)),
+						reply: Some(Reply::to(model::Id(50))),
 					})
 					.await
 				else {
@@ -2108,28 +2108,28 @@ mod tests {
 	}
 }
 
-fn allowed_mentions(content: &str) -> serde_json::Value {
+fn allowed_mentions(content: &str, reply: Option<client_core::Reply>) -> serde_json::Value {
 	let everyone: &[&str] = if model::has_mass_mention(content) {
 		&["everyone"]
 	} else {
 		&[]
 	};
-	serde_json::json!({"parse":everyone,"users":model::mentioned_user_ids(content),"roles":model::mentioned_role_ids(content),"replied_user":false})
+	serde_json::json!({"parse":everyone,"users":model::mentioned_user_ids(content),"roles":model::mentioned_role_ids(content),"replied_user":reply.is_some_and(|r| r.mention)})
 }
 #[cfg(test)]
 mod mention_tests {
 	#[test]
 	fn mass_mentions_and_explicit_users_are_allowed() {
 		assert_eq!(
-			super::allowed_mentions("hello test"),
+			super::allowed_mentions("hello test", None),
 			serde_json::json!({"parse":[],"users":[],"roles":[],"replied_user":false})
 		);
 		assert_eq!(
-			super::allowed_mentions("@everyone <@&4> <@7> <@!7> <@9>"),
+			super::allowed_mentions("@everyone <@&4> <@7> <@!7> <@9>", None),
 			serde_json::json!({"parse":["everyone"],"users":["7","9"],"roles":["4"],"replied_user":false})
 		);
 		assert_eq!(
-			super::allowed_mentions("@here"),
+			super::allowed_mentions("@here", None),
 			serde_json::json!({"parse":["everyone"],"users":[],"roles":[],"replied_user":false})
 		);
 	}

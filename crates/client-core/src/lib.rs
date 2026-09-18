@@ -23,7 +23,7 @@ pub mod profile;
 pub mod reactions;
 pub mod read_state;
 mod replies;
-pub use replies::ReplyDeletions;
+pub use replies::{Reply, ReplyDeletions};
 pub mod group_actions;
 pub mod resident;
 pub mod screen;
@@ -188,7 +188,7 @@ pub enum Command {
 		channel: Id,
 		content: String,
 		nonce: String,
-		reply: Option<Id>,
+		reply: Option<Reply>,
 	},
 	Edit {
 		request: u64,
@@ -586,7 +586,7 @@ pub struct State {
 	pub status: &'static str,
 	pub drafts: BTreeMap<Id, String>,
 	pub pending: Vec<Pending>,
-	pub reply: Option<Id>,
+	pub reply: Option<Reply>,
 	pub send_sequence: u64,
 	pub request: u64,
 	pub history_before: Option<Id>,
@@ -2377,7 +2377,7 @@ impl State {
 					channel.last_message = None;
 				}
 				if self.selected == Some(channel) {
-					if self.reply == Some(id) {
+					if self.reply_target() == Some(id) {
 						self.reply = None;
 					}
 					self.timeline.delete(id)
@@ -2421,7 +2421,7 @@ impl State {
 				if ids.len() > 100 {
 					Err("Bulk deletion exceeds safe capacity")
 				} else if self.selected == Some(channel) {
-					if self.reply.is_some_and(|id| ids.contains(&id)) {
+					if self.reply_target().is_some_and(|id| ids.contains(&id)) {
 						self.reply = None;
 					}
 					ids.into_iter().try_for_each(|id| self.timeline.delete(id))
@@ -2578,7 +2578,7 @@ impl State {
 			self.cancel_history();
 		}
 		if self
-			.reply
+			.reply_target()
 			.is_some_and(|target| self.timeline.is_deleted(target))
 		{
 			self.reply = None;
@@ -3208,7 +3208,7 @@ mod tests {
 		assert_eq!(state.pending[0].attachments, ["a.png", "b.png", "c.pdf"]);
 		state.command_rejected(batch);
 		state.pending.clear();
-		state.reply = Some(Id(4));
+		state.reply = Some(Reply::to(Id(4)));
 		let Command::Send {
 			content,
 			nonce,
@@ -3221,7 +3221,7 @@ mod tests {
 			panic!()
 		};
 		assert!(content.is_empty());
-		assert_eq!(reply, Some(Id(4)));
+		assert_eq!(reply, Some(Reply::to(Id(4))));
 		assert_eq!(state.pending[0].attachments, ["résumé.txt"]);
 		assert!(state.draft_bytes() >= "résumé.txt".len() + nonce.len() + size_of::<Pending>());
 		apply(
@@ -4014,7 +4014,7 @@ mod tests {
 			},
 		);
 		let positions = state.timeline.row_ids().collect::<Vec<_>>();
-		state.reply = Some(Id(100));
+		state.reply = Some(Reply::to(Id(100)));
 		apply(
 			&mut state,
 			Event::Delete {
@@ -4022,7 +4022,7 @@ mod tests {
 				id: Id(100),
 			},
 		);
-		assert_eq!(state.reply, Some(Id(100)));
+		assert_eq!(state.reply_target(), Some(Id(100)));
 		assert!(state.timeline.get(Id(100)).is_some());
 		apply(
 			&mut state,
@@ -4032,7 +4032,7 @@ mod tests {
 			},
 		);
 		assert_eq!(state.reply, None);
-		state.reply = Some(Id(101));
+		state.reply = Some(Reply::to(Id(101)));
 		let mut ids: Vec<_> = (101..150).map(Id).collect();
 		ids.extend([Id(101), Id(999)]); // Duplicate and unknown IDs create no extra rows.
 		apply(
@@ -4441,7 +4441,7 @@ mod tests {
 			};
 			state.timeline.insert(message(80), true, false).unwrap();
 			state.drafts.insert(Id(1), "Preserve this draft".into());
-			state.reply = Some(Id(80));
+			state.reply = Some(Reply::to(Id(80)));
 			assert!(matches!(state.history(None), Command::History { .. }));
 			let request = state.request;
 			apply(

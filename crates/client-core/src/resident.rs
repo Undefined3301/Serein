@@ -233,7 +233,7 @@ impl State {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::{Command, Envelope, auth};
+	use crate::{Command, Envelope, Reply, auth};
 	use model::{Message, MessagePatch, Patch, User};
 
 	fn message(channel: u64, id: u64) -> Message {
@@ -343,7 +343,7 @@ mod tests {
 		let mut state = state();
 		load(&mut state, 1);
 		state.drafts.insert(Id(1), "Unsent draft".into());
-		state.reply = Some(Id(1001));
+		state.reply = Some(Reply::to(Id(1001)));
 		let content = state.timeline.get(Id(1001)).unwrap().content.as_ptr();
 		for loading in [false, true] {
 			if loading {
@@ -355,7 +355,7 @@ mod tests {
 			assert_eq!((state.request, state.revision, state.freshness), before);
 			assert_eq!(state.history_pending, loading);
 			assert_eq!(state.search_target, Some(Id(1001)));
-			assert_eq!(state.reply, Some(Id(1001)));
+			assert_eq!(state.reply_target(), Some(Id(1001)));
 			assert_eq!(state.drafts[&Id(1)], "Unsent draft");
 			assert_eq!(
 				state.timeline.get(Id(1001)).unwrap().content.as_ptr(),

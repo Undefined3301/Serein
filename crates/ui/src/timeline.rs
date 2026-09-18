@@ -1854,7 +1854,7 @@ impl TimelineView {
 						}
 						self.toolbar = Some((*id, toolbar_rect));
 					}
-					if selected_reply.or(state.reply) == Some(*id)
+					if selected_reply.or(state.reply_target()) == Some(*id)
 						|| self.highlighted.is_some_and(|(target, _)| target == *id)
 					{
 						ui.painter().set(
@@ -1947,7 +1947,7 @@ impl TimelineView {
 			.get(anchor)
 			.map(|(id, _)| (*id, output.state.offset.y - lead - anchor_top));
 		if selected_reply.is_some() {
-			state.reply = selected_reply;
+			state.reply = selected_reply.map(client_core::Reply::to);
 			self.reply_started = true;
 		}
 		let distance_from_bottom =
@@ -3725,7 +3725,10 @@ mod tests {
 					],
 				);
 			}
-			assert_eq!(state.reply.take(), Some(Id(60_000 << 22)));
+			assert_eq!(
+				state.reply.take(),
+				Some(client_core::Reply::to(Id(60_000 << 22)))
+			);
 			// Both entry points share the same menu, including on selectable text,
 			// row whitespace, and Shift+right-click (which must not quick-delete).
 			let menu_labels = [
@@ -3803,7 +3806,10 @@ mod tests {
 						],
 					);
 				}
-				assert_eq!(state.reply.take(), Some(Id(60_000 << 22)));
+				assert_eq!(
+				state.reply.take(),
+				Some(client_core::Reply::to(Id(60_000 << 22)))
+			);
 				assert!(!egui::Popup::is_any_open(&ctx));
 				assert!(view.quick_delete.is_none());
 				assert_eq!(view.heights, heights);
