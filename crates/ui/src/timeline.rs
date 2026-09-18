@@ -1233,8 +1233,7 @@ impl TimelineView {
 								ui.scope_id().with("message-focus"),
 								egui::Sense::focusable_noninteractive(),
 							);
-							let retained =
-								retained_toolbar.is_some_and(|(active, _)| active == id);
+							let retained = retained_toolbar.is_some_and(|(active, _)| active == id);
 							let toolbar_hover = self
 								.toolbar
 								.filter(|(active, toolbar)| {
