@@ -648,6 +648,7 @@ impl TimelineView {
 		self.following = false;
 		self.jump = false;
 		self.reveal_scroll = None;
+		self.pending_reveal = None;
 		self.mark_read = None;
 		self.mark_unread = None;
 	}
@@ -657,6 +658,7 @@ impl TimelineView {
 		self.jump = true;
 		self.anchor = None;
 		self.reveal_scroll = None;
+		self.pending_reveal = None;
 	}
 	pub(super) fn request_reply_target(&mut self, id: Id) {
 		self.reply_target = Some(id);
@@ -1021,8 +1023,7 @@ impl TimelineView {
 			);
 		}
 		let user_scroll = ui.input(|input| input.smooth_scroll_delta().y) + autoscroll_delta;
-		if user_scroll != 0.0 {
-			self.reveal_scroll = None;
+		if user_scroll != 0.0 && self.reveal_scroll.take().is_some() {
 			offset = None;
 		}
 		if let Some(motion) = &mut self.reveal_scroll {
