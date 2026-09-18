@@ -600,12 +600,14 @@ impl LocalStore {
 		let channel = channel.to_string();
 		let retained: std::collections::BTreeSet<_> = messages.iter().map(|m| m.id).collect();
 		let previous: BTreeMap<_, _> = existing.iter().map(|m| (m.id, m)).collect();
+		let mut deleted = false;
 		{
 			let mut delete = transaction
 				.prepare_cached("DELETE FROM messages WHERE account=?1 AND channel=?2 AND id=?3")?;
 			for message in existing {
 				if !retained.contains(&message.id) {
-					delete.execute(params![account, channel, message.id.to_string()])?;
+					deleted |=
+						delete.execute(params![account, channel, message.id.to_string()])? > 0;
 				}
 			}
 		}
@@ -689,7 +691,19 @@ impl LocalStore {
 		transaction.execute("INSERT INTO channels VALUES(?1,?2,unixepoch('subsec')*1000) ON CONFLICT(account,channel) DO UPDATE SET touched=excluded.touched",params![account,channel])?;
 		// Global limit: 20 channel windows, 10000 messages AND 48 MiB content, below the 64 MiB database page ceiling.
 		loop {
-			let (channels,bytes):(i64,i64)=transaction.query_row("SELECT (SELECT count(*) FROM channels),(SELECT coalesce(sum(length(CAST(content AS BLOB))+length(CAST(name AS BLOB))+length(CAST(embeds AS BLOB))+length(CAST(attachments AS BLOB))+length(CAST(mentions AS BLOB))+length(CAST(author_roles AS BLOB))+coalesce(length(CAST(author_nick AS BLOB)),0)+256),0) FROM messages)",[],|r|Ok((r.get(0)?,r.get(1)?)))?;
+			let channels: i64 =
+				transaction.query_row("SELECT count(*) FROM channels", [], |row| row.get(0))?;
+			let page_count: i64 =
+				transaction.pragma_query_value(None, "page_count", |row| row.get(0))?;
+			let free_pages: i64 =
+				transaction.pragma_query_value(None, "freelist_count", |row| row.get(0))?;
+			let page_size: i64 =
+				transaction.pragma_query_value(None, "page_size", |row| row.get(0))?;
+			let bytes = if (page_count - free_pages) * page_size <= 48 * 1024 * 1024 {
+				0
+			} else {
+				transaction.query_row("SELECT coalesce(sum(length(CAST(content AS BLOB))+length(CAST(name AS BLOB))+length(CAST(embeds AS BLOB))+length(CAST(attachments AS BLOB))+length(CAST(mentions AS BLOB))+length(CAST(author_roles AS BLOB))+coalesce(length(CAST(author_nick AS BLOB)),0)+256),0) FROM messages",[],|row|row.get(0))?
+			};
 			if channels <= 20 && bytes <= 48 * 1024 * 1024 {
 				break;
 			}
@@ -706,9 +720,12 @@ impl LocalStore {
 				"DELETE FROM channels WHERE account=?1 AND channel=?2",
 				params![a, c],
 			)?;
+			deleted = true;
 		}
 		transaction.commit()?;
-		self.0.execute_batch("PRAGMA incremental_vacuum(64);")?;
+		if deleted {
+			self.0.execute_batch("PRAGMA incremental_vacuum(64);")?;
+		}
 		Ok(())
 	}
 	pub fn load_channel(&self, account: Id, channel: Id) -> Result<Vec<Message>> {

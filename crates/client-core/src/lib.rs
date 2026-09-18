@@ -1559,17 +1559,15 @@ impl State {
 		}
 		if let Event::ThreadChanged { guild, patch } = &envelope.event
 			&& !self
-				.channels
-				.iter()
-				.any(|c| c.id == patch.id && c.guild == Some(*guild) && matches!(c.kind, 10..=12))
+				.channel(patch.id)
+				.is_some_and(|c| c.guild == Some(*guild) && matches!(c.kind, 10..=12))
 		{
 			return;
 		}
 		if let Event::ThreadRemoved { guild, id } = &envelope.event
 			&& !self
-				.channels
-				.iter()
-				.any(|c| c.id == *id && c.guild == Some(*guild) && matches!(c.kind, 10..=12))
+				.channel(*id)
+				.is_some_and(|c| c.guild == Some(*guild) && matches!(c.kind, 10..=12))
 		{
 			return;
 		}
@@ -1846,7 +1844,7 @@ impl State {
 			}
 			Event::ChannelCreated(channel) | Event::ChannelRestored(channel) => {
 				if self.archived_thread == Some(channel.id)
-					&& self.channels.iter().any(|old| {
+					&& self.channel(channel.id).is_some_and(|old| {
 						old.id == channel.id
 							&& (old.guild != channel.guild
 								|| old.parent_id != channel.parent_id
@@ -1858,7 +1856,7 @@ impl State {
 					&& (!channel
 						.guild
 						.is_some_and(|guild| self.guild(guild).is_some())
-						|| self.channels.iter().any(|old| {
+						|| self.channel(channel.id).is_some_and(|old| {
 							old.id == channel.id
 								&& (old.guild != channel.guild || !matches!(old.kind, 10..=12))
 						})) {
@@ -1930,7 +1928,7 @@ impl State {
 				{
 					self.clear_archives();
 				}
-				if let Some(index) = self.channels.iter().position(|c| c.id == patch.id) {
+				if let Some(index) = self.channel_index(patch.id) {
 					let previous = self.channels[index].clone();
 					let channel = &mut self.channels[index];
 					if let Some(latest) = channel.last_message {
@@ -1993,9 +1991,8 @@ impl State {
 			}
 			Event::RecipientAdded { channel, user } => {
 				if let Some(index) = self
-					.channels
-					.iter()
-					.position(|c| c.id == channel && c.guild.is_none())
+					.channel_index(channel)
+					.filter(|&index| self.channels[index].guild.is_none())
 				{
 					let previous = self.channels[index].clone();
 					let c = &mut self.channels[index];
@@ -2037,11 +2034,11 @@ impl State {
 					}
 					return;
 				}
-				if let Some(c) = self
-					.channels
-					.iter_mut()
-					.find(|c| c.id == channel && c.guild.is_none())
+				if let Some(index) = self
+					.channel_index(channel)
+					.filter(|&index| self.channels[index].guild.is_none())
 				{
+					let c = &mut self.channels[index];
 					c.recipients.retain(|u| u.id != user);
 					for (id, participants) in &mut self.voice.dm_participants {
 						if *id == channel {
