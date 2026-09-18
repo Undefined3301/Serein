@@ -521,7 +521,12 @@ impl SearchUi {
 						ui.allocate_exact_size(egui::Vec2::splat(64.0), egui::Sense::hover());
 					let face = colors.muted.gamma_multiply(0.35);
 					ui.painter().circle_filled(rect.center(), 32.0, face);
-					icons::paint(ui.painter(), icons::Icon::Pin, rect.shrink(16.0), colors.text);
+					icons::paint(
+						ui.painter(),
+						icons::Icon::Pin,
+						rect.shrink(16.0),
+						colors.text,
+					);
 					ui.add_space(20.0);
 					ui.label(
 						design::medium(
