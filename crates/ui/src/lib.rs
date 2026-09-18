@@ -2399,9 +2399,26 @@ impl MessagingUi {
                         let edit = ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                             ui.vertical(|ui| {
                                 ui.set_width(ui.available_width());
-                        cancel_edit |= keyboard_enabled && editing_here && !self.ime_active && !ime_this_frame
-                            && ctx.memory(|m| m.has_focus(composer_id) || m.had_focus_last_frame(composer_id))
-                            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+                        let composer_escape = keyboard_enabled
+                            && !self.ime_active
+                            && !ime_this_frame
+                            && ctx.memory(|m| {
+                                m.has_focus(composer_id) || m.had_focus_last_frame(composer_id)
+                            });
+                        cancel_edit |= editing_here
+                            && composer_escape
+                            && ctx.input_mut(|i| {
+                                i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+                            });
+                        if !editing_here
+                            && state.reply.is_some()
+                            && composer_escape
+                            && ctx.input_mut(|i| {
+                                i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+                            })
+                        {
+                            state.reply = None;
+                        }
                         let remaining = if editing_here { MAX_CONTENT * 4 } else { MAX_DRAFT_BYTES.saturating_sub(state.draft_bytes()) };
                         // Temporarily own the buffer so suggestions can borrow the current
                         // permission state without cloning the draft or server catalogs.
