@@ -328,11 +328,10 @@ fn composer_cap(
 fn mention_switch(ui: &mut egui::Ui, colors: &design::Palette, on: &mut bool) {
 	let font = egui::FontId::new(12.0, design::semibold_family(ui.ctx()));
 	let padding = egui::vec2(6.0, 3.0);
-	let hit = ui
-		.painter()
-		.layout_no_wrap("@ OFF".to_owned(), font.clone(), colors.muted)
-		.size()
-		+ 2.0 * padding;
+	let hit =
+		ui.painter()
+			.layout_no_wrap("@ OFF".to_owned(), font.clone(), colors.muted)
+			.size() + 2.0 * padding;
 	let (rect, mut response) = ui.allocate_exact_size(hit, egui::Sense::click());
 	if response.clicked() {
 		*on = !*on;
