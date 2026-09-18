@@ -111,7 +111,7 @@ impl Page {
 				"messaging permissions spam filters direct messages dm friend requests personalized connected games"
 			}
 			Self::Notifications => {
-				"notifications desktop system alerts overview sounds badges email streaming friends reactions"
+				"notifications desktop system alerts overview sounds badges message ring"
 			}
 			Self::Activity => "game activity playing osu status presence sharing",
 			Self::Voice => {
@@ -341,7 +341,7 @@ impl MessagingUi {
 										self.messaging_permissions_settings(ui, state, commands)
 									}
 									Page::Notifications => {
-										self.notification_settings(ui, state, commands)
+										self.notification_settings(ui, state.demo)
 									}
 									Page::Activity => self.activity_settings(ui, state),
 									Page::Voice => self.voice_settings_content(

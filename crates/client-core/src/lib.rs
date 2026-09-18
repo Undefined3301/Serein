@@ -16,7 +16,6 @@ pub mod invites;
 pub mod member_search;
 pub mod message_actions;
 pub mod messaging_permissions;
-pub mod notification_settings;
 pub mod notifications;
 pub mod presence;
 pub mod profile;
@@ -58,11 +57,6 @@ pub enum Command {
 	MessagingPermissions {
 		request: u64,
 		change: Option<model::messaging_permissions::Change>,
-	},
-	AccountNotificationSettings {
-		request: u64,
-		section: model::notification_settings::Section,
-		change: Option<model::notification_settings::Change>,
 	},
 	ChannelAction {
 		guild: Id,
@@ -341,11 +335,6 @@ pub enum Event {
 		request: u64,
 		result: Result<model::messaging_permissions::Snapshot, auth::Failure>,
 	},
-	SocialNotification(model::notification_settings::SocialNotification),
-	AccountNotificationSettings {
-		request: u64,
-		result: Result<model::notification_settings::Snapshot, auth::Failure>,
-	},
 	InviteChallenge {
 		request: u64,
 		challenge: Box<captcha::Challenge>,
@@ -520,7 +509,6 @@ pub struct NavigationIndex {
 
 pub struct State {
 	pub messaging_permissions: messaging_permissions::Settings,
-	pub notification_settings: notification_settings::Settings,
 	pub guild_folders: Option<model::guild_folders::Settings>,
 	pub folders_pending: bool,
 	pub folders_error: Option<&'static str>,
@@ -603,7 +591,6 @@ impl Default for State {
 	fn default() -> Self {
 		Self {
 			messaging_permissions: Default::default(),
-			notification_settings: Default::default(),
 			guild_folders: None,
 			folders_pending: false,
 			folders_error: None,
@@ -1096,15 +1083,6 @@ impl State {
 				request,
 				Err(auth::Failure::ProtocolAt(
 					"Messaging permissions were not queued; try again",
-				)),
-			);
-			return;
-		}
-		if let Command::AccountNotificationSettings { request, .. } = command {
-			self.apply_account_notification_settings(
-				request,
-				Err(auth::Failure::ProtocolAt(
-					"Notification settings were not queued; try again",
 				)),
 			);
 			return;
@@ -1710,16 +1688,8 @@ impl State {
 			}
 			Event::ReadState(event) => self.apply_read_state(event),
 			Event::NotificationPreferences(event) => self.apply_notification_preferences(event),
-			Event::SocialNotification(item) => {
-				self.receive_social_notification(item);
-				Ok(())
-			}
 			Event::MessagingPermissions { request, result } => {
 				self.apply_messaging_permissions(request, result);
-				Ok(())
-			}
-			Event::AccountNotificationSettings { request, result } => {
-				self.apply_account_notification_settings(request, result);
 				Ok(())
 			}
 			Event::UserAction(event) => self.apply_user_action(event),
@@ -2506,9 +2476,6 @@ impl State {
 			}
 			Event::Disconnected => {
 				self.member_search = Default::default();
-				self.interrupt_notification_settings(auth::Failure::ProtocolAt(
-					"Disconnected; reload notification settings",
-				));
 				self.cancel_message_actions();
 				self.cancel_user_action();
 				self.cancel_server_action();
@@ -2724,7 +2691,6 @@ impl State {
 		}
 		if failure.ends_session() {
 			self.invalidate_messaging_permissions(Some(failure));
-			self.interrupt_notification_settings(failure);
 			self.interrupt_own_profile();
 			self.local_game_activity = Default::default();
 			self.cancel_message_actions();
@@ -2855,7 +2821,6 @@ impl Event {
 					.result
 					.as_ref()
 					.map_or(0, model::server_admin::Result::bytes),
-				Self::SocialNotification(item) => item.body.capacity(),
 				Self::GuildFolders(result) => result
 					.as_ref()
 					.map_or(0, model::guild_folders::Settings::heap_bytes),

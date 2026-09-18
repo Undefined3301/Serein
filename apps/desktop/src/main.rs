@@ -2334,8 +2334,7 @@ impl Desktop {
 				}
 
 				// Demo preference changes are applied synchronously by client-core.
-				Command::AccountNotificationSettings { .. }
-				| Command::MessagingPermissions { .. } => return,
+				Command::MessagingPermissions { .. } => return,
 				Command::ChannelAction {
 					guild,
 					channel,
@@ -3785,13 +3784,6 @@ impl Desktop {
 				self.queue_cache(cache::Operation::SaveDraft { channel, content });
 			}
 			if ready && self.state.auth == AuthState::Authenticated {
-				if !self.fixture_only
-					&& !self.state.demo
-					&& let Some(command) = self.state.request_notification_settings(
-						model::notification_settings::Section::Overview,
-					) {
-					self.command(command);
-				}
 				// The worker survives logout; each accepted account READY restores its own drafts.
 				if !self.messaging.draft_restore_pending {
 					self.messaging.draft_restore_pending =
@@ -4133,9 +4125,6 @@ impl eframe::App for Desktop {
 			self.fixture_only,
 		) {
 			match alert {
-				notification_runtime::Alert::Generic(kind) => {
-					self.notifications.notify_kind(kind);
-				}
 				notification_runtime::Alert::Message {
 					title,
 					body,

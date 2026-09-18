@@ -842,24 +842,11 @@ impl State {
 			Event::FriendProfile(profile) => {
 				if self.user_actions.friends.contains_key(&profile.0.id) {
 					let user = profile.0.id;
-					let changed = self
-						.user_actions
-						.friends
-						.get(&user)
-						.is_some_and(|(old, _)| {
-							old.name != profile.0.name || old.avatar != profile.0.avatar
-						});
 					self.apply_user_action(Event::Friend {
 						user,
 						friend: true,
 						profile: Some(profile),
 					})?;
-					if changed {
-						self.notify_friend_change(
-							user,
-							model::notification_settings::SocialKind::ProfileUpdates,
-						);
-					}
 					return Ok(());
 				}
 			}

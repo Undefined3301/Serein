@@ -8,7 +8,6 @@ mod forum;
 mod group_actions;
 mod guild_folders;
 mod messaging_permissions;
-mod notification_settings;
 mod profile_edit;
 pub mod rpc;
 mod server_actions;
@@ -442,14 +441,6 @@ impl DiscordApi {
 			Command::MessagingPermissions { request, change } => Event::MessagingPermissions {
 				request,
 				result: self.account_messaging_permissions(change).await,
-			},
-			Command::AccountNotificationSettings {
-				request,
-				section,
-				change,
-			} => Event::AccountNotificationSettings {
-				request,
-				result: self.account_notification_settings(section, change).await,
 			},
 			Command::ServerAdmin {
 				guild,
