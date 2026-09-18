@@ -1728,10 +1728,10 @@ impl State {
 						self.fail(auth::Failure::Capacity);
 						return;
 					}
-					self.guilds.push(guild);
+					self.guilds.insert(0, guild);
 					bytes += (self.guilds.capacity() - capacity) * size_of::<Guild>();
 					if bytes + self.permissions.bytes() > model::account::MAX_BYTES {
-						self.guilds.pop();
+						self.guilds.remove(0);
 						self.guilds.shrink_to_fit();
 						self.invalidate_navigation();
 						self.fail(auth::Failure::Capacity);
