@@ -48,7 +48,6 @@ impl Timeline {
 	pub fn get_display(&self, id: Id) -> Option<&Message> {
 		self.messages.get(&id).and_then(Option::as_ref)
 	}
-	/// Copy live membership onto matching authors so a later resident restore still has colors.
 	pub fn apply_author_membership(&mut self, user: Id, roles: &[Id], nick: Option<&str>) -> bool {
 		if user.0 == 0 {
 			return false;
@@ -79,6 +78,19 @@ impl Timeline {
 				.saturating_sub(before)
 				.saturating_add(message.bytes());
 			any = true;
+		}
+		if any {
+			while self.row_count() > MAX_MESSAGES || self.row_bytes() > MAX_BYTES {
+				let item = if self.retain_older {
+					self.messages.pop_last()
+				} else {
+					self.messages.pop_first()
+				};
+				if let Some((_, Some(old))) = item {
+					self.bytes -= old.bytes();
+					self.payload_count -= 1;
+				}
+			}
 		}
 		any
 	}
@@ -300,8 +312,6 @@ impl Timeline {
 		Ok(())
 	}
 	pub fn finish_page(&mut self, items: Vec<Message>, older: bool) -> Result<(), &'static str> {
-		// A recent-page reload is authoritative for the whole retained view. Preserve only
-		// mutations observed during this request, never missing cached/old RAM records.
 		self.retain_older = older;
 		let prior: BTreeMap<_, _> = self
 			.messages

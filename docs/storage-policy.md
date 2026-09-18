@@ -127,6 +127,10 @@ work and cleanup run outside rendering. Forced termination or filesystem failure
 can leave a temporary file; cleanup errors are visible. Clipboard contents belong
 to the OS and may also be retained by clipboard managers. No cache schema changes.
 
+Chat author membership (schema 18): `author_roles` JSON (at most 512 IDs, 16 KiB)
+and optional `author_nick` (512 UTF-8 bytes / 128 characters) travel with each
+cached message row. Schema-17 and older binaries cannot reopen this upgraded cache.
+
 Forwarded messages (schema 16): one checked, default-false `forwarded` column marks
 the immutable snapshot body. Text, embeds and attachments reuse existing bounded
 message storage; source channels/messages are never fetched. Existing rows retain

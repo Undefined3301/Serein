@@ -9,8 +9,8 @@ use std::{
 
 const MAX_MEDIA_JSON: usize = 256 * 1024;
 const MAX_WINDOW_BYTES: usize = 4 * 1024 * 1024;
-const NATIVE_SCHEMA: u32 = 16;
-const READABLE_SCHEMA: u32 = 17;
+const NATIVE_SCHEMA: u32 = 18;
+const READABLE_SCHEMA: u32 = 19;
 #[derive(serde::Deserialize)]
 struct CachedMentions(#[serde(deserialize_with = "model::deserialize_mentions")] Vec<User>);
 fn parse_author_roles(raw: &str) -> std::result::Result<Vec<Id>, StoreError> {
@@ -628,6 +628,12 @@ impl LocalStore {
 			{
 				return Err(StoreError::Capacity);
 			}
+			{
+				let mut seen = BTreeSet::new();
+				if message.author_roles.iter().any(|role| !seen.insert(*role)) {
+					return Err(StoreError::Capacity);
+				}
+			}
 			let author_roles = serde_json::to_string(
 				&message
 					.author_roles
@@ -1206,7 +1212,7 @@ mod tests {
 			.0
 			.pragma_query_value(None, "user_version", |row| row.get(0))
 			.unwrap();
-		assert_eq!(version, 16);
+		assert_eq!(version, 18);
 		for invalid in ["-1", "2", "1.5", "'bad'"] {
 			assert!(
 				store
@@ -1289,7 +1295,7 @@ mod tests {
 				.0
 				.pragma_query_value(None, "user_version", |row| row.get(0))
 				.unwrap();
-			assert_eq!(version, 16);
+			assert_eq!(version, 18);
 			let mut messages = store.load_channel(Id(1), Id(2)).unwrap();
 			assert_eq!(messages[0].kind, expected_kind);
 			assert_eq!(messages[0].extra_content.bits(), expected_markers);
@@ -1562,7 +1568,7 @@ mod tests {
 			.0
 			.pragma_query_value(None, "user_version", |row| row.get(0))
 			.unwrap();
-		assert_eq!(version, 16);
+		assert_eq!(version, 18);
 		assert_eq!(
 			store.reading_preferences().unwrap(),
 			ReadingPreferences::default()
@@ -1879,7 +1885,7 @@ mod tests {
 			.0
 			.pragma_query_value(None, "user_version", |row| row.get(0))
 			.unwrap();
-		assert_eq!(version, 16);
+		assert_eq!(version, 18);
 		let messages: Vec<_> = (0..32_u8)
 			.map(|bits| {
 				let mut message = legacy[0].clone();
@@ -2071,7 +2077,7 @@ mod tests {
 			.0
 			.pragma_query_value(None, "user_version", |r| r.get(0))
 			.unwrap();
-		assert_eq!(version, 16);
+		assert_eq!(version, 18);
 		for (json, error) in [
 			("broken JSON".to_owned(), StoreError::Incompatible),
 			(
