@@ -54,6 +54,13 @@ impl State {
 		}
 	}
 
+	/// Remove one session-retained deleted row from the active timeline.
+	pub fn discard_preserved_deleted(&mut self, id: Id) {
+		if self.timeline.discard_preserved(id) {
+			self.revision += 1;
+		}
+	}
+
 	/// Drop dormant previews when disk history is cleared; preserve the visible conversation.
 	pub fn clear_cached_history(&mut self) {
 		self.resident = Windows::default();

@@ -66,6 +66,19 @@ impl Timeline {
 	pub fn is_deleted(&self, id: Id) -> bool {
 		self.deleted.contains(&id)
 	}
+	/// Drop a retained deleted payload while keeping the tombstone.
+	/// History cannot restore the body. A second call is a no-op.
+	pub fn discard_preserved(&mut self, id: Id) -> bool {
+		if !self.deleted.contains(&id) {
+			return false;
+		}
+		let Some(old) = self.messages.get_mut(&id).and_then(Option::take) else {
+			return false;
+		};
+		self.bytes -= old.bytes();
+		self.payload_count -= 1;
+		true
+	}
 	pub fn len(&self) -> usize {
 		self.iter().count()
 	}

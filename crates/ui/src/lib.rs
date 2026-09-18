@@ -3231,6 +3231,9 @@ impl MessagingUi {
 						{
 							commands.push(command);
 						}
+						if let Some(id) = self.timeline.remove_preserved.take() {
+							state.discard_preserved_deleted(id);
+						}
 						if let Some(nonce) = self.timeline.restore_pending.take() {
 							self.restore_pending(state, channel, &nonce);
 						}
