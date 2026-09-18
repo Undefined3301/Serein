@@ -254,6 +254,8 @@ pub struct MessagingUi {
 	pub voice_output: Option<String>,
 	pub voice_gain: VoiceGain,
 	voice_user_volumes: Option<Box<[(u64, u16); 64]>>,
+	/// Speakers silenced on this device only; never sent to Discord.
+	voice_user_muted: Vec<u64>,
 	pub voice_refresh_devices: bool,
 	pub voice_device_status: &'static str,
 	pub voice_microphone_unavailable: bool,

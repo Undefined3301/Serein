@@ -1445,6 +1445,8 @@ impl TimelineView {
 					let colors = crate::design::palette(ui);
 					let background = ui.painter().add(egui::Shape::Noop);
 					let mut time_rect = None;
+					// A reaction claims its own right click: the row menu must stay closed.
+					let mut reaction_menu = false;
 					let row = egui::Frame::NONE
 						.inner_margin(egui::Margin {
 							left: 16,
@@ -1938,6 +1940,7 @@ impl TimelineView {
 												self.reaction = Some((id, Some(emoji)));
 											}
 											crate::reactions::Action::Inspect(emoji, open) => {
+												reaction_menu |= open;
 												self.reaction_users = Some((id, emoji, open));
 											}
 										}
@@ -2006,7 +2009,7 @@ impl TimelineView {
 						&& retained_toolbar.is_none_or(|(active, _)| active == id);
 					let context_menu = (ui.rect_contains_pointer(rect) || toolbar_hover)
 						&& !other_toolbar_hover
-						&& !egui::Popup::is_any_open(ui.ctx())
+						&& !reaction_menu && !egui::Popup::is_any_open(ui.ctx())
 						&& (ui.input(|i| i.pointer.secondary_clicked())
 							|| crate::select::open_menu(ui.ctx()));
 					if context_menu
@@ -4194,6 +4197,109 @@ mod tests {
 				"Keyboard navigation must reach Reply"
 			);
 		}
+	}
+	#[test]
+	fn right_clicking_a_reaction_opens_its_details_without_the_message_menu() {
+		fn texts(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+			match shape {
+				egui::Shape::Text(text) => out.push((
+					text.galley.job.text.clone(),
+					text.galley.rect.translate(text.pos.to_vec2()),
+				)),
+				egui::Shape::Vec(shapes) => {
+					for shape in shapes {
+						texts(shape, out);
+					}
+				}
+				_ => {}
+			}
+		}
+		let ctx = egui::Context::default();
+		crate::design::apply(&ctx);
+		let mut state = test_support::demo_state();
+		state.timeline.clear();
+		state.read_state.reset();
+		let mut message = text_message(1);
+		message.reactions = Some(vec![model::Reaction {
+			emoji: model::ReactionEmoji {
+				id: None,
+				name: Some("\u{1f44d}".into()),
+			},
+			count: 3,
+			me: false,
+			me_burst: false,
+		}]);
+		state.timeline.insert(message, false, false).unwrap();
+		let mut view = TimelineView::default();
+		let mut avatars = crate::avatars::Avatars::default();
+		let mut editing = None;
+		let mut render = |view: &mut TimelineView, state: &mut State, events: Vec<egui::Event>| {
+			let output = ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(900.0, 600.0),
+					)),
+					events,
+					..Default::default()
+				},
+				|ui| {
+					view.show(
+						ui,
+						state,
+						&mut editing,
+						&mut None,
+						(&mut avatars, &mut None),
+						None,
+					)
+				},
+			);
+			let mut painted = vec![];
+			for shape in &output.shapes {
+				texts(&shape.shape, &mut painted);
+			}
+			output.drop_without_applying_deltas();
+			painted
+		};
+		for _ in 0..4 {
+			render(&mut view, &mut state, vec![]);
+		}
+		let painted = render(&mut view, &mut state, vec![]);
+		let reaction = painted
+			.iter()
+			.find(|(label, _)| label.starts_with('\u{1f44d}'))
+			.unwrap_or_else(|| panic!("Missing reaction: {painted:?}"))
+			.1
+			.center();
+		view.reaction_users = None;
+		for pressed in [true, false] {
+			render(
+				&mut view,
+				&mut state,
+				vec![
+					egui::Event::PointerMoved(reaction),
+					egui::Event::PointerButton {
+						pos: reaction,
+						button: egui::PointerButton::Secondary,
+						pressed,
+						modifiers: egui::Modifiers::NONE,
+					},
+				],
+			);
+		}
+		assert!(
+			matches!(view.reaction_users, Some((Id(1), _, true))),
+			"The right click must open the reaction details"
+		);
+		render(&mut view, &mut state, vec![]);
+		let labels = render(&mut view, &mut state, vec![]);
+		for menu in ["Copy message", "Reply", "Pin message"] {
+			assert!(
+				!labels.iter().any(|(label, _)| label == menu),
+				"Reaction right click also opened the message menu: {labels:?}"
+			);
+		}
+		assert!(!egui::Popup::is_any_open(&ctx));
 	}
 	#[test]
 	fn reply_target_browsing_waits_for_success_and_explicit_latest_before_acknowledging() {

@@ -55,6 +55,8 @@ pub struct AppPreferences {
 	pub expanded_folders: Vec<u64>,
 	/// Per-user voice volume overrides, bounded so one device preference stays small.
 	pub user_volumes: Vec<(u64, u16)>,
+	/// Voice participants silenced on this device only, bounded like the volume overrides.
+	pub muted_users: Vec<u64>,
 }
 impl Default for AppPreferences {
 	fn default() -> Self {
@@ -77,6 +79,7 @@ impl Default for AppPreferences {
 			keybinds: Default::default(),
 			expanded_folders: Vec::new(),
 			user_volumes: Vec::new(),
+			muted_users: Vec::new(),
 		}
 	}
 }
@@ -87,6 +90,7 @@ impl AppPreferences {
 			&& self.expanded_folders.len() <= 256
 			&& self.user_volumes.len() <= 64
 			&& self.user_volumes.iter().all(|(_, volume)| *volume <= 200)
+			&& self.muted_users.len() <= 64
 			&& self.keybinds.is_valid()
 			&& [&self.voice_input, &self.voice_output]
 				.into_iter()

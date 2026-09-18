@@ -152,7 +152,11 @@ pub(super) fn contents(
 		if ui
 			.add_enabled(
 				enabled,
-				egui::Button::new(if muted { "Unmute" } else { "Mute" }),
+				egui::Button::new(if muted {
+					"Unmute Conversation"
+				} else {
+					"Mute Conversation"
+				}),
 			)
 			.on_hover_text("Mute this direct message's notifications until you unmute it.")
 			.clicked()
@@ -172,7 +176,7 @@ pub(super) fn contents(
 			ui.close();
 		}
 	} else {
-		ui.add_enabled(false, egui::Button::new("Mute"))
+		ui.add_enabled(false, egui::Button::new("Mute Conversation"))
 			.on_disabled_hover_text("No open direct message with this user.");
 	}
 	ui.separator();
@@ -255,7 +259,7 @@ mod tests {
 	#[test]
 	fn user_menu_mouse_keyboard_and_actions_in_both_themes() {
 		for light in [false, true] {
-			for label in ["Profile", "Mute", "Close DM", "Block"] {
+			for label in ["Profile", "Mute Conversation", "Close DM", "Block"] {
 				let ctx = egui::Context::default();
 				ctx.set_visuals(if light {
 					egui::Visuals::light()
@@ -301,7 +305,7 @@ mod tests {
 					"Profile",
 					"Add Note",
 					"Add Friend Nickname",
-					"Mute",
+					"Mute Conversation",
 					"Close DM",
 					"Block",
 				] {
@@ -328,7 +332,7 @@ mod tests {
 				}
 				match label {
 					"Profile" => assert_eq!(profile.unwrap().id, user.id),
-					"Mute" => assert_eq!(
+					"Mute Conversation" => assert_eq!(
 						action,
 						Some(Action::Mute {
 							channel: dm.id,

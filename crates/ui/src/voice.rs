@@ -9,13 +9,52 @@ use client_core::{
 use egui::RichText;
 use model::Id;
 
+/// Local mutes share the 64 per-user volume slots sent to the mixer.
+const MAX_USER_MUTES: usize = 64;
+
 impl MessagingUi {
-	/// Fixed session overrides; zero IDs are unused slots.
+	/// Fixed session overrides; zero IDs are unused slots. A locally muted speaker is mixed at
+	/// zero gain, so unmuting restores the volume chosen for them.
 	pub fn voice_user_volumes(&self) -> [(u64, u16); 64] {
-		self.voice_user_volumes
+		let mut values = self
+			.voice_user_volumes
 			.as_deref()
 			.copied()
-			.unwrap_or([(0, 100); 64])
+			.unwrap_or([(0, 100); 64]);
+		for user in self.voice_user_muted.iter().copied() {
+			if let Some(slot) = values.iter_mut().find(|(id, _)| *id == user) {
+				slot.1 = 0;
+			} else if let Some(slot) = values.iter_mut().find(|(id, _)| *id == 0) {
+				*slot = (user, 0);
+			}
+		}
+		values
+	}
+
+	/// Locally muted speakers, for persistence to device settings.
+	pub fn voice_user_mutes(&self) -> &[u64] {
+		&self.voice_user_muted
+	}
+
+	/// Restore persisted local mutes, e.g. at startup.
+	pub fn set_voice_user_mutes(&mut self, values: &[u64]) {
+		self.voice_user_muted = values
+			.iter()
+			.copied()
+			.filter(|user| *user != 0)
+			.take(MAX_USER_MUTES)
+			.collect();
+	}
+
+	pub(super) fn voice_user_locally_muted(&self, user: Id) -> bool {
+		self.voice_user_muted.contains(&user.0)
+	}
+
+	fn set_voice_user_locally_muted(&mut self, user: Id, muted: bool) {
+		self.voice_user_muted.retain(|id| *id != user.0);
+		if muted && self.voice_user_muted.len() < MAX_USER_MUTES {
+			self.voice_user_muted.push(user.0);
+		}
 	}
 
 	/// Non-default volume overrides, for persistence to device settings.
@@ -54,6 +93,16 @@ impl MessagingUi {
 				ui.set_width(220.0);
 				let id = entry.participant.user.0;
 				if state.user.as_ref().is_some_and(|own| own.id.0 != id) {
+					let muted = self.voice_user_locally_muted(entry.participant.user);
+					if ui
+						.button(if muted { "Unmute" } else { "Mute" })
+						.on_hover_text(
+							"Silence this person on this device only. Nobody else is affected.",
+						)
+						.clicked()
+					{
+						self.set_voice_user_locally_muted(entry.participant.user, !muted);
+					}
 					let mut volume = self
 						.voice_user_volumes
 						.as_deref()
@@ -97,7 +146,8 @@ impl MessagingUi {
 	}
 
 	fn is_speaking(&self, state: &State, channel: Id, participant: &Participant) -> bool {
-		!participant.muted
+		!self.voice_user_locally_muted(participant.user)
+			&& !participant.muted
 			&& !participant.deafened
 			&& !participant.server_muted
 			&& !participant.server_deafened
@@ -300,11 +350,13 @@ impl MessagingUi {
 				if self.is_speaking(state, entry.channel, &entry.participant) {
 					speaking_avatar(&inner, &avatar, name);
 				}
+				let locally_muted = self.voice_user_locally_muted(entry.participant.user);
 				inner.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 					if entry.participant.deafened {
 						status_icon(
 							ui,
-							true,
+							crate::icons::Icon::HeadphonesSlash,
+							colors.muted,
 							if entry.participant.server_deafened {
 								"Deafened by server"
 							} else {
@@ -315,12 +367,21 @@ impl MessagingUi {
 					if entry.participant.muted {
 						status_icon(
 							ui,
-							false,
+							crate::icons::Icon::MicrophoneSlash,
+							colors.muted,
 							if entry.participant.server_muted {
 								"Muted by server"
 							} else {
 								"Microphone muted"
 							},
+						);
+					}
+					if locally_muted {
+						status_icon(
+							ui,
+							crate::icons::Icon::Speaker,
+							colors.danger,
+							"Muted for you on this device",
 						);
 					}
 					if entry.participant.streaming {
@@ -843,6 +904,9 @@ impl MessagingUi {
 			Some(crate::icons::Icon::HeadphonesSlash)
 		} else if entry.participant.muted || entry.participant.server_muted {
 			Some(crate::icons::Icon::MicrophoneSlash)
+		} else if self.voice_user_locally_muted(entry.participant.user) {
+			// Silenced on this device only; the speaker glyph separates it from a microphone mute.
+			Some(crate::icons::Icon::Speaker)
 		} else {
 			None
 		};
@@ -2853,18 +2917,9 @@ fn elapsed_label(call: &client_core::voice::Call) -> Option<String> {
 	))
 }
 
-fn status_icon(ui: &mut egui::Ui, deafened: bool, label: &str) {
+fn status_icon(ui: &mut egui::Ui, icon: crate::icons::Icon, color: egui::Color32, label: &str) {
 	let (rect, response) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
-	crate::icons::paint(
-		ui.painter(),
-		if deafened {
-			crate::icons::Icon::HeadphonesSlash
-		} else {
-			crate::icons::Icon::MicrophoneSlash
-		},
-		rect.shrink(1.0),
-		design::palette(ui).muted,
-	);
+	crate::icons::paint(ui.painter(), icon, rect.shrink(1.0), color);
 	response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, label));
 	response.on_hover_text(label);
 }
@@ -2918,6 +2973,26 @@ fn device_combo(
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn local_mutes_zero_one_speaker_and_keep_their_stored_volume() {
+		let mut view = MessagingUi::default();
+		view.set_voice_user_volume_overrides(&[(7, 150)]);
+		assert!(!view.voice_user_locally_muted(Id(7)));
+		view.set_voice_user_locally_muted(Id(7), true);
+		assert_eq!(view.voice_user_mutes(), [7]);
+		assert!(view.voice_user_volumes().contains(&(7, 0)));
+		// Muting is device-local and never rewrites the volume chosen for that speaker.
+		assert_eq!(view.voice_user_volume_overrides(), vec![(7, 150)]);
+		view.set_voice_user_locally_muted(Id(9), true);
+		assert!(view.voice_user_volumes().contains(&(9, 0)));
+		view.set_voice_user_locally_muted(Id(7), false);
+		assert!(view.voice_user_volumes().contains(&(7, 150)));
+		assert_eq!(view.voice_user_mutes(), [9]);
+		view.set_voice_user_mutes(&(0..200).collect::<Vec<u64>>());
+		assert_eq!(view.voice_user_mutes().len(), MAX_USER_MUTES);
+		assert!(!view.voice_user_mutes().contains(&0));
+	}
 
 	#[test]
 	fn camera_settings_bound_layout_and_only_request_discovery_once() {

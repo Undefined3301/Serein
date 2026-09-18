@@ -470,6 +470,28 @@ fn normalize_fences(input: &str) -> std::borrow::Cow<'_, str> {
 	}
 }
 
+/// Everything one message body needs while its spans are laid out, so a quote can lay out its
+/// own nested run without repeating the argument list.
+struct Render<'a> {
+	opening: &'a mut Option<String>,
+	users: &'a [model::User],
+	profile: &'a mut Option<model::User>,
+	channels: &'a [model::Channel],
+	channel: &'a mut Option<Id>,
+	guilds: &'a [model::Guild],
+	roles: &'a [model::permissions::Role],
+	images: &'a mut crate::avatars::Avatars,
+	demo: bool,
+	revealed: &'a mut u32,
+	surface: &'a mut crate::select::Surface,
+	/// Row height reserved for artwork, so emoji and text share one baseline.
+	line: Option<f32>,
+}
+
+/// Discord's quote rail and the gap between it and the quoted text.
+const QUOTE_RAIL: i8 = 4;
+const QUOTE_GAP: i8 = 8;
+
 impl Formatted {
 	pub fn parse(source: &str) -> Self {
 		let mut end = source.len().min(MAX_INPUT);
@@ -571,8 +593,15 @@ impl Formatted {
 					if blank > 0 && !input[..block_end].ends_with('\n') {
 						blank -= 1;
 					}
+					// A blank line inside a `>>>` quote belongs to its rail, not to the text around it.
 					for _ in 0..blank {
-						output.push("\n", Style::default());
+						output.push(
+							"\n",
+							Style {
+								quote: style.quote,
+								..Style::default()
+							},
+						);
 					}
 				}
 				block_end = block_end.max(range.start);
@@ -587,9 +616,6 @@ impl Formatted {
 						Tag::Strong => style.strong = true,
 						Tag::Heading { level, .. } => {
 							let level = level as u8;
-							if style.quote && output.line_start() {
-								output.push("│ ", style);
-							}
 							if level <= 3 {
 								style.strong = true;
 								style.heading = level;
@@ -606,16 +632,7 @@ impl Formatted {
 							style.block = output.open_block(&info);
 						}
 						// Discord has no indented code blocks: four leading spaces stay prose.
-						Tag::CodeBlock(CodeBlockKind::Indented) => {
-							if style.quote && output.line_start() {
-								output.push("│ ", style);
-							}
-						}
-						Tag::Paragraph => {
-							if style.quote && output.line_start() {
-								output.push("│ ", style);
-							}
-						}
+						Tag::CodeBlock(CodeBlockKind::Indented) | Tag::Paragraph => {}
 						Tag::BlockQuote(_) => {
 							style.quote = true;
 							if input[range.start..].starts_with(">>>") {
@@ -624,9 +641,6 @@ impl Formatted {
 						}
 						Tag::List(start) => lists.push(start),
 						Tag::Item => {
-							if style.quote && output.line_start() {
-								output.push("│ ", style);
-							}
 							output.push(&"  ".repeat(lists.len().saturating_sub(1)), style);
 							match lists.last_mut() {
 								Some(Some(number)) => {
@@ -762,18 +776,9 @@ impl Formatted {
 					subtext = false;
 					if style.quote && !quote_all && !quote_lazy {
 						// A `> ` quote covers one line; CommonMark's lazy continuation does not.
-						let next = input[range.end..].trim_start_matches(' ');
-						if next.starts_with('>') {
-							output.push("\n│ ", style);
-						} else {
-							quote_lazy = true;
-							output.push("\n", style);
-						}
-					} else if style.quote {
-						output.push("\n│ ", style);
-					} else {
-						output.push("\n", style);
+						quote_lazy = !input[range.end..].trim_start_matches(' ').starts_with('>');
 					}
+					output.push("\n", style);
 				}
 				Event::Rule => output.push("────────\n", style),
 				_ => {}
@@ -1060,51 +1065,124 @@ impl Formatted {
 			ui.ctx()
 				.request_repaint_after(std::time::Duration::from_secs(20));
 		}
+		// Wrapping rows only grow around widgets placed after the tallest one, so a
+		// mention before an emoji would keep the body line height and ride above the
+		// picture. A zero-width reservation gives every widget on the line the artwork
+		// height first; text is then centred in the same row everywhere.
+		let line = self.artwork.then(|| crate::emoji::inline_size(ui));
+		let mut render = Render {
+			opening,
+			users,
+			profile,
+			channels,
+			channel,
+			guilds,
+			roles,
+			images,
+			demo,
+			revealed,
+			surface,
+			line,
+		};
+		self.show_run(ui, &self.spans, &mut render, false);
+	}
+	/// One wrapped paragraph flow. `quoted` marks the nested run inside a quote rail, where
+	/// another rail would repeat the indent instead of ending it.
+	fn show_run(
+		&self,
+		ui: &mut egui::Ui,
+		spans: &[(String, Style)],
+		render: &mut Render<'_>,
+		quoted: bool,
+	) {
+		let line = render.line;
 		ui.allocate_ui_with_layout(
 			egui::vec2(ui.available_width(), 0.0),
 			egui::Layout::left_to_right(egui::Align::Min).with_main_wrap(true),
 			|ui| {
 				ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
 				ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
-				// Wrapping rows only grow around widgets placed after the tallest one, so a
-				// mention before an emoji would keep the body line height and ride above the
-				// picture. A zero-width reservation gives every widget on the line the artwork
-				// height first; text is then centred in the same row everywhere.
-				let line = self.artwork.then(|| crate::emoji::inline_size(ui));
 				let reserve = |ui: &mut egui::Ui| {
 					if let Some(height) = line {
 						ui.allocate_space(egui::vec2(0.0, height));
 					}
 				};
 				let mut start = 0;
-				while start < self.spans.len() {
-					let spoiler = self.spans[start].1.spoiler;
+				while start < spans.len() {
+					// Discord's quote rail spans the whole block: a nested run keeps every
+					// wrapped line inside the indent, and the rail is painted around it.
+					if !quoted && spans[start].1.quote {
+						let count = spans[start..]
+							.iter()
+							.take_while(|(_, style)| style.quote)
+							.count();
+						let mut quoted_spans = &spans[start..start + count];
+						while quoted_spans
+							.last()
+							.is_some_and(|(text, _)| text.trim_matches('\n').is_empty())
+						{
+							quoted_spans = &quoted_spans[..quoted_spans.len() - 1];
+						}
+						if !quoted_spans.is_empty() {
+							let colors = crate::design::palette(ui);
+							let width = ui.max_rect().width();
+							ui.allocate_ui_with_layout(
+								egui::vec2(width, 0.0),
+								egui::Layout::top_down(egui::Align::Min),
+								|ui| {
+									ui.set_width(width);
+									let block = egui::Frame::new()
+										.inner_margin(egui::Margin {
+											left: QUOTE_RAIL + QUOTE_GAP,
+											right: 0,
+											top: 2,
+											bottom: 2,
+										})
+										.show(ui, |ui| {
+											self.show_run(ui, quoted_spans, render, true);
+										});
+									let rect = block.response.rect;
+									ui.painter().rect_filled(
+										egui::Rect::from_min_size(
+											rect.left_top(),
+											egui::vec2(f32::from(QUOTE_RAIL), rect.height()),
+										),
+										2.0,
+										colors.selected,
+									);
+								},
+							);
+						}
+						start += count;
+						continue;
+					}
+					let spoiler = spans[start].1.spoiler;
 					if let Some(region) = spoiler
-						&& *revealed & (1_u32 << region) == 0
+						&& *render.revealed & (1_u32 << region) == 0
 					{
 						// Hidden text never reaches labels, selection, tooltips, links,
 						// mention actions, accessibility values or emoji image requests.
-						let count = self.spans[start..]
+						let count = spans[start..]
 							.iter()
 							.take_while(|(_, style)| style.spoiler == spoiler)
 							.count();
 						let response = ui
 							.push_id(("spoiler", region), |ui| ui.button("Reveal spoiler"))
 							.inner;
-						surface.keep(&response);
+						render.surface.keep(&response);
 						if response.clicked() {
-							*revealed |= 1_u32 << region;
+							*render.revealed |= 1_u32 << region;
 						}
 						start += count;
 						continue;
 					}
-					if self.spans[start].0.is_empty() {
+					if spans[start].0.is_empty() {
 						start += 1;
 						continue;
 					}
-					if let Some(id) = self.spans[start].1.channel {
+					if let Some(id) = spans[start].1.channel {
 						reserve(ui);
-						if let Some(target) = channels.iter().find(|target| {
+						if let Some(target) = render.channels.iter().find(|target| {
 							target.id == id
 								&& target.guild.is_some()
 								&& matches!(target.kind, 0 | 5 | 10..=12 | 15 | 16)
@@ -1113,7 +1191,7 @@ impl Formatted {
 							let response = ui
 								.add(egui::Link::new(egui::RichText::new(&label).strong()))
 								.on_hover_text("Open channel");
-							surface.keep(&response);
+							render.surface.keep(&response);
 							response.widget_info(|| {
 								egui::WidgetInfo::labeled(
 									egui::WidgetType::Link,
@@ -1122,14 +1200,14 @@ impl Formatted {
 								)
 							});
 							if response.clicked() {
-								*channel = Some(id);
+								*render.channel = Some(id);
 							}
-						} else if channels.iter().all(|target| target.id != id) {
+						} else if render.channels.iter().all(|target| target.id != id) {
 							let label = "#unknown-channel";
 							let response = ui
 								.add(egui::Link::new(egui::RichText::new(label).strong()))
 								.on_hover_text("Load channel");
-							surface.keep(&response);
+							render.surface.keep(&response);
 							response.widget_info(|| {
 								egui::WidgetInfo::labeled(
 									egui::WidgetType::Link,
@@ -1138,23 +1216,23 @@ impl Formatted {
 								)
 							});
 							if response.clicked() {
-								*channel = Some(id);
+								*render.channel = Some(id);
 							}
 						} else {
 							let response = ui
-								.add(egui::Label::new(&self.spans[start].0).selectable(true))
+								.add(egui::Label::new(&spans[start].0).selectable(true))
 								.on_hover_text(
 									"Channel unavailable or unsupported in this session",
 								);
-							surface.keep(&response);
+							render.surface.keep(&response);
 						}
 						start += 1;
 						continue;
 					}
-					if let Some(id) = self.spans[start].1.mention {
+					if let Some(id) = spans[start].1.mention {
 						reserve(ui);
 						let colors = crate::design::palette(ui);
-						let user = users.iter().find(|user| user.id == id);
+						let user = render.users.iter().find(|user| user.id == id);
 						let label = format!(
 							"@{}",
 							user.map_or_else(|| id.to_string(), |u| u.name.clone())
@@ -1167,7 +1245,7 @@ impl Formatted {
 									.background_color(colors.mention_bg),
 							))
 							.on_hover_text("Open user profile");
-						surface.keep(&response);
+						render.surface.keep(&response);
 						response.widget_info(|| {
 							egui::WidgetInfo::labeled(
 								egui::WidgetType::Link,
@@ -1176,7 +1254,7 @@ impl Formatted {
 							)
 						});
 						if response.clicked() {
-							*profile = Some(user.cloned().unwrap_or(model::User {
+							*render.profile = Some(user.cloned().unwrap_or(model::User {
 								id,
 								name: format!("User {id}"),
 								avatar: None,
@@ -1188,8 +1266,8 @@ impl Formatted {
 						start += 1;
 						continue;
 					}
-					if let Some(block) = self.spans[start].1.block {
-						let count = self.spans[start..]
+					if let Some(block) = spans[start].1.block {
+						let count = spans[start..]
 							.iter()
 							.take_while(|(_, style)| style.block == Some(block))
 							.count();
@@ -1197,15 +1275,15 @@ impl Formatted {
 							ui,
 							&self.blocks[usize::from(block)],
 							block,
-							surface,
+							render.surface,
 						);
-						surface.exclude(code_rect);
+						render.surface.exclude(code_rect);
 						start += count;
 						continue;
 					}
-					let target = self.spans[start].1.link;
+					let target = spans[start].1.link;
 					let count =
-						self.spans[start..]
+						spans[start..]
 							.iter()
 							.take_while(|(_, style)| {
 								style.link == target
@@ -1220,15 +1298,15 @@ impl Formatted {
 						.spans
 						.get(start + count)
 						.is_some_and(|(_, s)| s.block.is_some())
-						&& self.spans[start + count - 1].0.ends_with('\n')
+						&& spans[start + count - 1].0.ends_with('\n')
 					{
-						let mut copy = self.spans[start..start + count].to_vec();
+						let mut copy = spans[start..start + count].to_vec();
 						let last = &mut copy[count - 1].0;
 						last.truncate(last.len() - 1);
 						trimmed = copy;
 						&trimmed[..]
 					} else {
-						&self.spans[start..start + count]
+						&spans[start..start + count]
 					};
 					// Role pills share the surrounding text's galley, including wrapping and emoji heights.
 					let resolved;
@@ -1240,10 +1318,11 @@ impl Formatted {
 							.iter()
 							.map(|(text, style)| {
 								if let Some(id) = style.role {
-									let name = roles.iter().find(|role| role.id == id).map_or_else(
-										|| format!("unknown-role ({id})"),
-										|role| role.name.clone(),
-									);
+									let name =
+										render.roles.iter().find(|role| role.id == id).map_or_else(
+											|| format!("unknown-role ({id})"),
+											|role| role.name.clone(),
+										);
 									(
 										format!("@{name}"),
 										Style {
@@ -1270,9 +1349,16 @@ impl Formatted {
 					if let Some(index) = target {
 						let url = &self.links[index];
 						let label: String = spans.iter().map(|(text, _)| text.as_str()).collect();
-						let response =
-							Self::show_emoji(spans, ui, true, images, demo, guilds, surface)
-								.on_hover_text(url);
+						let response = Self::show_emoji(
+							spans,
+							ui,
+							true,
+							render.images,
+							render.demo,
+							render.guilds,
+							render.surface,
+						)
+						.on_hover_text(url);
 						response.widget_info(|| {
 							egui::WidgetInfo::labeled(
 								egui::WidgetType::Link,
@@ -1281,10 +1367,18 @@ impl Formatted {
 							)
 						});
 						if response.clicked() {
-							*opening = Some(url.clone());
+							*render.opening = Some(url.clone());
 						}
 					} else {
-						Self::show_emoji(spans, ui, false, images, demo, guilds, surface);
+						Self::show_emoji(
+							spans,
+							ui,
+							false,
+							render.images,
+							render.demo,
+							render.guilds,
+							render.surface,
+						);
 					}
 					start += count;
 				}
@@ -2034,6 +2128,76 @@ mod tests {
 		);
 	}
 	#[test]
+	fn quote_rails_span_every_wrapped_line_of_their_block() {
+		fn shapes(
+			shape: &egui::Shape,
+			rails: &mut Vec<egui::Rect>,
+			texts: &mut Vec<(String, egui::Rect, usize)>,
+		) {
+			match shape {
+				egui::Shape::Rect(rect) if rect.rect.width() == f32::from(QUOTE_RAIL) => {
+					rails.push(rect.rect);
+				}
+				egui::Shape::Text(text) => texts.push((
+					text.galley.job.text.clone(),
+					text.galley.rect.translate(text.pos.to_vec2()),
+					text.galley.rows.len(),
+				)),
+				egui::Shape::Vec(children) => {
+					for shape in children {
+						shapes(shape, rails, texts);
+					}
+				}
+				_ => {}
+			}
+		}
+		let parsed = Formatted::parse(
+			"> quoted words that have to wrap over several lines inside a narrow message body\n\nafter",
+		);
+		assert!(
+			!parsed
+				.spans
+				.iter()
+				.any(|(text, _)| text.contains('\u{2502}'))
+		);
+		let ctx = egui::Context::default();
+		crate::design::apply(&ctx);
+		let output = ctx.run_ui(
+			egui::RawInput {
+				screen_rect: Some(egui::Rect::from_min_size(
+					egui::Pos2::ZERO,
+					egui::vec2(220.0, 300.0),
+				)),
+				..Default::default()
+			},
+			|ui| parsed.show(ui, &mut None),
+		);
+		let (mut rails, mut texts) = (vec![], vec![]);
+		for shape in &output.shapes {
+			shapes(&shape.shape, &mut rails, &mut texts);
+		}
+		output.drop_without_applying_deltas();
+		let (_, quote, rows) = texts
+			.iter()
+			.find(|(text, _, _)| text.starts_with("quoted words"))
+			.unwrap_or_else(|| panic!("Missing quote: {texts:?}"));
+		assert!(
+			*rows >= 3,
+			"The quote must wrap for this test to mean anything"
+		);
+		assert_eq!(rails.len(), 1, "One rail for one quoted block: {rails:?}");
+		let rail = rails[0];
+		assert!(
+			rail.top() <= quote.top() && rail.bottom() >= quote.bottom(),
+			"The rail must cover every wrapped line: {rail:?} against {quote:?}"
+		);
+		assert!(
+			rail.right() <= quote.left(),
+			"The rail sits left of the quoted text: {rail:?} against {quote:?}"
+		);
+	}
+
+	#[test]
 	fn block_endings_do_not_leave_a_blank_final_line() {
 		for (source, expected) in [
 			("Hello", "Hello"),
@@ -2045,9 +2209,9 @@ mod tests {
 			("# Title\nbody", "Title\nbody"),
 			("- a\n- b", "• a\n• b"),
 			("1. a\n2. b", "1. a\n2. b"),
-			("> quoted\nplain", "│ quoted\nplain"),
-			("> one\n> two", "│ one\n│ two"),
-			(">>> all\nof\n\nthis", "│ all\n│ of\n\n│ this"),
+			("> quoted\nplain", "quoted\nplain"),
+			("> one\n> two", "one\ntwo"),
+			(">>> all\nof\n\nthis", "all\nof\n\nthis"),
 			("-# small print", "small print"),
 			("#### deep", "#### deep"),
 			("```\none\ntwo\n```", "one\ntwo"),
