@@ -358,6 +358,8 @@ impl Confirm {
 			enabled,
 			note,
 		} = self;
+		let arm_key = dialog.id.with("enter-armed");
+		let armed = ctx.data(|data| data.get_temp::<()>(arm_key).is_some());
 		let mut choice = None;
 		let response = dialog.show(ctx, |d| {
 			d.content(|ui| {
@@ -388,6 +390,18 @@ impl Confirm {
 		});
 		if response.close {
 			choice.get_or_insert(Choice::Cancelled);
+		}
+		if enabled
+			&& armed
+			&& choice.is_none()
+			&& ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+		{
+			choice = Some(Choice::Confirmed);
+		}
+		if choice.is_some() {
+			ctx.data_mut(|data| data.remove_temp::<()>(arm_key));
+		} else if !ctx.will_discard() {
+			ctx.data_mut(|data| data.insert_temp(arm_key, ()));
 		}
 		choice
 	}
