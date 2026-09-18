@@ -234,8 +234,8 @@ impl MessagingUi {
 		})
 	}
 
-	fn remember_profile_trigger(&mut self, user: &model::User, rect: egui::Rect) {
-		if self.profile.as_ref().is_some_and(|open| open.id == user.id) {
+	fn remember_profile_trigger(&mut self, rect: egui::Rect, pointer_inside: bool) {
+		if pointer_inside {
 			self.profile_trigger = Some(rect);
 		}
 	}
@@ -341,7 +341,7 @@ impl MessagingUi {
 				});
 				self.voice_participant_menu(&row, state, entry);
 				if let Some(user) = user {
-					self.remember_profile_trigger(user, row.rect);
+					self.remember_profile_trigger(row.rect, row.contains_pointer());
 					if row.clicked() {
 						self.toggle_profile(user);
 					}
@@ -879,7 +879,7 @@ impl MessagingUi {
 		}
 		self.voice_participant_menu(&avatar, state, entry);
 		if let Some(user) = user {
-			self.remember_profile_trigger(user, avatar.rect);
+			self.remember_profile_trigger(avatar.rect, avatar.contains_pointer());
 			if avatar.clicked() {
 				self.toggle_profile(user);
 			}
