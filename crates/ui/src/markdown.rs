@@ -12,7 +12,7 @@ const MAX_LINKS: usize = 16;
 const MAX_SPOILERS: u8 = 32;
 const MAX_BLOCKS: usize = 32;
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
 struct Style {
 	strong: bool,
 	italic: bool,
@@ -33,6 +33,61 @@ struct Style {
 	spoiler: Option<u8>,
 	/// Fenced code block index; the block widget replaces these spans when shown.
 	block: Option<u8>,
+}
+
+/// Split styled text into Unicode BiDi runs in visual order. The text inside each run stays in
+/// logical order so egui's shaper can still join Arabic-family scripts correctly.
+fn bidi_spans(spans: &[(String, Style)]) -> Option<(Vec<(String, Style)>, bool)> {
+	let text: String = spans.iter().map(|(text, _)| text.as_str()).collect();
+	let bidi = unicode_bidi::BidiInfo::new(&text, None);
+	if !bidi.has_rtl() {
+		return None;
+	}
+	let right_aligned = bidi
+		.paragraphs
+		.iter()
+		.find(|paragraph| {
+			text[paragraph.range.clone()]
+				.chars()
+				.any(|c| !c.is_whitespace())
+		})
+		.is_some_and(|paragraph| paragraph.level.is_rtl());
+	let mut styled = Vec::with_capacity(spans.len());
+	let mut start = 0;
+	for (value, style) in spans {
+		let end = start + value.len();
+		styled.push((start..end, *style));
+		start = end;
+	}
+	let mut visual: Vec<(String, Style)> = Vec::with_capacity(spans.len());
+	for paragraph in &bidi.paragraphs {
+		let (levels, runs) = bidi.visual_runs(paragraph, paragraph.range.clone());
+		for run in runs {
+			let rtl = levels.get(run.start).is_some_and(|level| level.is_rtl());
+			let mut parts: Vec<_> = styled
+				.iter()
+				.filter_map(|(range, style)| {
+					let start = range.start.max(run.start);
+					let end = range.end.min(run.end);
+					(start < end).then_some((start..end, *style))
+				})
+				.collect();
+			if rtl {
+				parts.reverse();
+			}
+			for (range, style) in parts {
+				let value = text[range].to_owned();
+				if let Some((last, last_style)) = visual.last_mut()
+					&& *last_style == style
+				{
+					last.push_str(&value);
+				} else {
+					visual.push((value, style));
+				}
+			}
+		}
+	}
+	Some((visual, right_aligned))
 }
 /// One fenced block: its display text plus highlighting computed once at parse time.
 pub struct CodeBlock {
@@ -1255,7 +1310,16 @@ impl Formatted {
 		let mut atlas = None;
 		let body = egui::TextStyle::Body.resolve(ui.style());
 		let mut job = LayoutJob::default();
-		let mut source = String::new();
+		let source: String = spans.iter().map(|(text, _)| text.as_str()).collect();
+		let bidi = bidi_spans(spans);
+		let (spans, right_aligned) = bidi
+			.as_ref()
+			.map_or((spans, false), |(spans, right)| (spans.as_slice(), *right));
+		job.halign = if right_aligned {
+			egui::Align::RIGHT
+		} else {
+			egui::Align::LEFT
+		};
 		let mut inlines: Vec<Inline> = Vec::new();
 		// Label overwrites the first section's leading space with the wrap indentation.
 		job.append("", 0.0, Self::format(ui, &Style::default()));
@@ -1289,7 +1353,6 @@ impl Formatted {
 				}
 				if offset > start {
 					job.append(&text[start..offset], 0.0, format.clone());
-					source.push_str(&text[start..offset]);
 				}
 				// One blank glyph forms an unbroken inline slot; its
 				// character is expanded to the wire text below so selection copies the original.
@@ -1303,16 +1366,21 @@ impl Formatted {
 							.map(|atlas| crate::emoji::image_cell(atlas, cluster, cell, size))
 					}),
 				});
-				source.push_str(cluster);
 				offset += len;
 				start = offset;
 			}
 			if start < text.len() {
 				job.append(&text[start..], 0.0, format);
-				source.push_str(&text[start..]);
 			}
 		}
-		let label = egui::Label::new(job).wrap().selectable(false);
+		let label = egui::Label::new(job)
+			.wrap()
+			.halign(if right_aligned {
+				egui::Align::RIGHT
+			} else {
+				egui::Align::LEFT
+			})
+			.selectable(false);
 		let (pos, mut galley, mut response) = label.layout_in_ui(ui);
 		response.widget_info(|| {
 			egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), &source)
@@ -1646,6 +1714,29 @@ impl Formatted {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn bidi_runs_keep_each_script_logical_and_follow_paragraph_direction() {
+		let style = Style::default();
+		let (rtl, right) = bidi_spans(&[("مرحبا English!".into(), style)]).unwrap();
+		assert!(right);
+		assert_eq!(
+			rtl.iter()
+				.map(|(text, _)| text.as_str())
+				.collect::<String>(),
+			"!Englishمرحبا "
+		);
+
+		let (ltr, right) = bidi_spans(&[("English مرحبا!".into(), style)]).unwrap();
+		assert!(!right);
+		assert_eq!(
+			ltr.iter()
+				.map(|(text, _)| text.as_str())
+				.collect::<String>(),
+			"English مرحبا!"
+		);
+		assert!(bidi_spans(&[("English only".into(), style)]).is_none());
+	}
 
 	#[test]
 	fn wrapped_text_and_emoji_stay_inside_the_starting_margin() {
