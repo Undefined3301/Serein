@@ -1501,6 +1501,76 @@ impl Formatted {
 			.find(|(text, _)| !text.is_empty())
 			.is_none_or(|(text, _)| text.ends_with('\n'))
 	}
+	pub fn append_inline_preview(
+		&self,
+		job: &mut LayoutJob,
+		ui: &egui::Ui,
+		users: &[model::User],
+		roles: &[model::permissions::Role],
+		channels: &[model::Channel],
+	) {
+		let colors = crate::design::palette(ui);
+		let muted = TextFormat {
+			font_id: FontId::proportional(13.0),
+			color: colors.muted,
+			..Default::default()
+		};
+		let pill = TextFormat {
+			font_id: FontId::new(13.0, crate::design::semibold_family(ui.ctx())),
+			color: colors.mention_text,
+			background: colors.mention_bg,
+			..Default::default()
+		};
+		let mut remaining = 120;
+		for (text, style) in &self.spans {
+			if remaining == 0 {
+				break;
+			}
+			if text.is_empty() {
+				continue;
+			}
+			let (display, format) = if let Some(id) = style.mention {
+				let name = users
+					.iter()
+					.find(|user| user.id == id)
+					.map_or_else(|| id.to_string(), |user| user.name.clone());
+				(format!("@{name}"), pill.clone())
+			} else if let Some(id) = style.role {
+				let name = roles.iter().find(|role| role.id == id).map_or_else(
+					|| format!("unknown-role ({id})"),
+					|role| role.name.clone(),
+				);
+				(format!("@{name}"), pill.clone())
+			} else if let Some(id) = style.channel {
+				let label = channels
+					.iter()
+					.find(|channel| {
+						channel.id == id
+							&& channel.guild.is_some()
+							&& matches!(channel.kind, 0 | 5 | 10..=12 | 15 | 16)
+					})
+					.map_or_else(
+						|| "#unknown-channel".into(),
+						|channel| format!("#{}", channel.name),
+					);
+				(label, pill.clone())
+			} else if style.mass_mention {
+				(text.clone(), pill.clone())
+			} else {
+				(
+					text.chars()
+						.map(|c| if matches!(c, '\n' | '\r') { ' ' } else { c })
+						.collect(),
+					muted.clone(),
+				)
+			};
+			let take: String = display.chars().take(remaining).collect();
+			remaining -= take.chars().count();
+			if !take.is_empty() {
+				job.append(&take, 0.0, format);
+			}
+		}
+	}
 	pub fn bytes(&self) -> usize {
 		self.spans.capacity() * size_of::<(String, Style)>()
 			+ self.spans.iter().map(|(s, _)| s.capacity()).sum::<usize>()

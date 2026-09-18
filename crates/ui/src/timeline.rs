@@ -8,6 +8,21 @@ use std::{
 	hash::{DefaultHasher, Hash, Hasher},
 };
 
+#[derive(Clone, Copy)]
+enum TargetReveal {
+	StayIfVisible,
+	Center,
+}
+
+const REVEAL_SCROLL_SECS: f32 = 0.3;
+
+#[derive(Clone, Copy)]
+struct RevealScroll {
+	target: Id,
+	from: f32,
+	elapsed: f32,
+}
+
 #[derive(Default)]
 pub struct TimelineView {
 	pub(super) extension_actions: std::sync::Arc<Vec<crate::extensions_ui::MenuAction>>,
@@ -27,6 +42,8 @@ pub struct TimelineView {
 	pub(super) channel_reference: Option<Id>,
 	pub(super) pending_channel_reference: Option<Id>,
 	pub(super) reply_target: Option<Id>,
+	pending_reveal: Option<TargetReveal>,
+	reveal_scroll: Option<RevealScroll>,
 	highlighted: Option<(Id, f64)>,
 	target_browsing: bool,
 	initial_read_checked: bool,
@@ -199,6 +216,18 @@ fn loading_messages(ui: &mut egui::Ui) {
 			);
 		}
 	}
+}
+fn ease_out_cubic(t: f32) -> f32 {
+	let rest = 1.0 - t;
+	1.0 - rest * rest * rest
+}
+fn centered_offset(rows: &[(Id, f32)], id: Id, viewport_h: f32, packed: f32) -> f32 {
+	let row_top = anchor_offset(rows, id, 0.0);
+	let row_h = rows
+		.iter()
+		.find(|(row, _)| *row == id)
+		.map_or(0.0, |(_, height)| *height);
+	(row_top - (viewport_h - row_h) * 0.5).clamp(0.0, (packed - viewport_h).max(0.0))
 }
 fn anchor_offset(rows: &[(Id, f32)], id: Id, inset: f32) -> f32 {
 	if rows.is_empty() {
@@ -618,6 +647,7 @@ impl TimelineView {
 		self.target_browsing = true;
 		self.following = false;
 		self.jump = false;
+		self.reveal_scroll = None;
 		self.mark_read = None;
 		self.mark_unread = None;
 	}
@@ -626,6 +656,15 @@ impl TimelineView {
 		self.following = true;
 		self.jump = true;
 		self.anchor = None;
+		self.reveal_scroll = None;
+	}
+	pub(super) fn request_reply_target(&mut self, id: Id) {
+		self.reply_target = Some(id);
+		self.pending_reveal = Some(if self.following && self.at_current_latest {
+			TargetReveal::StayIfVisible
+		} else {
+			TargetReveal::Center
+		});
 	}
 	#[cfg(test)]
 	pub fn show(
@@ -872,45 +911,12 @@ impl TimelineView {
 				model::Freshness::Fresh => "No messages yet. Start the conversation below.",
 			});
 		}
-		if state.freshness == model::Freshness::Fresh
-			&& !state.history_pending
-			&& let Some(target) = state.search_target.take()
-		{
-			unread_join = false;
-			// Target browsing is deliberate reading, even when the service omits the target.
-			// A short result page must not acknowledge unrelated newer messages automatically.
-			self.target_browsing = true;
-			self.mark_read = None;
-			if state.timeline.get(target).is_some() {
-				self.highlighted = Some((target, ui.input(|input| input.time) + 2.0));
-				self.following = false;
-				self.jump = false;
-				self.anchor = Some((target, 0.0));
-				offset = Some(anchor_offset(&self.rows, target, 0.0));
-			} else {
-				state.status =
-					"Message was not returned; it may have been removed or become unavailable";
-			}
-		}
-		if let Some((_, until)) = self.highlighted {
-			let remaining = until - ui.input(|input| input.time);
-			if remaining > 0.0 {
-				ui.ctx()
-					.request_repaint_after(std::time::Duration::from_secs_f64(remaining));
-			} else {
-				self.highlighted = None;
-			}
-		}
 		let area = ui.available_rect_before_wrap().intersect(ui.clip_rect());
 		let autoscroll_delta =
 			session.bind(ui, ui.scope_id().with(("timeline", state.selected)), area);
 		if autoscroll_delta > 0.0 {
 			self.following = false;
 		}
-		let mut scroll = egui::ScrollArea::vertical()
-			.id_salt(("timeline", state.selected))
-			.auto_shrink([false, false])
-			.stick_to_bottom(self.following);
 		let total: f32 = self.rows.iter().map(|(_, height)| height).sum();
 		let end_padding = 16.0;
 		self.pending_heights.retain(|nonce, _| {
@@ -948,12 +954,88 @@ impl TimelineView {
 		let pending_height = pending_rows.iter().map(|(_, height)| *height).sum::<f32>();
 		let packed = total + pending_height + end_padding;
 		let lead_packed = lead_rows.unwrap_or(total) + pending_height + end_padding;
+		if state.freshness == model::Freshness::Fresh
+			&& !state.history_pending
+			&& let Some(target) = state.search_target.take()
+		{
+			unread_join = false;
+			let reveal = self.pending_reveal.take().unwrap_or(TargetReveal::Center);
+			if state.timeline.get(target).is_some() {
+				self.highlighted = Some((target, ui.input(|input| input.time) + 2.0));
+				let viewport_h = area.height();
+				let (first, end, _) = visible_range(
+					&self.rows,
+					self.scroll_offset,
+					self.scroll_offset + viewport_h,
+				);
+				let visible = self.rows[first..end].iter().any(|(id, _)| *id == target);
+				let stay = match reveal {
+					TargetReveal::StayIfVisible => visible,
+					TargetReveal::Center => false,
+				};
+				if !stay {
+					self.target_browsing = true;
+					self.mark_read = None;
+					self.following = false;
+					self.jump = false;
+					let to = centered_offset(&self.rows, target, viewport_h, packed);
+					if (to - self.scroll_offset).abs() < 1.0 {
+						offset = Some(to);
+						self.reveal_scroll = None;
+					} else {
+						self.reveal_scroll = Some(RevealScroll {
+							target,
+							from: self.scroll_offset,
+							elapsed: 0.0,
+						});
+					}
+				}
+			} else {
+				// Target browsing is deliberate reading, even when the service omits the target.
+				// A short result page must not acknowledge unrelated newer messages automatically.
+				self.target_browsing = true;
+				self.mark_read = None;
+				state.status =
+					"Message was not returned; it may have been removed or become unavailable";
+			}
+		}
+		if let Some((_, until)) = self.highlighted {
+			let remaining = until - ui.input(|input| input.time);
+			if remaining > 0.0 {
+				ui.ctx()
+					.request_repaint_after(std::time::Duration::from_secs_f64(remaining));
+			} else {
+				self.highlighted = None;
+			}
+		}
+		let mut scroll = egui::ScrollArea::vertical()
+			.id_salt(("timeline", state.selected))
+			.auto_shrink([false, false])
+			.stick_to_bottom(self.following);
 		if std::mem::take(&mut self.jump) {
+			self.reveal_scroll = None;
 			offset = Some(
 				(total + end_padding + pending_rows.iter().map(|(_, height)| height).sum::<f32>()
 					- ui.available_height())
 				.max(0.0),
 			);
+		}
+		let user_scroll = ui.input(|input| input.smooth_scroll_delta().y) + autoscroll_delta;
+		if user_scroll != 0.0 {
+			self.reveal_scroll = None;
+			offset = None;
+		}
+		if let Some(motion) = &mut self.reveal_scroll {
+			motion.elapsed += ui.input(|input| input.stable_dt).clamp(1.0 / 240.0, 0.05);
+			let t = motion.elapsed / REVEAL_SCROLL_SECS;
+			let to = centered_offset(&self.rows, motion.target, area.height(), packed);
+			if t >= 1.0 {
+				offset = Some(to);
+				self.reveal_scroll = None;
+			} else {
+				offset = Some(motion.from + (to - motion.from) * ease_out_cubic(t));
+				ui.ctx().request_repaint();
+			}
 		}
 		if autoscroll_delta != 0.0 {
 			// Set the viewport before virtualization. A global scroll delta can be consumed
@@ -1036,7 +1118,8 @@ impl TimelineView {
 					break;
 				}
 				end = index + 1;
-				let (id, _) = &self.rows[index];
+				let id = self.rows[index].0;
+				let id = &id;
 				let can_mark_read = state.can_mark_read(*id);
 				let can_mark_unread = state.can_mark_unread(*id);
 				let Some(message) = state.timeline.get_display(*id) else {
@@ -1339,9 +1422,7 @@ impl TimelineView {
 											state.can_open_reply_target(reply),
 											|ui| {
 												let mut preview = egui::text::LayoutJob::default();
-												let text = if let Some(original) =
-													state.timeline.get(reply)
-												{
+												if let Some(original) = state.timeline.get(reply) {
 													let reply_avatar = avatars.show(
 														ui,
 														&original.author,
@@ -1349,7 +1430,7 @@ impl TimelineView {
 														state.demo,
 													);
 													if reply_avatar.clicked() {
-														self.reply_target = Some(reply);
+														self.request_reply_target(reply);
 													}
 													surface.keep(&reply_avatar);
 													preview.append(
@@ -1370,33 +1451,44 @@ impl TimelineView {
 														},
 													);
 													if crate::embeds::has_spoilers(original) {
-														"Spoiler".into()
+														preview.append(
+															"Spoiler",
+															0.0,
+															egui::TextFormat {
+																font_id: egui::FontId::proportional(
+																	13.0,
+																),
+																color: colors.muted,
+																..Default::default()
+															},
+														);
 													} else {
-														original
-															.display_text()
-															.chars()
-															.take(120)
-															.map(|c| {
-																if matches!(c, '\n' | '\r') {
-																	' '
-																} else {
-																	c
-																}
-															})
-															.collect::<String>()
+														self.formatted
+															.get(reply, &original.content)
+															.append_inline_preview(
+																&mut preview,
+																ui,
+																&original.mentions,
+																crate::mentions::known_roles(
+																	state,
+																	original.channel,
+																),
+																&state.channels,
+															);
 													}
 												} else {
-													"Earlier message · View original".into()
-												};
-												preview.append(
-													&text,
-													0.0,
-													egui::TextFormat {
-														font_id: egui::FontId::proportional(13.0),
-														color: colors.muted,
-														..Default::default()
-													},
-												);
+													preview.append(
+														"Earlier message · View original",
+														0.0,
+														egui::TextFormat {
+															font_id: egui::FontId::proportional(
+																13.0,
+															),
+															color: colors.muted,
+															..Default::default()
+														},
+													);
+												}
 												let reply_preview = ui
 													.add(
 														egui::Label::new(preview)
@@ -1410,7 +1502,7 @@ impl TimelineView {
 													);
 												surface.keep(&reply_preview);
 												if reply_preview.clicked() {
-													self.reply_target = Some(reply);
+													self.request_reply_target(reply);
 												}
 											},
 										);
@@ -2141,11 +2233,6 @@ impl TimelineView {
 				}
 			}
 		}
-		if self.reply_target.is_some() {
-			self.target_browsing = true;
-			self.mark_read = None;
-			self.mark_unread = None;
-		}
 		self.following = at_bottom && !self.target_browsing;
 		if self.following
 			&& self.mark_unread.is_none()
@@ -2666,8 +2753,11 @@ mod tests {
 		let ctx = egui::Context::default();
 		crate::design::apply(&ctx);
 		let mut view = TimelineView::default();
-		for _ in 0..5 {
+		for _ in 0..80 {
 			banner_frame(&ctx, &mut view, &mut state, vec![], false);
+			if view.reveal_scroll.is_none() && view.highlighted.is_some() {
+				break;
+			}
 		}
 		assert!(!view.at_current_latest);
 

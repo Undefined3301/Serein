@@ -2056,7 +2056,7 @@ impl MessagingUi {
 						})
 						.clicked()
 					{
-						self.timeline.reply_target = Some(reply.target());
+						self.timeline.request_reply_target(reply.target());
 					}
 				});
 			});
