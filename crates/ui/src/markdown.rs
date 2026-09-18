@@ -101,6 +101,31 @@ fn bidi_spans(spans: &[(String, Style)]) -> Option<(Vec<(String, Style)>, bool)>
 	}
 	Some((visual, right_aligned))
 }
+/// Emoji artwork is taller than the body font, so any line carrying it grows. Knowing this at
+/// parse time lets every widget on a line reserve that height before the first one is placed.
+fn has_artwork(spans: &[(String, Style)]) -> bool {
+	spans.iter().any(|(text, style)| {
+		if style.code {
+			return false;
+		}
+		let mut offset = 0;
+		while offset < text.len() {
+			if crate::emoji::custom_prefix(&text[offset..]).is_some() {
+				return true;
+			}
+			let len = text[offset..]
+				.graphemes(true)
+				.next()
+				.expect("remaining text")
+				.len();
+			if crate::emoji::lookup(&text[offset..offset + len]).is_some() {
+				return true;
+			}
+			offset += len;
+		}
+		false
+	})
+}
 /// One fenced block: its display text plus highlighting computed once at parse time.
 pub struct CodeBlock {
 	/// Sanitised fence info word, shown when no known language matches it.
@@ -117,6 +142,8 @@ pub struct Formatted {
 	spans: Vec<(String, Style)>,
 	blocks: Vec<CodeBlock>,
 	mention_count: usize,
+	/// Set when any span renders artwork, whose line is taller than the body font.
+	artwork: bool,
 	pub links: Vec<String>,
 	pub limited: bool,
 	pub spoilers: bool,
@@ -417,6 +444,7 @@ impl Formatted {
 			links: Vec::new(),
 			limited: end < source.len(),
 			spoilers: false,
+			artwork: false,
 		};
 		let mut stack = Vec::new();
 		let mut style = Style::default();
@@ -723,10 +751,11 @@ impl Formatted {
 				break;
 			}
 		}
+		output.artwork = has_artwork(&output.spans);
 		output
 	}
 	fn limited_literal(input: &str, concealed: bool) -> Self {
-		Self {
+		let mut formatted = Self {
 			spans: vec![(
 				input.to_owned(),
 				Style {
@@ -739,7 +768,10 @@ impl Formatted {
 			links: Vec::new(),
 			limited: true,
 			spoilers: concealed,
-		}
+			artwork: false,
+		};
+		formatted.artwork = has_artwork(&formatted.spans);
+		formatted
 	}
 	fn push_spoiler_literal(
 		&mut self,
@@ -980,6 +1012,16 @@ impl Formatted {
 			|ui| {
 				ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
 				ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+				// Wrapping rows only grow around widgets placed after the tallest one, so a
+				// mention before an emoji would keep the body line height and ride above the
+				// picture. A zero-width reservation gives every widget on the line the artwork
+				// height first; text is then centred in the same row everywhere.
+				let line = self.artwork.then(|| crate::emoji::inline_size(ui));
+				let reserve = |ui: &mut egui::Ui| {
+					if let Some(height) = line {
+						ui.allocate_space(egui::vec2(0.0, height));
+					}
+				};
 				let mut start = 0;
 				while start < self.spans.len() {
 					let spoiler = self.spans[start].1.spoiler;
@@ -1007,6 +1049,7 @@ impl Formatted {
 						continue;
 					}
 					if let Some(id) = self.spans[start].1.channel {
+						reserve(ui);
 						if let Some(target) = channels.iter().find(|target| {
 							target.id == id
 								&& target.guild.is_some()
@@ -1055,6 +1098,7 @@ impl Formatted {
 						continue;
 					}
 					if let Some(id) = self.spans[start].1.mention {
+						reserve(ui);
 						let colors = crate::design::palette(ui);
 						let user = users.iter().find(|user| user.id == id);
 						let label = format!(
@@ -1168,6 +1212,7 @@ impl Formatted {
 					} else {
 						spans
 					};
+					reserve(ui);
 					if let Some(index) = target {
 						let url = &self.links[index];
 						let label: String = spans.iter().map(|(text, _)| text.as_str()).collect();
@@ -3176,6 +3221,75 @@ mod tests {
 		}
 	}
 
+	#[test]
+	fn mentions_and_emoji_share_one_row_baseline() {
+		let ctx = egui::Context::default();
+		let users = vec![model::User {
+			id: Id(42),
+			name: "rain".into(),
+			avatar: None,
+			webhook: false,
+			kind: Default::default(),
+			discriminator: 0,
+		}];
+		for source in [
+			"<@42> test \u{1f610} test <@42>",
+			"<@42> test <:wave:9001> test <@42>",
+			"\u{1f610} <@42> #general",
+		] {
+			let parsed = Formatted::parse(source);
+			assert!(parsed.artwork, "{source}");
+			let mut profile = None;
+			let mut opening = None;
+			let output = ctx.run_ui(Default::default(), |ui| {
+				ui.set_width(400.0);
+				parsed.show_mentions(ui, &mut opening, &users, &mut profile);
+			});
+			fn walk(shape: &egui::Shape, rows: &mut Vec<(f32, f32, f32)>) {
+				match shape {
+					egui::Shape::Text(text) if text.galley.text() != "?" => {
+						// Artwork falls back to a "?" galley without the emoji atlas; it is
+						// centred on the row rather than sharing the text baseline.
+						for placed in &text.galley.rows {
+							for glyph in &placed.row.glyphs {
+								rows.push((glyph.line_height, placed.row.size.y, glyph.pos.y));
+							}
+						}
+					}
+					egui::Shape::Vec(shapes) => {
+						shapes.iter().for_each(|shape| walk(shape, rows));
+					}
+					_ => {}
+				}
+			}
+			let mut rows: Vec<(f32, f32, f32)> = Vec::new();
+			for shape in &output.shapes {
+				walk(&shape.shape, &mut rows);
+			}
+			// Only the body font: emoji placeholders carry the artwork font, whose own
+			// ascent says nothing about where the words sit.
+			let body = rows
+				.iter()
+				.map(|(height, ..)| *height)
+				.fold(f32::INFINITY, f32::min);
+			rows.retain(|(height, ..)| *height == body);
+			assert!(rows.len() > 4, "{source}");
+			// One shared row height and baseline: words never ride above the artwork.
+			let first = rows[0];
+			for row in &rows {
+				assert!(
+					(row.1 - first.1).abs() < 0.5 && (row.2 - first.2).abs() < 0.5,
+					"{source}: {row:?} against {first:?}"
+				);
+			}
+			output.drop_without_applying_deltas();
+		}
+	}
+	#[test]
+	fn plain_messages_keep_the_body_line_height() {
+		let parsed = Formatted::parse("plain <@42> words");
+		assert!(!parsed.artwork);
+	}
 	#[test]
 	fn user_mentions_preserve_literals_and_open_native_profiles() {
 		let parsed = Formatted::parse(
