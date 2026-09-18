@@ -1119,10 +1119,9 @@ impl TimelineView {
 				}
 				end = index + 1;
 				let id = self.rows[index].0;
-				let id = &id;
-				let can_mark_read = state.can_mark_read(*id);
-				let can_mark_unread = state.can_mark_unread(*id);
-				let Some(message) = state.timeline.get_display(*id) else {
+				let can_mark_read = state.can_mark_read(id);
+				let can_mark_unread = state.can_mark_unread(id);
+				let Some(message) = state.timeline.get_display(id) else {
 					continue;
 				};
 				if !message.author.webhook
@@ -1134,9 +1133,9 @@ impl TimelineView {
 				let previous = index
 					.checked_sub(1)
 					.and_then(|i| state.timeline.get(self.rows[i].0));
-				if state.timeline.is_deleted(*id) {
+				if state.timeline.is_deleted(id) {
 					let colors = crate::design::palette(ui);
-					let body_color = if self.suppressed_deleted_highlight.contains(id) {
+					let body_color = if self.suppressed_deleted_highlight.contains(&id) {
 						colors.text
 					} else {
 						colors.danger
@@ -1183,7 +1182,7 @@ impl TimelineView {
 														egui::Sense::hover(),
 														48.0,
 													);
-													let time = timestamp(*id);
+													let time = timestamp(id);
 													ui.label(
 														RichText::new(format!(
 															"{:02}:{:02}",
@@ -1234,24 +1233,24 @@ impl TimelineView {
 								egui::Sense::focusable_noninteractive(),
 							);
 							let retained =
-								retained_toolbar.is_some_and(|(active, _)| active == *id);
+								retained_toolbar.is_some_and(|(active, _)| active == id);
 							let toolbar_hover = self
 								.toolbar
 								.filter(|(active, toolbar)| {
-									*active == *id && ui.rect_contains_pointer(*toolbar)
+									*active == id && ui.rect_contains_pointer(*toolbar)
 								})
 								.is_some();
 							let other_toolbar_hover = self
 								.toolbar
 								.filter(|(active, toolbar)| {
-									*active != *id && ui.rect_contains_pointer(*toolbar)
+									*active != id && ui.rect_contains_pointer(*toolbar)
 								})
 								.is_some();
 							let hovered =
 								allow_hover
 									&& (ui.rect_contains_pointer(rect) || toolbar_hover)
 									&& !other_toolbar_hover && !egui::Popup::is_any_open(ui.ctx())
-									&& retained_toolbar.is_none_or(|(active, _)| active == *id);
+									&& retained_toolbar.is_none_or(|(active, _)| active == id);
 							let context_menu = (ui.rect_contains_pointer(rect) || toolbar_hover)
 								&& !other_toolbar_hover && !egui::Popup::is_any_open(
 								ui.ctx(),
@@ -1323,20 +1322,20 @@ impl TimelineView {
 								deleted_message_actions(popup, &mut action);
 								match action {
 									Some(DeletedLocalAction::ToggleHighlight) => {
-										if !self.suppressed_deleted_highlight.remove(id) {
-											self.suppressed_deleted_highlight.insert(*id);
+										if !self.suppressed_deleted_highlight.remove(&id) {
+											self.suppressed_deleted_highlight.insert(id);
 										}
 									}
 									Some(DeletedLocalAction::Remove) => {
-										self.remove_preserved = Some(*id);
+										self.remove_preserved = Some(id);
 									}
 									None => {}
 								}
-								self.toolbar = Some((*id, toolbar_rect));
+								self.toolbar = Some((id, toolbar_rect));
 							}
 						});
 					measurements.push((
-						*id,
+						id,
 						row_key(message, previous, self.unread_boundary) ^ 1,
 						response.response.rect.height(),
 					));
@@ -1344,17 +1343,17 @@ impl TimelineView {
 				}
 				let compact = grouped(previous, message, self.unread_boundary);
 				let new_day =
-					previous.is_none_or(|p| timestamp(p.id).date() != timestamp(*id).date());
+					previous.is_none_or(|p| timestamp(p.id).date() != timestamp(id).date());
 				let response = ui.scope_builder(egui::UiBuilder::new().scope_id(row_id), |ui| {
 					if new_day {
-						let date = timestamp(*id);
+						let date = timestamp(id);
 						divider(
 							ui,
 							format!("{} {}, {}", date.month(), date.day(), date.year()),
 							false,
 						);
 					}
-					if self.unread_boundary == Some(*id) {
+					if self.unread_boundary == Some(id) {
 						divider(ui, "New messages".into(), true);
 					}
 					let colors = crate::design::palette(ui);
@@ -1587,7 +1586,7 @@ impl TimelineView {
 													*profile = Some(message.author.clone());
 												}
 												surface.keep(&author);
-												let time = timestamp(*id);
+												let time = timestamp(id);
 												let time = ui
 													.label(
 														RichText::new(format!(
@@ -1607,7 +1606,7 @@ impl TimelineView {
 										show_system(
 											ui,
 											system,
-											timestamp(*id),
+											timestamp(id),
 											state,
 											profile,
 											&mut self.user_action,
@@ -1630,10 +1629,10 @@ impl TimelineView {
 												ui.add_space(4.0);
 											}
 											let formatted =
-												self.formatted.get(*id, &message.content);
+												self.formatted.get(id, &message.content);
 											let reveal = self
 												.revealed
-												.get(id)
+												.get(&id)
 												.filter(|reveal| reveal.matches(message));
 											let before = reveal.map_or((0, false), |reveal| {
 												(reveal.text, reveal.media)
@@ -1742,14 +1741,14 @@ impl TimelineView {
 											}
 											if before != (text, media) {
 												if text == 0 && !media {
-													self.revealed.remove(id);
+													self.revealed.remove(&id);
 												} else {
 													self.revealed.insert(
-														*id,
+														id,
 														Revealed::new(message, text, media),
 													);
 												}
-												self.heights.remove(id);
+												self.heights.remove(&id);
 												ui.ctx().request_repaint();
 											}
 											if message.edited {
@@ -1837,17 +1836,17 @@ impl TimelineView {
 										(avatars, state.demo),
 										message.id,
 										state.reactions.users.as_ref(),
-										|emoji, add| state.can_react(*id, Some(emoji), add),
+										|emoji, add| state.can_react(id, Some(emoji), add),
 									) {
 										match action {
 											crate::reactions::Action::Reload => {
-												self.reaction = Some((*id, None));
+												self.reaction = Some((id, None));
 											}
 											crate::reactions::Action::Toggle(emoji) => {
-												self.reaction = Some((*id, Some(emoji)));
+												self.reaction = Some((id, Some(emoji)));
 											}
 											crate::reactions::Action::Inspect(emoji, open) => {
-												self.reaction_users = Some((*id, emoji, open));
+												self.reaction_users = Some((id, emoji, open));
 											}
 										}
 									}
@@ -1894,25 +1893,25 @@ impl TimelineView {
 							),
 						)
 					});
-					let retained = retained_toolbar.is_some_and(|(active, _)| active == *id);
+					let retained = retained_toolbar.is_some_and(|(active, _)| active == id);
 					// The floating toolbar overlaps the row above; pointer inside it keeps this row active.
 					let toolbar_hover = self
 						.toolbar
 						.filter(|(active, toolbar)| {
-							*active == *id && ui.rect_contains_pointer(*toolbar)
+							*active == id && ui.rect_contains_pointer(*toolbar)
 						})
 						.is_some();
 					let other_toolbar_hover = self
 						.toolbar
 						.filter(|(active, toolbar)| {
-							*active != *id && ui.rect_contains_pointer(*toolbar)
+							*active != id && ui.rect_contains_pointer(*toolbar)
 						})
 						.is_some();
 					let hovered = allow_hover
 						&& (ui.rect_contains_pointer(rect) || toolbar_hover)
 						&& !other_toolbar_hover
 						&& !egui::Popup::is_any_open(ui.ctx())
-						&& retained_toolbar.is_none_or(|(active, _)| active == *id);
+						&& retained_toolbar.is_none_or(|(active, _)| active == id);
 					let context_menu = (ui.rect_contains_pointer(rect) || toolbar_hover)
 						&& !other_toolbar_hover
 						&& !egui::Popup::is_any_open(ui.ctx())
@@ -1936,7 +1935,7 @@ impl TimelineView {
 							),
 						);
 						if let Some(rect) = time_rect {
-							let time = timestamp(*id);
+							let time = timestamp(id);
 							ui.painter().text(
 								rect.center(),
 								egui::Align2::CENTER_CENTER,
@@ -1981,22 +1980,22 @@ impl TimelineView {
 							egui::Stroke::new(1.0, colors.border),
 							egui::StrokeKind::Inside,
 						);
-						let react = state.can_react(*id, None, true)
+						let react = state.can_react(id, None, true)
 							|| message.reactions.as_ref().is_some_and(|items| {
 								items
 									.iter()
-									.any(|r| state.can_react(*id, Some(&r.emoji), true))
+									.any(|r| state.can_react(id, Some(&r.emoji), true))
 							});
 						if let Some((anchor, trigger)) = crate::reactions::add_button(
 							&mut toolbar,
 							react,
 							state.reactions.busy(),
 						) {
-							self.reaction_picker = Some((*id, anchor, trigger));
+							self.reaction_picker = Some((id, anchor, trigger));
 						}
 						let can_reply = state.can_send(message.channel);
-						let can_edit = !message.unsupported && state.can_edit(message.channel, *id);
-						let can_delete = state.can_delete(message.channel, *id);
+						let can_edit = !message.unsupported && state.can_edit(message.channel, id);
+						let can_delete = state.can_delete(message.channel, id);
 						if toolbar
 							.add_enabled_ui(can_reply, |ui| {
 								action_button(ui, crate::icons::Icon::Reply, "Reply")
@@ -2004,7 +2003,7 @@ impl TimelineView {
 							.inner
 							.clicked()
 						{
-							selected_reply = Some(*id);
+							selected_reply = Some(id);
 						}
 						if own
 							&& toolbar
@@ -2014,7 +2013,7 @@ impl TimelineView {
 								.inner
 								.clicked()
 						{
-							*editing = Some((message.channel, *id, message.content.clone()));
+							*editing = Some((message.channel, id, message.content.clone()));
 							self.edit_started = true;
 						}
 						if can_delete
@@ -2032,7 +2031,7 @@ impl TimelineView {
 								.inner
 								.clicked()
 							{
-								self.quick_delete = Some((message.channel, *id));
+								self.quick_delete = Some((message.channel, id));
 							}
 						} else {
 							let menu =
@@ -2071,8 +2070,8 @@ impl TimelineView {
 								(editing, &mut self.edit_started),
 								deleting,
 								(
-									state.can_pin(message.channel, *id),
-									state.is_pinned(message.channel, *id),
+									state.can_pin(message.channel, id),
+									state.is_pinned(message.channel, id),
 									&mut self.pin_request,
 								),
 								message
@@ -2085,10 +2084,10 @@ impl TimelineView {
 									}),
 							);
 						}
-						self.toolbar = Some((*id, toolbar_rect));
+						self.toolbar = Some((id, toolbar_rect));
 					}
-					if selected_reply.or(state.reply_target()) == Some(*id)
-						|| self.highlighted.is_some_and(|(target, _)| target == *id)
+					if selected_reply.or(state.reply_target()) == Some(id)
+						|| self.highlighted.is_some_and(|(target, _)| target == id)
 					{
 						ui.painter().set(
 							background,
@@ -2101,7 +2100,7 @@ impl TimelineView {
 					}
 				});
 				measurements.push((
-					*id,
+					id,
 					row_key(message, previous, self.unread_boundary),
 					response.response.rect.height(),
 				));

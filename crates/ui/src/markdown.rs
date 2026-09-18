@@ -1536,10 +1536,10 @@ impl Formatted {
 					.map_or_else(|| id.to_string(), |user| user.name.clone());
 				(format!("@{name}"), pill.clone())
 			} else if let Some(id) = style.role {
-				let name = roles.iter().find(|role| role.id == id).map_or_else(
-					|| format!("unknown-role ({id})"),
-					|role| role.name.clone(),
-				);
+				let name = roles
+					.iter()
+					.find(|role| role.id == id)
+					.map_or_else(|| format!("unknown-role ({id})"), |role| role.name.clone());
 				(format!("@{name}"), pill.clone())
 			} else if let Some(id) = style.channel {
 				let label = channels
