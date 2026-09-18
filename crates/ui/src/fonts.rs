@@ -53,13 +53,12 @@ pub fn install(ctx: &Context) {
 	crate::design::weights_installed(ctx);
 }
 
-/// egui paints grayscale coverage, not DirectWrite ClearType. Running Inter's
-/// TrueType instructions snaps stems to the pixel grid and reads as crunchy
-/// against other Windows apps. Leave the interpreter off. `design::apply` keeps
-/// sub-pixel binning on so origins can sit on fractional x.
+/// Inter still ships TrueType instructions. Do not run them. Binning stays on.
+/// Still grayscale, not ClearType.
 fn latin(data: &'static [u8]) -> FontData {
 	let mut font = FontData::from_static(data);
 	font.tweak.hinting = Some(false);
+	font.tweak.subpixel_binning = Some(true);
 	font
 }
 
@@ -204,12 +203,12 @@ mod tests {
 				.color_transfer_function,
 			egui::epaint::FontColorTransferFunction::Gamma(0.5)
 		);
-		let hinting = definitions()
+		let tweaks = definitions()
 			.font_data
 			.iter()
 			.filter(|(name, _)| name.starts_with("Inter"))
-			.map(|(_, data)| data.tweak.hinting)
+			.map(|(_, data)| (data.tweak.hinting, data.tweak.subpixel_binning))
 			.collect::<Vec<_>>();
-		assert_eq!(hinting, vec![Some(false); 3]);
+		assert_eq!(tweaks, vec![(Some(false), Some(true)); 3]);
 	}
 }

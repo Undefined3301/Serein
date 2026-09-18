@@ -8,11 +8,12 @@ available (for example, `dx12` or `vulkan`). Affected users confirmed that forci
 DX12 launches successfully; the new default still needs native Windows validation.
 macOS and Linux retain their existing backend defaults.
 
-Windows disables winit's undecorated drop-shadow workaround, including after title-bar
-changes. That workaround shifts the restored client area by one pixel; maximizing bypasses
-it. This is a candidate mitigation for machine-specific windowed blur, not a confirmed
-diagnosis on the affected hardware. Native DPI and eframe's physical surface sizing remain
-unchanged. macOS/Linux window creation is unchanged.
+Windows turns off winit's undecorated drop-shadow hack after the window exists, including
+after title-bar changes. egui-winit enables that hack for custom chrome; it shifts
+`WM_NCCALCSIZE` by one pixel while restored, and DXGI then scales the swapchain. Maximizing
+skips the shift, which is why only that state looked sharp. `ViewportBuilder::with_has_shadow`
+is macOS-only and does not disable the Windows hack. Native DPI and eframe's physical
+surface sizing remain unchanged. macOS/Linux window creation is unchanged.
 For offline inspection, run `cargo run --locked -p serein --features demo -- --demo --demo-rendering`.
 The diagnostic shows the physical client size, logical viewport, native/egui scale and WGPU
 surface dimensions sampled by a render callback, plus alternating one-pixel stripes.

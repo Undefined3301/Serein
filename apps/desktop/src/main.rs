@@ -259,12 +259,6 @@ fn main() -> eframe::Result {
 			},
 			..Default::default()
 		},
-		#[cfg(target_os = "windows")]
-		window_builder: Some(Box::new(|builder| {
-			// winit's shadow hack offsets the restored client area by one pixel.
-			// Keep the undecorated client aligned with the DX12 presentation area.
-			builder.with_has_shadow(false)
-		})),
 		persist_window: false,
 		persistence_path: None,
 		..Default::default()
@@ -968,6 +962,14 @@ fn demo_members(guild: Option<model::Id>, channel: model::Id, request: u64) -> m
 	}
 }
 
+#[cfg(target_os = "windows")]
+fn align_undecorated_surface(window: &winit::window::Window) {
+	use winit::platform::windows::WindowExtWindows as _;
+	// egui-winit turns on winit's 1px restored-client shift for custom chrome.
+	// DXGI then scales the swapchain. Maximized skips the shift.
+	window.set_undecorated_shadow(false);
+}
+
 impl Desktop {
 	fn new(
 		cc: &eframe::CreationContext<'_>,
@@ -1534,6 +1536,12 @@ impl Desktop {
 		if !demo {
 			hotkeys.sync(&messaging.keybinds, &runtime);
 		}
+		let window = cc
+			.winit_window()
+			.ok_or("Native window unavailable")?
+			.clone();
+		#[cfg(target_os = "windows")]
+		align_undecorated_surface(&window);
 		Ok(Self {
 			extensions: extension_bridge::Bridge::default(),
 			extension_close_pending: false,
@@ -1567,10 +1575,7 @@ impl Desktop {
 			emoji_upload: emoji_upload::EmojiUpload::default(),
 			clipboard: None,
 			download_close_pending: false,
-			window: cc
-				.winit_window()
-				.ok_or("Native window unavailable")?
-				.clone(),
+			window,
 			monitor_geometry: None,
 			monitor_period: None,
 			frame_metrics: FrameMetrics::new(frame_sample),
@@ -4676,9 +4681,8 @@ impl eframe::App for Desktop {
 		let appearance = ctx.options(|options| options.theme_preference);
 		#[cfg(target_os = "windows")]
 		if self.window.is_decorated() != self.messaging.hide_title_bar {
-			// egui's Decorations command also re-enables the shifted shadow client area.
-			// Change decorations directly, retaining the shadow-free creation policy.
 			self.window.set_decorations(self.messaging.hide_title_bar);
+			align_undecorated_surface(&self.window);
 		}
 		#[cfg(target_os = "macos")]
 		if let Err(error) =
