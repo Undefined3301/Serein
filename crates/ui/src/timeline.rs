@@ -2515,10 +2515,19 @@ impl TimelineView {
 		} else {
 			20.0
 		};
+		// Over a background image the ramp inherits the message list's own opacity, so a
+		// see-through timeline no longer bands a dark strip across the image above the composer.
+		let surface = crate::design::section_surface(
+			ui,
+			colors.chat,
+			crate::design::ImageSection::MessageList,
+		);
 		let dense = if self.following {
-			colors.chat.gamma_multiply(0.88)
+			surface.gamma_multiply(0.88)
+		} else if crate::design::has_section_background(ui) {
+			surface
 		} else {
-			colors.chat.to_opaque()
+			surface.to_opaque()
 		};
 		let fade_rect = egui::Rect::from_min_max(
 			egui::pos2(area.left(), (area.bottom() - fade_height).max(area.top())),
