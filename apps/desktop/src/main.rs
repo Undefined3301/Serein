@@ -20,6 +20,7 @@ mod emoji_upload;
 mod extension_bridge;
 mod extensions;
 mod game_activity;
+mod gpu;
 mod group_icon;
 mod interaction_uploads;
 mod notification_runtime;
@@ -219,6 +220,15 @@ fn main() -> eframe::Result {
 		demo_check_updates();
 		return Ok(());
 	}
+	// The adapter is chosen before any window exists, so read the device preference directly.
+	let gpu_preference = if demo {
+		model::GpuPreference::default()
+	} else {
+		local_store::LocalStore::open_default()
+			.and_then(|store| store.app_preferences())
+			.map(|preferences| preferences.gpu_preference)
+			.unwrap_or_default()
+	};
 	#[cfg(target_os = "windows")]
 	let icon = include_bytes!("../../../packaging/windows/serein.png").as_slice();
 	#[cfg(target_os = "linux")]
@@ -257,9 +267,15 @@ fn main() -> eframe::Result {
 							.unwrap_or(eframe::wgpu::Backends::DX12),
 						..eframe::wgpu::InstanceDescriptor::new_without_display_handle_from_env()
 					},
-					// Prefer the efficient adapter; retain the native diagnostic override.
-					power_preference: eframe::wgpu::PowerPreference::from_env()
-						.unwrap_or(eframe::wgpu::PowerPreference::LowPower),
+					// Only adapters that can present to this window are eligible; the saved
+					// preference just orders them. A power hint alone picks GPUs the display is
+					// not wired to, which fails outright on Wayland.
+					native_adapter_selector: Some(std::sync::Arc::new(
+						move |adapters: &[eframe::wgpu::Adapter],
+						      surface: Option<&eframe::wgpu::Surface<'_>>| {
+							gpu::select(gpu_preference, adapters, surface)
+						},
+					)),
 					..eframe::egui_wgpu::WgpuSetupCreateNew::without_display_handle()
 				},
 			),
@@ -1276,6 +1292,11 @@ impl Desktop {
 			messaging.prepare_friends_sample();
 		}
 		messaging.tray_available = platform::tray::supported();
+		// Name the adapter actually in use; a mismatch with the preference is the useful
+		// detail in a graphics bug report.
+		if let Some(render_state) = cc.wgpu_render_state.as_ref() {
+			messaging.gpu_adapter = gpu::describe(&render_state.adapter.get_info());
+		}
 		let startup = startup::Startup::new(&cc.egui_ctx, &runtime, &mut messaging, demo);
 		// `--demo-update`: a pending release without any network check. The system title bar
 		// comes with it, since that is when the sidebar prompt stands in for the title strip.

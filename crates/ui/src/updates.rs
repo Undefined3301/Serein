@@ -167,8 +167,19 @@ impl MessagingUi {
 		#[cfg(not(target_os = "linux"))]
 		let package_type = "";
 
+		// The adapter and the preference that chose it are what graphics reports hinge on.
+		let graphics = if self.gpu_adapter.is_empty() {
+			String::new()
+		} else {
+			format!(
+				"\n- **Graphics:** {} ({} preference)",
+				self.gpu_adapter,
+				self.gpu_preference.label()
+			)
+		};
+
 		format!(
-			"- **Serein Version:** {} ({channel})\n- **Operating System:** {os} ({arch}){session_type}{package_type}\n- **Display Scale:** {scale:.2}\n- **Theme:** {theme_mode} ({theme_variant})\n- **Update Channel:** {update_channel}\n- **Auto Update:** {}",
+			"- **Serein Version:** {} ({channel})\n- **Operating System:** {os} ({arch}){session_type}{package_type}{graphics}\n- **Display Scale:** {scale:.2}\n- **Theme:** {theme_mode} ({theme_variant})\n- **Update Channel:** {update_channel}\n- **Auto Update:** {}",
 			self.build.version,
 			if self.updates.auto_update {
 				"Enabled"

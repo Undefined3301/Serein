@@ -9,6 +9,8 @@ pub use channel_preferences::{ChannelPreferences, PreferenceEdit, Shortcut};
 pub use keybinds::{KeyChord, KeybindAction, Keybinds};
 pub mod forum;
 pub mod gifs;
+mod graphics;
+pub use graphics::GpuPreference;
 pub mod guild_folders;
 pub mod permissions;
 mod reading_preferences;

@@ -175,6 +175,10 @@ pub struct MessagingUi {
 	pub reading_preferences: model::ReadingPreferences,
 	pub show_hidden_channels: bool,
 	pub hide_title_bar: bool,
+	/// Which GPU renders the window; the running adapter only changes on restart.
+	pub gpu_preference: model::GpuPreference,
+	/// Adapter currently in use, shown next to the preference for bug reports.
+	pub gpu_adapter: String,
 	pub reading_status: &'static str,
 	pub reading_save_requested: bool,
 	pub minimize_to_tray: bool,

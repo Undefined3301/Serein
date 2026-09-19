@@ -82,7 +82,7 @@ impl Page {
 		match self {
 			Self::Account => "The Discord account signed in on this device.",
 			Self::Profile => "Choose how you appear across Discord.",
-			Self::General => "Startup and window behavior on this device.",
+			Self::General => "Startup, window and graphics behavior on this device.",
 			Self::Appearance => "Theme, colour preset, zoom and layout.",
 			Self::MessagingPermissions => {
 				"Control who can contact you and how messages are filtered."
@@ -102,7 +102,7 @@ impl Page {
 			Self::Account => "my account profile logout",
 			Self::Profile => "profile edit display name about me bio pronouns color colour",
 			Self::General => {
-				"general windows macos login menu bar startup autostart automatically open minimized minimize close tray background"
+				"general windows macos login menu bar startup autostart automatically open minimized minimize close tray background graphics gpu adapter render discrete integrated hardware acceleration performance battery"
 			}
 			Self::Appearance => {
 				"appearance customization primary accent hex window title bar caption tray minimize theme dark light system zoom reading layout sidebar people reset colour color preset animate animated gifs autoplay hide image links confirm confirmation external browser"
@@ -765,6 +765,36 @@ impl MessagingUi {
 		if !status.is_empty() {
 			ui.label(RichText::new(status).size(12.0).color(colors.muted));
 		}
+		ui.add_space(12.0);
+		ui.label(design::eyebrow(ui, "Graphics", colors.muted));
+		design::card(ui, |ui| {
+			ui.horizontal(|ui| {
+				let label = ui.label("Render with");
+				egui::ComboBox::from_id_salt("gpu-preference")
+					.selected_text(self.gpu_preference.label())
+					.width(ui.available_width().min(240.0))
+					.show_ui(ui, |ui| {
+						for preference in model::GpuPreference::ALL {
+							ui.selectable_value(
+								&mut self.gpu_preference,
+								preference,
+								preference.label(),
+							)
+							.on_hover_text(preference.description());
+						}
+					})
+					.response
+					.labelled_by(label.id);
+			});
+			ui.weak(if self.gpu_adapter.is_empty() {
+				"Takes effect the next time Serein starts.".to_owned()
+			} else {
+				format!(
+					"Currently drawing with {}. Takes effect the next time Serein starts.",
+					self.gpu_adapter
+				)
+			});
+		});
 		if demo {
 			ui.add_space(12.0);
 			ui.label(

@@ -49,6 +49,8 @@ pub struct AppPreferences {
 	pub voice_output: Option<String>,
 	pub input_percent: u16,
 	pub output_percent: u16,
+	/// Which GPU renders the window; applied on the next start.
+	pub gpu_preference: model::GpuPreference,
 	/// Device-local, account-independent keyboard bindings.
 	pub keybinds: model::Keybinds,
 	/// Expanded server folders, bounded so one device preference stays small.
@@ -76,6 +78,7 @@ impl Default for AppPreferences {
 			voice_output: None,
 			input_percent: 100,
 			output_percent: 100,
+			gpu_preference: Default::default(),
 			keybinds: Default::default(),
 			expanded_folders: Vec::new(),
 			user_volumes: Vec::new(),
@@ -1479,6 +1482,7 @@ mod tests {
 			voice_deafened: true,
 			voice_input: Some("synthetic microphone".into()),
 			output_percent: 75,
+			gpu_preference: model::GpuPreference::PowerSaving,
 			..Default::default()
 		};
 		store.save_app_preferences(&value).unwrap();
@@ -1492,6 +1496,25 @@ mod tests {
 		assert_eq!(
 			store.app_preferences().unwrap().voice_input.as_deref(),
 			Some("synthetic microphone")
+		);
+		assert_eq!(
+			store.app_preferences().unwrap().gpu_preference,
+			model::GpuPreference::PowerSaving
+		);
+	}
+	#[test]
+	fn app_preferences_tolerate_an_unknown_gpu_preference() {
+		let store = LocalStore::initialize(Connection::open_in_memory().unwrap()).unwrap();
+		store
+			.0
+			.execute(
+				"INSERT INTO app_preferences VALUES(1,?1)",
+				[r#"{"gpu_preference":"quantum-gpu"}"#],
+			)
+			.unwrap();
+		assert_eq!(
+			store.app_preferences().unwrap().gpu_preference,
+			model::GpuPreference::Automatic
 		);
 	}
 	use super::*;
