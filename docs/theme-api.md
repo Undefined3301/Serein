@@ -74,7 +74,8 @@ For example, this `theme` value provides a flatter, roomier appearance:
 Unknown fields and out-of-range metrics are rejected before installation.
 Existing color-only packages continue to work. Disabling or resetting a theme
 restores built-in control metrics as well as colors; `Ctrl+Shift+F12` is the
-emergency reset shortcut.
+emergency reset shortcut. Reset keeps installed themes available for re-selection;
+Disable removes the selected package and its local data.
 
 These metrics affect controls that inherit the shared native style. Custom
 painted elements, explicit text sizes, fixed-height rows and per-widget padding

@@ -1030,8 +1030,15 @@ impl State {
 				if matches!(action, Action::Block { .. }) {
 					self.user_actions.bump_view();
 				}
+				let sends_friend_request = matches!(
+					&action,
+					Action::AddFriend { .. } | Action::ProfileFriend { friend: true, .. }
+				);
+				let removes_friend_request =
+					matches!(&action, Action::ResolveFriend { accept: false, .. });
+				let uses_toast = sends_friend_request || removes_friend_request;
 				if let Err(failure) = result {
-					self.user_actions.status = Some(failure.label());
+					self.user_actions.status = (!uses_toast).then_some(failure.label());
 					self.status = failure.label();
 					if failure.ends_session() {
 						self.fail(failure);
@@ -1113,7 +1120,7 @@ impl State {
 					}
 					Action::Mute { muted: false, .. } => "Conversation notifications unmuted",
 				};
-				self.user_actions.status = (!observed).then_some(label);
+				self.user_actions.status = (!observed && !uses_toast).then_some(label);
 				self.status = label;
 			}
 		}
@@ -1406,12 +1413,16 @@ mod tests {
 		assert!(state.add_friend("new_friend").is_none());
 		assert!(state.resolve_friend_request(user.id, true).is_none());
 		finish(&mut state, send, Ok(()));
+		assert_eq!(state.user_action_status(), None);
 		assert!(state.add_friend("new_friend").is_none());
 		assert_eq!(
 			state.pending_friends().count(),
 			1,
 			"no invented outgoing identity"
 		);
+		let rejected = state.add_friend("other_friend").unwrap();
+		finish(&mut state, rejected, Err(Failure::Protocol));
+		assert_eq!(state.user_action_status(), None);
 		let accept = state.resolve_friend_request(user.id, true).unwrap();
 		finish(&mut state, accept, Err(Failure::Forbidden));
 		assert_eq!(state.pending_friends().count(), 1);
@@ -1439,6 +1450,7 @@ mod tests {
 		assert!(state.resolve_friend_request(user.id, true).is_none());
 		let cancel = state.resolve_friend_request(user.id, false).unwrap();
 		finish(&mut state, cancel, Ok(()));
+		assert_eq!(state.user_action_status(), None);
 		assert_eq!(state.pending_friends().count(), 0);
 		state
 			.apply_user_action(Event::Request {

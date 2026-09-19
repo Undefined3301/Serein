@@ -2042,6 +2042,7 @@ pub fn input(ui: &mut egui::Ui, edit: egui::TextEdit<'_>) -> egui::Response {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Level {
 	Info,
+	Success,
 	Warning,
 	Error,
 }
@@ -2052,6 +2053,7 @@ pub fn notice(ui: &mut egui::Ui, level: Level, text: &str) {
 	let colors = palette(ui);
 	let (tint, icon) = match level {
 		Level::Info => (colors.accent, crate::icons::Icon::Help),
+		Level::Success => (colors.positive, crate::icons::Icon::Check),
 		Level::Warning => (colors.warning, crate::icons::Icon::ShieldWarning),
 		Level::Error => (colors.danger, crate::icons::Icon::ShieldWarning),
 	};

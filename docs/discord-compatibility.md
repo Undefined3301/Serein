@@ -1241,7 +1241,7 @@ Synthetic reducer, protocol and local HTTP tests cover this path; live requests,
 service challenges and recipient privacy restrictions remain unverified.
 
 Profile cards also expose confirmed friendship, incoming requests and outgoing requests.
-Adding from a card uses its user ID with PUT `/users/@me/relationships/{id}` and type 1;
+Adding from a card uses its user ID with PUT `/users/@me/relationships/{id}` and an empty object;
 removing a confirmed friend uses DELETE only after a named confirmation dialog.
 Acknowledged ID requests retain a bounded outgoing row with unknown profile metadata until
 Gateway data arrives. Failed writes preserve friendship; newer Gateway updates win over

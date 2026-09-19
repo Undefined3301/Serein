@@ -1306,8 +1306,8 @@ impl Desktop {
 			// The demo updater owns the flags, so ask it for its synthetic release.
 			messaging.updates.check_requested = true;
 		}
-		// `--demo-toast`: one of each severity, so the transient notice layer can be
-		// captured without provoking a real failure.
+		// `--demo-toast`: representative semantic colors, so the transient notice layer
+		// can be captured without provoking a real failure.
 		#[cfg(feature = "demo")]
 		if demo && std::env::args().any(|arg| arg == "--demo-toast") {
 			messaging.toasts.push(
@@ -1320,7 +1320,7 @@ impl Desktop {
 			);
 			messaging
 				.toasts
-				.push(ui::design::Level::Info, "Attachment upload cancelled");
+				.push(ui::design::Level::Success, "Friend request sent");
 		}
 		#[cfg(feature = "demo")]
 		if demo && std::env::args().any(|arg| arg == "--demo-game-activity") {
@@ -4471,6 +4471,32 @@ impl Desktop {
 			if event.generation != self.state.generation {
 				continue;
 			}
+			let friend_request_notice =
+				if let Event::UserAction(client_core::user_actions::Event::Written {
+					action,
+					result,
+					..
+				}) = &event.event
+				{
+					let success = match action {
+						client_core::user_actions::Action::AddFriend { .. }
+						| client_core::user_actions::Action::ProfileFriend {
+							friend: true, ..
+						} => Some("Friend request sent"),
+						client_core::user_actions::Action::ResolveFriend {
+							accept: false, ..
+						} => Some("Friend request removed"),
+						_ => None,
+					};
+					success.map(|success| match result {
+						Ok(()) => (ui::design::Level::Success, success),
+						Err(failure) => (ui::design::Level::Error, failure.label()),
+					})
+				} else {
+					None
+				};
+			let friend_request_was_pending =
+				friend_request_notice.is_some() && self.state.user_action_pending();
 			self.delete_cached_messages(&event.event);
 			match &event.event {
 				Event::Delete { channel, id } => {
@@ -4556,6 +4582,12 @@ impl Desktop {
 				self.notifications.dismiss();
 			}
 			self.state.apply(event);
+			if friend_request_was_pending
+				&& !self.state.user_action_pending()
+				&& let Some((level, text)) = friend_request_notice
+			{
+				self.messaging.toasts.push(level, text);
+			}
 			// Only admitted service messages can establish a deleted reply target.
 			// Fence pending disk writes before the post-drain timeline snapshot is saved.
 			let deleted_replies = self.state.take_reply_deletions();
