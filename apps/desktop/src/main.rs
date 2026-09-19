@@ -4796,7 +4796,8 @@ impl eframe::App for Desktop {
 			ctx,
 			&self.runtime,
 			&mut self.messaging.updates,
-			!self.fixture_only
+			!cfg!(debug_assertions)
+				&& !self.fixture_only
 				&& !self.state.demo
 				&& (self.app_settings.loaded || self.app_settings.state.touched),
 		) {

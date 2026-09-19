@@ -214,10 +214,14 @@ impl MessagingUi {
 		ui.horizontal_wrapped(|ui| {
 			if ui
 				.add_enabled(
-					!self.updates.busy && !self.updates.ready,
+					(!cfg!(debug_assertions) || demo) && !self.updates.busy && !self.updates.ready,
 					egui::Button::new("Check for updates"),
 				)
-				.on_disabled_hover_text("Finish the current update before checking again.")
+				.on_disabled_hover_text(if cfg!(debug_assertions) && !demo {
+					"Update checks are disabled in debug builds."
+				} else {
+					"Finish the current update before checking again."
+				})
 				.clicked()
 			{
 				self.updates.check_requested = true;
