@@ -389,17 +389,42 @@ to eight per two seconds. The UI schedules only the next visible expiry, with no
 Existing People typing subscriptions are unchanged; guild delivery may depend on that pane's
 subscription. Service availability and normal-account acceptance remain live-unverified.
 
-Unsupported ordinary-message content (September 10): the [Discord message resource](https://docs.discord.com/developers/resources/message)
-documents poll, sticker_items, deprecated stickers, components and IS_COMPONENTS_V2 (1 << 15).
-The decoder now preserves only independent presence markers for these sources through full
-messages, absent/null partial updates and bounded local cache reloads. It keeps no poll answer,
-sticker or component payload. Native static Poll/Sticker/Components placeholders accompany any
-supported text/media and share one confirmed Open in Discord action. This implements recognition
-and a fallback, not poll voting, sticker rendering or interactive components. Old cache rows
-cannot recover metadata previously discarded and gain markers during ordinary history refresh.
-The local decoder caps arrays at 100 objects, each direct object at 64 fields, within the existing
-4 MiB wire limit; these are application bounds, not Discord quotas. Native/live behavior remains
-unverified; the source documentation does not establish normal-account API acceptance.
+Message components (September 19, issue #313): native action rows, buttons, string/user/
+role/mentionable/channel selects, Components V2 sections, containers, text, thumbnails,
+media galleries, files and separators retain bounded typed service data. Modal controls
+include labels, text inputs, selects, radio groups, checkbox groups, checkboxes and
+explicit native file selection. User/mentionable selectors reuse on-demand member
+search; role/channel selectors use the loaded account catalog.
+Buttons and form submits use the unofficial normal-account `POST /interactions` path,
+with the active Gateway session, a unique nonce, and no automatic write replay. Gateway
+success/failure/modal events are correlated; an HTTP acceptance alone is not completion.
+Private replies are session-only and never saved with channel history. Premium purchase
+buttons are omitted; unknown component types retain a visible marker. Media links use
+the existing safe preview and destination-confirmation policy.
+
+Select menus show selected labels, option descriptions and emoji. Single selections
+submit directly; optional selections can be cleared. Form inputs have larger padding
+and multiline fields have room for longer answers. Link buttons keep their text on one
+line and display an external-link icon. Rendered components do not add an Open in
+Discord button. Channel category labels also stay on one line with truncation.
+
+The [official component reference](https://docs.discord.com/developers/components/reference)
+describes schemas; normal-account submission and modal Gateway events are unofficial
+([first-hand interaction reference](https://docs.discord.food/interactions/receiving-and-responding)).
+This is not full Discord component parity: premium purchases are unavailable, and
+synthetic checks do not verify live application responses, modal uploads or purchases.
+Normal-account interoperability and Windows/Linux visual equivalence remain unverified.
+Polls and stickers still retain presence markers and an Open in Discord fallback.
+Old cached component markers acquire controls only after normal history refresh.
+
+Run the offline native component preview with:
+
+```bash
+cargo run --locked -p serein --features demo -- --demo --demo-components
+```
+
+Choose a dropdown option or click **Open sample form** to inspect the synthetic controls.
+The separate `--demo --demo-check-components` mode checks the synthetic interaction flow.
 
 External fallback (September 10): unsupported channel rows and message placeholders offer
 Open in Discord through an explicit browser confirmation. URLs use the fixed Discord HTTPS
