@@ -400,7 +400,7 @@ impl VideoUi {
 		if action.clicked() {
 			self.toggle(message, attachment, state);
 		}
-		response |= action;
+		response = action | response;
 		let mut controls_focused = false;
 		let context_click = ui.input(|i| {
 			i.pointer.button_down(egui::PointerButton::Secondary)
