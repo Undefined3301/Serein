@@ -78,6 +78,10 @@ fn payload(selector: u8, remaining: &mut usize) -> String {
 
 fn message(id: Id, channel: Id, content: String) -> Message {
 	Message {
+		flags: 0,
+		ephemeral: false,
+		components: vec![],
+		application_id: None,
 		id,
 		channel,
 		author: user(),
@@ -267,6 +271,9 @@ fuzz_target!(|data: &[u8]| {
 				apply(
 					&mut state,
 					Event::Patch(MessagePatch {
+						flags: Patch::Absent,
+						components: Patch::Absent,
+						application_id: Patch::Absent,
 						channel,
 						id,
 						content,
