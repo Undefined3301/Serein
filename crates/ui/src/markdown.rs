@@ -1219,12 +1219,16 @@ impl Formatted {
 								*render.channel = Some(id);
 							}
 						} else {
-							let response = ui
-								.add(egui::Label::new(&spans[start].0).selectable(true))
-								.on_hover_text(
-									"Channel unavailable or unsupported in this session",
-								);
+							// Like fenced code, this label brings its own galley: let the
+							// block register it in reading order.
+							let (galley_pos, galley, response) = egui::Label::new(&spans[start].0)
+								.selectable(true)
+								.layout_in_ui(ui);
+							let response = response.on_hover_text(
+								"Channel unavailable or unsupported in this session",
+							);
 							render.surface.keep(&response);
+							render.surface.embed(&response, galley_pos, galley);
 						}
 						start += 1;
 						continue;
@@ -1470,7 +1474,13 @@ impl Formatted {
 					if display.is_empty() {
 						job.append(" ", 0.0, TextFormat::simple(mono.clone(), colors.muted));
 					}
-					let response = ui.add(egui::Label::new(job).wrap().selectable(true));
+					// Selection is registered by the surrounding block in `Surface::finish`,
+					// so a drag through the code selects only what the pointer crossed.
+					let (galley_pos, galley, response) = egui::Label::new(job)
+						.wrap()
+						.selectable(true)
+						.layout_in_ui(ui);
+					surface.embed(&response, galley_pos, galley);
 					response.widget_info(|| {
 						egui::WidgetInfo::labeled(
 							egui::WidgetType::Label,
@@ -1497,9 +1507,15 @@ impl Formatted {
 					);
 					let copied = Self::copied_recently(ui, id);
 					if ui.rect_contains_pointer(rect) || copied {
+						// The code text is painted later, with the block's selection, so the
+						// floating control needs a layer of its own to stay on top of it.
 						let mut child = ui.new_child(
 							egui::UiBuilder::new()
 								.max_rect(target)
+								.layer_id(egui::LayerId::new(
+									egui::Order::Middle,
+									id.with("copy-layer"),
+								))
 								.layout(egui::Layout::left_to_right(egui::Align::Center)),
 						);
 						child.painter().rect_filled(target, 6, colors.raised);
@@ -3365,6 +3381,173 @@ mod tests {
 			.collect();
 		output.drop_without_applying_deltas();
 		assert_eq!(copied, vec!["fn main() {}".to_owned()]);
+	}
+	#[test]
+	fn dragging_out_of_a_code_block_leaves_the_text_above_it_unselected() {
+		let ctx = egui::Context::default();
+		crate::icons::install(&ctx);
+		let parsed = Formatted::parse("before the block\n```\nalpha\nbravo\n```\nafter the block");
+		let frame = |events| {
+			ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(420.0, 300.0),
+					)),
+					events,
+					..Default::default()
+				},
+				|ui| parsed.show(ui, &mut None),
+			)
+		};
+		let press = |pos, pressed| {
+			vec![
+				egui::Event::PointerMoved(pos),
+				egui::Event::PointerButton {
+					pos,
+					button: egui::PointerButton::Primary,
+					pressed,
+					modifiers: egui::Modifiers::NONE,
+				},
+			]
+		};
+		// Locate the painted galleys, so the drag uses real glyph positions.
+		let mut code = None;
+		let mut after = None;
+		for _ in 0..2 {
+			let output = frame(Vec::new());
+			let mut shapes = Vec::new();
+			fn walk<'a>(shape: &'a egui::Shape, out: &mut Vec<&'a egui::Shape>) {
+				match shape {
+					egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, out)),
+					other => out.push(other),
+				}
+			}
+			output
+				.shapes
+				.iter()
+				.for_each(|s| walk(&s.shape, &mut shapes));
+			let galley = |wanted: &str| {
+				shapes.iter().find_map(|shape| match shape {
+					egui::Shape::Text(text) if text.galley.text() == wanted => {
+						Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
+					}
+					_ => None,
+				})
+			};
+			code = galley("alpha\nbravo");
+			after = galley("after the block");
+			output.drop_without_applying_deltas();
+		}
+		let code = code.expect("painted code galley");
+		let after = after.expect("painted trailing paragraph");
+		// Out of the block's last line and into the paragraph under it: the paragraph above
+		// the block is registered with the rest of the body, and must stay unselected.
+		let from = egui::pos2(code.left() + 1.0, code.bottom() - 2.0);
+		let to = egui::pos2(after.right() - 1.0, after.center().y);
+		let mut copied = String::new();
+		for events in [
+			press(from, true),
+			vec![egui::Event::PointerMoved(to)],
+			press(to, false),
+			vec![egui::Event::Copy],
+		] {
+			let output = frame(events);
+			if let Some(text) =
+				output
+					.platform_output
+					.commands
+					.iter()
+					.find_map(|command| match command {
+						egui::OutputCommand::CopyText(text) => Some(text.clone()),
+						_ => None,
+					}) {
+				copied = text;
+			}
+			output.drop_without_applying_deltas();
+		}
+		assert_eq!(copied, "bravo\n\nafter the block");
+	}
+	#[test]
+	fn an_unlabelled_code_block_floats_a_copy_control_above_its_text() {
+		let ctx = egui::Context::default();
+		crate::icons::install(&ctx);
+		let parsed = Formatted::parse("```\nfirst line of code\nsecond line\nthird line\n```");
+		let frame = |events| {
+			ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(420.0, 300.0),
+					)),
+					events,
+					..Default::default()
+				},
+				|ui| parsed.show(ui, &mut None),
+			)
+		};
+		let mut block = None;
+		for _ in 0..2 {
+			let output = frame(Vec::new());
+			let code_bg = ctx.global_style().visuals.code_bg_color;
+			block = output.shapes.iter().find_map(|shape| match &shape.shape {
+				egui::Shape::Rect(rect) if rect.fill == code_bg => Some(rect.rect),
+				_ => None,
+			});
+			output.drop_without_applying_deltas();
+		}
+		// No language header, so the control floats in the block's top-right corner and
+		// only while the pointer is inside it.
+		let block = block.expect("framed background");
+		let pos = egui::pos2(block.right() - 17.0, block.top() + 17.0);
+		let hover = frame(vec![egui::Event::PointerMoved(pos)]);
+		let code = hover
+			.shapes
+			.iter()
+			.position(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().starts_with("first line")))
+			.expect("painted code galley");
+		let control = hover
+			.shapes
+			.iter()
+			.position(|shape| {
+				let bounds = shape.shape.visual_bounding_rect();
+				bounds.contains(pos) && bounds.width() < 40.0
+			})
+			.expect("floating control");
+		hover.drop_without_applying_deltas();
+		assert!(
+			code < control,
+			"the block's deferred text must paint under the control, not over it"
+		);
+		let output = frame(vec![
+			egui::Event::PointerMoved(pos),
+			egui::Event::PointerButton {
+				pos,
+				button: egui::PointerButton::Primary,
+				pressed: true,
+				modifiers: egui::Modifiers::NONE,
+			},
+			egui::Event::PointerButton {
+				pos,
+				button: egui::PointerButton::Primary,
+				pressed: false,
+				modifiers: egui::Modifiers::NONE,
+			},
+		]);
+		let copied: Vec<String> = output
+			.platform_output
+			.commands
+			.iter()
+			.filter_map(|command| match command {
+				egui::OutputCommand::CopyText(text) => Some(text.clone()),
+				_ => None,
+			})
+			.collect();
+		output.drop_without_applying_deltas();
+		assert_eq!(
+			copied,
+			vec!["first line of code\nsecond line\nthird line".to_owned()]
+		);
 	}
 	#[test]
 	fn mass_mentions_render_as_pills_only_for_exact_plain_tokens() {
