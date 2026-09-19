@@ -37,7 +37,7 @@ pub(crate) fn server_tag(
 			if tag.badge.is_some() {
 				avatars.show_icon(ui, tag.badge_key(), 10.0, demo, "Server tag badge");
 			}
-			ui.label(RichText::new(&tag.tag).size(10.0).strong());
+			ui.add(egui::Label::new(RichText::new(&tag.tag).size(10.0).strong()).selectable(false));
 		})
 		.response
 		.on_hover_text(format!("Server tag · server {}", tag.guild))

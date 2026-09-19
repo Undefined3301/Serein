@@ -13,6 +13,7 @@ fn user() -> User {
 		name: "Synthetic".into(),
 		avatar: None,
 		discriminator: 0,
+		primary_guild: None,
 	}
 }
 
