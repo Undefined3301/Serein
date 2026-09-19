@@ -612,6 +612,20 @@ impl Drop for FrameMetrics {
 		}
 	}
 }
+/// Every session teardown ends the same way; only saved data and what follows differ.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum SessionEnd {
+	#[default]
+	Logout,
+	Switch(model::Id),
+	Add,
+}
+impl SessionEnd {
+	/// Switching and adding keep this account's cached data and saved login.
+	fn forgets(self) -> bool {
+		self == Self::Logout
+	}
+}
 struct Desktop {
 	extensions: extension_bridge::Bridge,
 	extension_close_pending: bool,
@@ -676,13 +690,32 @@ struct Desktop {
 	demo_typing: bool,
 	variant_changed: bool,
 	pending_save: Option<Arc<SessionSecret>>,
+	/// Written under the account's own entry on every READY, including a launch restore, so
+	/// the switcher can always get back to an account it lists.
+	pending_account_save: Option<Arc<SessionSecret>>,
+	/// Saved account awaiting the owner's confirmation before it is forgotten.
+	confirming_forget: Option<model::Id>,
 	credential_status: &'static str,
 	forgetting: bool,
 	confirming_close: bool,
 	confirming_logout: bool,
+	/// What the pending session teardown is for: logging out, switching or adding an account.
+	end_intent: SessionEnd,
+	/// Saved account whose token is being read for a switch.
+	switching: Option<model::Id>,
+	/// A switcher-roster write is in flight; failures stop retrying for this session.
+	roster_pending: bool,
+	roster_failed: bool,
+	/// Session generation whose account was last recorded in the switcher roster.
+	roster_generation: Option<u64>,
 	close_approved: bool,
 	fixture_only: bool,
 	authorized: bool,
+	/// Sign-in screen disclosures, folded away until the owner opens them.
+	about_open: bool,
+	token_open: bool,
+	/// Height the sign-in card took last frame, so a tall card stays fully reachable.
+	sign_in_height: f32,
 	#[cfg(feature = "demo")]
 	synthetic_id: u64,
 	token_input: Zeroizing<String>,
@@ -830,7 +863,7 @@ fn accent_glow(ui: &egui::Ui) {
 	let glow = rect.center() - egui::vec2(0.0, rect.height() * 0.1);
 	let radius = rect.width().max(rect.height()) * 0.55;
 	let mut mesh = egui::Mesh::default();
-	let alpha = if ui.visuals().dark_mode { 0.16 } else { 0.10 };
+	let alpha = if ui.visuals().dark_mode { 0.22 } else { 0.12 };
 	mesh.colored_vertex(glow, accent.gamma_multiply(alpha));
 	const SEGMENTS: u32 = 48;
 	for i in 0..=SEGMENTS {
@@ -1150,6 +1183,14 @@ impl Desktop {
 				cache::Operation::LoadAppearance,
 			)
 		}));
+		if let Some(cache) = &cache
+			&& cache.queue(
+				state.generation,
+				model::Id(0),
+				cache::Operation::LoadAccounts,
+			) {
+			cache_pending += 1;
+		}
 		let mut app_settings = app_settings::Settings::default();
 		if cache.as_ref().is_some_and(|cache| {
 			cache.queue(
@@ -1414,7 +1455,15 @@ impl Desktop {
 			if rest == "status" {
 				messaging.own_presence.custom_status = "Shipping a nicer popout".into();
 			}
-			messaging.preview_account_menu(state.generation);
+			if let Some(user) = state.user.as_ref() {
+				messaging.accounts = test_support::demo_accounts(user);
+			}
+			if rest == "status-editor" {
+				messaging.own_presence.custom_status = "Shipping a nicer popout".into();
+				messaging.preview_custom_status(state.generation);
+			} else {
+				messaging.preview_account_menu(state.generation);
+			}
 			state.status = "Offline fixture · account popout opened at startup";
 		}
 		#[cfg(feature = "demo")]
@@ -1532,6 +1581,13 @@ impl Desktop {
 			state.history_targeted = true;
 			state.status = "Offline fixture · unread strip and older-messages bar shown";
 		}
+		// Owner authorization for a new sign-in; fixture captures pre-tick it.
+		#[cfg_attr(not(feature = "demo"), allow(unused_mut))]
+		let mut authorized = false;
+		#[cfg_attr(not(feature = "demo"), allow(unused_mut))]
+		let mut sign_in_panels = false;
+		#[cfg_attr(not(feature = "demo"), allow(unused_mut))]
+		let mut sign_in_forget = None;
 		#[cfg(feature = "demo")]
 		if demo && std::env::args().any(|arg| arg == "--demo-join-server") {
 			messaging.preview_join_server(state.generation);
@@ -1544,10 +1600,33 @@ impl Desktop {
 			state.status = "Offline fixture · screen-share picker opened at startup";
 		}
 		#[cfg(feature = "demo")]
-		if demo && std::env::args().any(|arg| arg == "--demo-login") {
-			// Fixture-only: render the sign-in screen without a session.
+		if demo
+			&& let Some(rest) = std::env::args().find_map(|arg| {
+				arg.strip_prefix("--demo-login")
+					.map(|rest| rest.trim_start_matches('=').to_owned())
+			}) {
+			// Fixture-only: render the sign-in screen without a session. `--demo-login` shows the
+			// returning-owner layout with a synthetic roster and pre-ticked consent (the actions
+			// stay inert); `=new` shows the first-run layout, `=panels` the opened disclosures
+			// and `=failed` the attention banner.
+			if !matches!(rest.as_str(), "new" | "panels") {
+				messaging.accounts = state
+					.user
+					.as_ref()
+					.map(test_support::demo_accounts)
+					.unwrap_or_default();
+			}
+			authorized = true;
 			state.user = None;
 			state.status = "Disconnected";
+			sign_in_panels = rest == "panels";
+			if rest == "forget" {
+				sign_in_forget = messaging.accounts.get(1).map(|account| account.id);
+			}
+			if rest == "failed" {
+				state.auth = AuthState::Failed;
+				state.status = "Synthetic fixture failure · Discord was not contacted";
+			}
 		}
 		#[cfg(feature = "demo")]
 		if demo && std::env::args().any(|arg| arg == "--demo-server-settings") {
@@ -1635,6 +1714,8 @@ impl Desktop {
 			demo_typing,
 			variant_changed: false,
 			pending_save: None,
+			pending_account_save: None,
+			confirming_forget: sign_in_forget,
 			credential_status: if demo {
 				"Fixture mode never opens the credential store or network"
 			} else if loading_saved {
@@ -1645,9 +1726,17 @@ impl Desktop {
 			forgetting: false,
 			confirming_close: false,
 			confirming_logout: false,
+			end_intent: SessionEnd::Logout,
+			switching: None,
+			roster_pending: false,
+			roster_failed: false,
+			roster_generation: None,
 			close_approved: false,
 			fixture_only: demo,
-			authorized: false,
+			authorized,
+			about_open: sign_in_panels,
+			token_open: sign_in_panels,
+			sign_in_height: 0.0,
 			#[cfg(feature = "demo")]
 			synthetic_id,
 			token_input: Zeroizing::new(String::new()),
@@ -1693,6 +1782,7 @@ impl Desktop {
 		self.state.status = "Connecting to Discord…";
 		let secret = Arc::new(secret);
 		self.pending_save = save.then(|| secret.clone());
+		self.pending_account_save = Some(secret.clone());
 		self.connection = Some(connection::Connection::start(
 			self.runtime.handle(),
 			secret,
@@ -1702,6 +1792,11 @@ impl Desktop {
 		));
 	}
 	fn logout(&mut self, ctx: &egui::Context) {
+		self.end_session(ctx, SessionEnd::Logout);
+	}
+	/// Ends the current session. Only logging out removes this account's local data and
+	/// saved login; switching and adding keep both so the account stays in the switcher.
+	fn end_session(&mut self, ctx: &egui::Context, intent: SessionEnd) {
 		self.captcha.close();
 		self.notification_runtime.clear(&self.window);
 		let extension_logout = self.extensions.logout(ctx);
@@ -1724,9 +1819,14 @@ impl Desktop {
 		self.login = None;
 		self.connection = None;
 		self.pending_save = None;
+		self.pending_account_save = None;
 		let old_account = self.state.user.as_ref().filter(|_| !was_demo).map(|u| u.id);
+		self.switching = None;
+		self.roster_pending = false;
 		self.state.logout();
-		if let (Some(cache), Some(account)) = (&self.cache, old_account) {
+		if intent.forgets()
+			&& let (Some(cache), Some(account)) = (&self.cache, old_account)
+		{
 			if cache.queue(self.state.generation, account, cache::Operation::Forget) {
 				self.cache_pending += 1;
 			} else {
@@ -1735,6 +1835,11 @@ impl Desktop {
 			}
 		}
 		self.messaging.clear();
+		if intent.forgets() {
+			self.messaging
+				.accounts
+				.retain(|saved| Some(saved.id) != old_account);
+		}
 		if let Err(error) = extension_logout {
 			self.messaging.extensions.status = error;
 			self.cache_error = true;
@@ -1749,18 +1854,143 @@ impl Desktop {
 			.apply_reading_preferences(ctx, self.reading.current);
 		ctx.clear_animations();
 		self.token_input = Zeroizing::new(String::new());
-		if !was_demo && let Some(store) = &self.store {
+		if !was_demo
+			&& intent.forgets()
+			&& let Some(store) = &self.store
+		{
 			self.forgetting = store
 				.send
-				.try_send((self.state.generation, credentials::Operation::Forget))
+				.try_send((
+					self.state.generation,
+					credentials::Request::NONE,
+					credentials::Operation::Forget,
+				))
 				.is_ok();
+			if let Some(account) = old_account {
+				let _ = store.send.try_send((
+					self.state.generation,
+					credentials::Request::NONE,
+					credentials::Operation::ForgetAccount(account),
+				));
+			}
 			self.credential_status = if self.forgetting {
 				"Removing saved login…"
 			} else {
 				"Credential queue unavailable; saved login may remain"
 			};
+		} else if !was_demo {
+			self.credential_status = "Signed out of this account; its saved login is kept";
 		}
 		self.confirming_logout = false;
+		self.end_intent = SessionEnd::Logout;
+	}
+	/// Confirms first when work would be lost, then ends the session for `intent`.
+	fn request_session_end(&mut self, ctx: &egui::Context, intent: SessionEnd) {
+		if self.state.has_unsent()
+			|| self.messaging.has_edit()
+			|| self.messaging.has_server_settings_changes()
+			|| self.messaging.extensions.theme_editor_dirty()
+			|| self.state.server_settings.pending
+			|| self.state.server_admin.pending
+			|| self.uploads.has_unsent()
+		{
+			self.end_intent = intent;
+			self.confirming_logout = true;
+		} else {
+			self.finish_session_end(ctx, intent);
+		}
+	}
+	fn finish_session_end(&mut self, ctx: &egui::Context, intent: SessionEnd) {
+		self.end_session(ctx, intent);
+		if let SessionEnd::Switch(account) = intent {
+			self.begin_switch(account);
+		}
+	}
+	/// Reads the saved token of an account already signed in on this device.
+	fn begin_switch(&mut self, account: model::Id) {
+		if self.fixture_only || self.state.demo {
+			return;
+		}
+		let started = self.store.as_mut().is_some_and(|store| {
+			store.load_account(self.state.generation, account, std::time::Instant::now())
+		});
+		self.switching = started.then_some(account);
+		self.credential_status = if started {
+			"Reading the saved login for that account…"
+		} else {
+			"Credential lookup unavailable; sign in with Discord again"
+		};
+	}
+	/// Removes one saved account: its token, roster entry and cached data.
+	fn forget_saved_account(&mut self, ctx: &egui::Context, account: model::Id) {
+		if self
+			.state
+			.user
+			.as_ref()
+			.is_some_and(|user| user.id == account)
+		{
+			self.request_session_end(ctx, SessionEnd::Logout);
+			return;
+		}
+		self.messaging.accounts.retain(|saved| saved.id != account);
+		if let Some(store) = &self.store {
+			let _ = store.send.try_send((
+				self.state.generation,
+				credentials::Request::NONE,
+				credentials::Operation::ForgetAccount(account),
+			));
+		}
+		if self.queue_cache_for(account, cache::Operation::Forget) {
+			self.credential_status = "Saved account removed from this device";
+		} else {
+			self.cache_error = true;
+			self.cache_status = "Could not queue local account data removal";
+		}
+	}
+	/// Keeps the switcher entry for the signed-in account current, without retrying failures.
+	fn sync_account_roster(&mut self) {
+		if self.fixture_only || self.state.demo || self.roster_pending || self.roster_failed {
+			return;
+		}
+		if self.state.auth != AuthState::Authenticated {
+			return;
+		}
+		let Some(user) = &self.state.user else { return };
+		let display = self
+			.state
+			.own_profile
+			.data
+			.as_ref()
+			.and_then(|profile| profile.global_name.as_deref());
+		// Re-record once per session so the switcher orders by last use, then only on change.
+		let recorded = self.roster_generation == Some(self.state.generation);
+		if recorded
+			&& self.messaging.accounts.iter().any(|saved| {
+				saved.id == user.id
+					&& saved.name == user.name
+					&& saved.avatar == user.avatar
+					&& saved.discriminator == user.discriminator
+					&& saved.display.as_deref() == display
+			}) {
+			return;
+		}
+		let account = model::SavedAccount {
+			id: user.id,
+			name: user.name.clone(),
+			display: display.map(str::to_owned),
+			avatar: user.avatar.clone(),
+			discriminator: user.discriminator,
+			has_token: false,
+		};
+		if !account.is_valid() {
+			return;
+		}
+		self.roster_pending =
+			self.queue_cache_for(model::Id(0), cache::Operation::SaveAccount(account));
+		self.roster_failed = !self.roster_pending;
+		if self.roster_pending {
+			self.roster_generation = Some(self.state.generation);
+		}
 	}
 	fn queue_cache(&mut self, operation: cache::Operation) -> bool {
 		if let Some(user) = &self.state.user {
@@ -1903,6 +2133,7 @@ impl Desktop {
 		true
 	}
 	fn sync_own_presence(&mut self, ctx: &egui::Context) {
+		self.expire_own_status(ctx);
 		let changed = std::mem::take(&mut self.messaging.own_presence_changed);
 		let previous_status = self.messaging.own_presence_status;
 		self.messaging.own_presence_status = if !self.messaging.own_presence.valid() {
@@ -1919,9 +2150,9 @@ impl Desktop {
 			{
 				"Could not update status: connection unavailable."
 			} else if !self.state.gateway_connected {
-				"Waiting for connection; public visibility unconfirmed."
+				"Waiting for connection."
 			} else {
-				"This session only; public visibility unconfirmed."
+				""
 			}
 		} else {
 			"Not connected; status is not shared."
@@ -1929,6 +2160,34 @@ impl Desktop {
 		if changed || previous_status != self.messaging.own_presence_status {
 			ctx.request_repaint();
 		}
+	}
+	/// A status with a "Clear after" deadline clears itself, then republishes like any edit.
+	fn expire_own_status(&mut self, ctx: &egui::Context) {
+		let Some(expires) = self.messaging.own_presence_expires else {
+			return;
+		};
+		if self.messaging.own_presence.custom_status.is_empty() {
+			self.messaging.own_presence_expires = None;
+			return;
+		}
+		let now = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.unwrap_or_default()
+			.as_millis()
+			.min(u128::from(u64::MAX)) as u64;
+		if now < expires {
+			// Wake once at the deadline; egui otherwise sleeps through it on an idle window.
+			ctx.request_repaint_after(std::time::Duration::from_millis(
+				(expires - now).min(60_000),
+			));
+			return;
+		}
+		self.messaging.own_presence_expires = None;
+		self.messaging.own_presence.custom_status.clear();
+		self.messaging.own_presence_changed = true;
+		self.messaging
+			.toasts
+			.push(ui::design::Level::Info, "Custom status cleared");
 	}
 	fn sync_game_activity(&mut self, ctx: &egui::Context) {
 		let previous_sharing = (
@@ -3088,6 +3347,7 @@ impl Desktop {
 								}
 								self.connection = None;
 								self.pending_save = None;
+								self.pending_account_save = None;
 								self.state.auth = AuthState::Unauthenticated;
 								self.state.status = "Disconnected";
 								self.credential_status = "Saved-login restore cancelled";
@@ -3168,9 +3428,22 @@ impl Desktop {
 											egui::PopupCloseBehavior::CloseOnClickOutside,
 										)
 									};
-									egui::containers::menu::MenuButton::new("Appearance")
-										.config(sticky())
-										.ui(ui, |ui| self.messaging.appearance_menu(ui));
+									// Quiet header actions: text only until hovered, like the rest of the chrome.
+									let quiet =
+										|ui: &egui::Ui, text: &str, color: egui::Color32| {
+											egui::Button::new(
+												ui::design::medium(ui, text, 13.0).color(color),
+											)
+											.frame_when_inactive(false)
+											.corner_radius(8)
+										};
+									egui::containers::menu::MenuButton::from_button(quiet(
+										ui,
+										"Appearance",
+										p.muted,
+									))
+									.config(sticky())
+									.ui(ui, |ui| self.messaging.appearance_menu(ui));
 									ui.add_space(8.0);
 									let updates = &self.messaging.updates;
 									let (label, color) = if updates.ready {
@@ -3183,9 +3456,9 @@ impl Desktop {
 										("Updates", p.muted)
 									};
 									let demo = self.fixture_only || self.state.demo;
-									egui::containers::menu::MenuButton::new(
-										egui::RichText::new(label).color(color),
-									)
+									egui::containers::menu::MenuButton::from_button(quiet(
+										ui, label, color,
+									))
 									.config(sticky())
 									.ui(ui, |ui| self.messaging.updates_menu(ui, demo));
 								},
@@ -3195,14 +3468,28 @@ impl Desktop {
 				egui::ScrollArea::vertical()
 					.id_salt("sign-in-scroll")
 					.show(ui, |ui| {
-						ui.add_space(((ui.available_height() - 560.0) * 0.4).max(8.0));
+						let card = if self.sign_in_height > 0.0 {
+							self.sign_in_height + 72.0
+						} else {
+							560.0
+						};
+						ui.add_space(((ui.available_height() - card) * 0.4).max(16.0));
 						ui.vertical_centered(|ui| {
 							ui.allocate_ui_with_layout(
 								egui::vec2(ui.available_width().min(460.0), 0.0),
 								egui::Layout::top_down(egui::Align::Min),
-								|ui| self.sign_in_card(ui),
+								|ui| {
+									self.sign_in_card(ui);
+									#[cfg(feature = "demo")]
+									if self.fixture_only {
+										self.sign_in_preview(ui);
+									}
+									// Centring needs the height this actually took; it is
+									// stable between frames.
+									self.sign_in_height = ui.min_rect().height();
+								},
 							);
-							ui.add_space(20.0);
+							ui.add_space(18.0);
 							ui.label(
 								egui::RichText::new(
 									"Independent and open source. Not affiliated with Discord.",
@@ -3215,132 +3502,480 @@ impl Desktop {
 					});
 			});
 	}
+	/// Sign-in card: saved accounts first for returning owners, one clear primary action,
+	/// explicit consent, and everything else folded away until asked for.
 	fn sign_in_card(&mut self, ui: &mut egui::Ui) {
 		let ctx = ui.ctx().clone();
 		let p = ui::design::palette(ui);
 		let shadow = egui::epaint::Shadow {
-			offset: [0, 8],
-			blur: 24,
+			offset: [0, 16],
+			blur: 40,
 			spread: 0,
-			color: egui::Color32::from_black_alpha(if ui.visuals().dark_mode { 90 } else { 30 }),
+			color: egui::Color32::from_black_alpha(if ui.visuals().dark_mode { 110 } else { 34 }),
 		};
 		egui::Frame::NONE
 			.fill(p.surface)
 			.stroke(egui::Stroke::new(1.0, p.border))
 			.shadow(shadow)
-			.corner_radius(12)
-			.inner_margin(32)
+			.corner_radius(16)
+			.inner_margin(egui::Margin {
+				left: 28,
+				right: 28,
+				top: 24,
+				bottom: 14,
+			})
 			.show(ui, |ui| {
-				ui.vertical_centered(|ui| {
-					let (rect, _) = ui.allocate_exact_size(egui::vec2(56.0, 56.0), egui::Sense::hover());
-					ui.painter().rect_filled(rect, 14, p.accent);
-					ui::icons::paint(ui.painter(), ui::icons::Icon::Serein, rect.shrink(13.0), p.accent_text);
-					ui.add_space(16.0);
-					ui.label(ui::design::semibold(ui, "Welcome to Serein", 24.0).color(p.text_strong));
-					ui.add_space(6.0);
-					ui.label(egui::RichText::new("Sign in with your Discord account to pick up where you left off.").size(15.0).color(p.muted));
-				});
-				ui.add_space(24.0);
-				let can_sign_in = !self.fixture_only && self.authorized && !self.forgetting && self.state.auth != AuthState::Authenticating;
-				let label = if self.state.auth == AuthState::Authenticating { "Waiting for Discord…" } else { "Continue with Discord" };
+				let returning = !self.messaging.accounts.is_empty();
+				let waiting = self.state.auth == AuthState::Authenticating;
+				let idle = !waiting && !self.forgetting;
+				// A new sign-in needs explicit authorization; a saved account was already
+				// authorized once and restores unattended on launch, so it only waits for idle.
+				// Fixture builds render the enabled state for captures; the actions stay inert.
+				let ready = self.authorized && idle;
+				self.sign_in_header(ui, returning);
+				ui.add_space(16.0);
+				if returning {
+					self.sign_in_accounts(ui, idle);
+					ui.add_space(10.0);
+				}
+				let label = if waiting {
+					"Waiting for Discord…"
+				} else if returning {
+					"Use another account"
+				} else {
+					"Continue with Discord"
+				};
 				let button = ui
-					.add_enabled_ui(can_sign_in, |ui| {
-						ui::design::primary_icon_button(ui, ui::icons::Icon::Serein, label)
+					.add_enabled_ui(ready, |ui| {
+						if returning {
+							ui::design::secondary_icon_button(ui, ui::icons::Icon::Plus, label)
+						} else {
+							ui::design::primary_icon_button(ui, ui::icons::Icon::Serein, label)
+						}
 					})
 					.inner;
-				if button.clicked() {
-					if let Some(store) = &mut self.store { store.cancel_load(); }
+				if button.clicked() && !self.fixture_only {
+					if let Some(store) = &mut self.store {
+						store.cancel_load();
+					}
 					self.credential_status = "Sign in through Discord; saved-login lookup stopped";
 					let wake = ctx.clone();
-					match platform::LoginView::open(self.window.clone(), move || wake.request_repaint()) {
-						Ok(login) => { self.login = Some(login); self.state.auth = AuthState::Authenticating; self.state.status = "Waiting for Discord login"; }
-						Err(_) => { self.state.auth = AuthState::Failed; self.state.status = "Platform login webview unavailable; see platform-support.md"; }
+					match platform::LoginView::open(self.window.clone(), move || {
+						wake.request_repaint()
+					}) {
+						Ok(login) => {
+							self.login = Some(login);
+							self.state.auth = AuthState::Authenticating;
+							self.state.status = "Waiting for Discord login";
+						}
+						Err(_) => {
+							self.state.auth = AuthState::Failed;
+							self.state.status =
+								"Platform login webview unavailable; see platform-support.md";
+						}
 					}
 				}
+				ui.add_space(10.0);
+				self.sign_in_consent(ui);
+				self.sign_in_status(ui);
 				ui.add_space(12.0);
-				ui.add_enabled_ui(!self.fixture_only, |ui| {
-					ui.horizontal_wrapped(|ui| {
-						ui.spacing_mut().item_spacing.x = 8.0;
-						ui.checkbox(&mut self.authorized, "");
-						ui.label(egui::RichText::new("I own this account and authorize this session.").size(13.0).color(p.text));
-					});
-				});
-				ui.add_space(6.0);
-				ui.label(egui::RichText::new("Discord's own login page opens inside Serein. Passwords and 2FA stay there; only the session token is kept, in your OS credential store.").size(12.0).color(p.muted));
-				// Status: one banner, only when something is happening or went wrong.
-				let attention = matches!(self.state.auth, AuthState::Failed | AuthState::Expired | AuthState::Challenged);
-				let busy = self.state.auth == AuthState::Authenticating || self.forgetting || self.cache_pending > 0 || self.cache_clears.pending();
-				let show_status = attention || busy || self.state.status != "Disconnected" || (!self.fixture_only && self.credential_status != "Checking saved login…" && !self.credential_status.is_empty());
-				if show_status && !(self.fixture_only && self.state.status == "Disconnected") {
-					ui.add_space(14.0);
-					let (fill, color) = if attention { (p.warning.gamma_multiply(0.14), p.warning) } else { (p.raised, p.text) };
-					egui::Frame::NONE.fill(fill).corner_radius(8).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
-						ui.set_width(ui.available_width());
-						if self.state.status != "Disconnected" || attention {
-							ui.label(egui::RichText::new(self.state.status).size(13.0).color(color));
-						}
-						if !self.fixture_only && !self.credential_status.is_empty() {
-							ui.label(egui::RichText::new(self.credential_status).size(12.0).color(p.muted));
-						}
-						if self.cache_error || self.cache_pending > 0 || self.cache_clears.pending() {
-							ui.label(egui::RichText::new(self.cache_status).size(12.0).color(p.muted));
-						}
-					});
-				}
-				#[cfg(feature = "demo")]
-				if self.fixture_only {
-				ui.add_space(22.0);
-				ui.horizontal(|ui| {
-					let y = ui.cursor().top() + 8.0;
-					let left = ui.cursor().left();
-					let width = ui.available_width();
-					let galley = ui.painter().layout_no_wrap("or".into(), egui::FontId::proportional(12.0), p.muted);
-					let text_w = galley.size().x + 20.0;
-					ui.painter().hline(left..=left + (width - text_w) * 0.5, y, egui::Stroke::new(1.0, p.border));
-					ui.painter().galley(egui::pos2(left + (width - galley.size().x) * 0.5, y - galley.size().y * 0.5), galley, p.muted);
-					ui.painter().hline(left + (width + text_w) * 0.5..=left + width, y, egui::Stroke::new(1.0, p.border));
-					ui.allocate_space(egui::vec2(width, 16.0));
-				});
-				ui.add_space(14.0);
-				if ui::design::secondary_button(ui, "Explore the offline preview").clicked() {
-					if let Some(store) = &mut self.store { store.cancel_load(); }
-					self.connection = None;
-					self.pending_save = None;
-					let generation = self.state.generation + 1;
-					self.state = test_support::demo_state();
-					test_support::seed_demo_folder_mosaic(&mut self.state);
-					test_support::seed_access_marks(&mut self.state);
-					self.state.generation = generation;
-					self.messaging.clear();
-					self.messaging.show_hidden_channels = true;
-				}
+				let (line, _) = ui.allocate_exact_size(
+					egui::vec2(ui.available_width(), 1.0),
+					egui::Sense::hover(),
+				);
+				ui.painter().rect_filled(line, 0, p.border);
 				ui.add_space(8.0);
-				ui.vertical_centered(|ui| {
-					ui.label(egui::RichText::new("Sample conversations. No Discord connection.").size(12.0).color(p.muted));
-				});
-				}
-				ui.add_space(16.0);
-				ui.collapsing("About Serein", |ui| {
-						ui.small("Messaging, reactions, search and read markers have offline tests. Real Discord interoperability is still unverified; attachment uploads and advanced search remain incomplete.");
-						ui.small("Messages and drafts are cached locally. Login tokens use the operating system credential store.");
-						ui.small("Unofficial clients may put your Discord account at risk.");
-						if !self.fixture_only {
-							ui.small(self.credential_status);
-							if ui.button("Forget saved login").clicked() { self.logout(&ctx); }
-						}
-					});
-				if !self.fixture_only {
-					ui.collapsing("Sign in with a token", |ui| {
-						ui.small("For owners who already have a valid Discord session token, for example from another signed-in Serein install. Passwords and 2FA are never used here; this bypasses Discord's hosted login page entirely.");
-						ui.add_space(4.0);
-						ui.add(egui::TextEdit::singleline(&mut *self.token_input).password(true).char_limit(2048).hint_text("Session token"));
-						if ui.add_enabled(self.authorized, egui::Button::new("Connect with this token")).clicked() {
-							let input = std::mem::take(&mut *self.token_input);
-							match SessionSecret::from_owner_input(input) { Ok(secret) => self.connect(secret, true, &ctx), Err(f) => self.state.status = f.label() }
-						}
-					});
+				self.sign_in_disclosures(ui, &ctx);
+			});
+	}
+	/// App mark over a welcome line that adapts to whether this device already knows an account.
+	fn sign_in_header(&self, ui: &mut egui::Ui, returning: bool) {
+		let p = ui::design::palette(ui);
+		ui.vertical_centered(|ui| {
+			let (mark, _) = ui.allocate_exact_size(egui::vec2(44.0, 44.0), egui::Sense::hover());
+			ui.painter()
+				.rect_filled(mark.expand(6.0), 17, p.accent.gamma_multiply(0.16));
+			ui.painter().rect_filled(mark, 13, p.accent);
+			ui::icons::paint(
+				ui.painter(),
+				ui::icons::Icon::Serein,
+				mark.shrink(11.0),
+				p.accent_text,
+			);
+			ui.add_space(12.0);
+			ui.label(
+				ui::design::semibold(
+					ui,
+					if returning {
+						"Welcome back"
+					} else {
+						"Welcome to Serein"
+					},
+					22.0,
+				)
+				.color(p.text_strong),
+			);
+			ui.add_space(5.0);
+			ui.add(
+				egui::Label::new(
+					egui::RichText::new(if returning {
+						"Continue with a saved account, or sign in with another one."
+					} else {
+						"Sign in with your Discord account to get started."
+					})
+					.size(14.0)
+					.color(p.muted),
+				)
+				.wrap(),
+			);
+		});
+	}
+	/// Accounts already signed in on this device: one tap restores their saved login.
+	fn sign_in_accounts(&mut self, ui: &mut egui::Ui, enabled: bool) {
+		let p = ui::design::palette(ui);
+		ui.label(ui::design::eyebrow(ui, "Saved accounts", p.muted));
+		ui.add_space(6.0);
+		let saved: Vec<(model::Id, String, String)> = self
+			.messaging
+			.accounts
+			.iter()
+			.map(|account| {
+				(
+					account.id,
+					account.label().to_owned(),
+					format!("@{}", account.name),
+				)
+			})
+			.collect();
+		// Four rows fit without crowding the card; the rest scroll inside the list.
+		let rows = saved.len().min(4) as f32;
+		let height = rows * 54.0 + (rows - 1.0) * 6.0;
+		let mut chosen = None;
+		let mut forget = None;
+		egui::ScrollArea::vertical()
+			.id_salt("saved-accounts")
+			.max_height(height)
+			.min_scrolled_height(height)
+			.show(ui, |ui| {
+				ui.spacing_mut().item_spacing.y = 6.0;
+				for (id, label, handle) in saved {
+					let (row, remove) = ui
+						.add_enabled_ui(enabled, |ui| {
+							ui::design::account_row_with_remove(ui, &label, &handle, true)
+						})
+						.inner;
+					if remove.is_some_and(|remove| remove.clicked()) {
+						forget = Some(id);
+					} else if row.clicked() {
+						chosen = Some(id);
+					}
 				}
 			});
+		if let Some(id) = forget {
+			self.confirming_forget = Some(id);
+		} else if let Some(id) = chosen {
+			self.messaging.switch_account_requested = Some(id);
+		}
+	}
+	/// Forgetting is destructive (token, cached history, drafts), so it always asks first.
+	fn confirm_forget_dialog(&mut self, ctx: &egui::Context) {
+		let Some(account) = self.confirming_forget else {
+			return;
+		};
+		let label = self
+			.messaging
+			.accounts
+			.iter()
+			.find(|saved| saved.id == account)
+			.map(|saved| saved.label().to_owned())
+			.unwrap_or_else(|| "this account".to_owned());
+		let signed_in = self
+			.state
+			.user
+			.as_ref()
+			.is_some_and(|user| user.id == account);
+		let confirm = ui::dialog::Confirm::new(
+			"forget-account",
+			format!("Forget {label}?"),
+			if signed_in {
+				"This is the account you are signed in with: you will be logged out, and its saved login, cached history and drafts on this device are removed."
+			} else {
+				"Its saved login, cached history and drafts on this device are removed. The Discord account itself is untouched; you can sign in again any time."
+			},
+		)
+		.danger()
+		.confirm_label("Forget account")
+		.cancel_label("Keep");
+		match confirm.show(ctx) {
+			Some(ui::dialog::Choice::Confirmed) => {
+				self.confirming_forget = None;
+				self.forget_saved_account(ctx, account);
+			}
+			Some(ui::dialog::Choice::Cancelled) => self.confirming_forget = None,
+			None => {}
+		}
+	}
+	/// Owner authorization, with the token handling spelled out next to the checkbox.
+	fn sign_in_consent(&mut self, ui: &mut egui::Ui) {
+		let p = ui::design::palette(ui);
+		egui::Frame::NONE
+			.fill(p.base)
+			.corner_radius(10)
+			.inner_margin(egui::Margin::symmetric(12, 9))
+			.show(ui, |ui| {
+				ui.set_width(ui.available_width());
+				ui.checkbox(
+					&mut self.authorized,
+					ui::design::medium(ui, "I own this account and authorize this session.", 13.0)
+						.color(p.text_strong),
+				);
+				ui.add_space(4.0);
+				ui.add(
+					egui::Label::new(
+						egui::RichText::new(
+							"Passwords and 2FA stay on Discord's own login page; only the session token is kept, in your OS credential store.",
+						)
+						.size(12.0)
+						.color(p.muted),
+					)
+					.wrap(),
+				);
+			});
+	}
+	/// One banner, only while something is happening or went wrong.
+	fn sign_in_status(&mut self, ui: &mut egui::Ui) {
+		let p = ui::design::palette(ui);
+		let attention = matches!(
+			self.state.auth,
+			AuthState::Failed | AuthState::Expired | AuthState::Challenged
+		);
+		let busy = self.state.auth == AuthState::Authenticating
+			|| self.forgetting
+			|| self.cache_pending > 0
+			|| self.cache_clears.pending();
+		let show = attention
+			|| busy || self.state.status != "Disconnected"
+			|| (!self.fixture_only
+				&& self.credential_status != "Checking saved login…"
+				&& !self.credential_status.is_empty());
+		if !show || (self.fixture_only && self.state.status == "Disconnected") {
+			return;
+		}
+		ui.add_space(14.0);
+		let (fill, stroke, color) = if attention {
+			(
+				p.warning.gamma_multiply(0.13),
+				p.warning.gamma_multiply(0.45),
+				p.warning,
+			)
+		} else {
+			(p.raised, p.border, p.text)
+		};
+		egui::Frame::NONE
+			.fill(fill)
+			.stroke(egui::Stroke::new(1.0, stroke))
+			.corner_radius(10)
+			.inner_margin(egui::Margin::symmetric(12, 10))
+			.show(ui, |ui| {
+				ui.set_width(ui.available_width());
+				ui.horizontal_top(|ui| {
+					ui.spacing_mut().item_spacing.x = 9.0;
+					let (icon, _) =
+						ui.allocate_exact_size(egui::Vec2::splat(16.0), egui::Sense::hover());
+					if attention {
+						ui::icons::paint(
+							ui.painter(),
+							ui::icons::Icon::ShieldWarning,
+							icon,
+							p.warning,
+						);
+					} else if busy {
+						ui.put(icon, egui::Spinner::new().size(14.0).color(p.muted));
+					}
+					ui.vertical(|ui| {
+						ui.spacing_mut().item_spacing.y = 3.0;
+						if self.state.status != "Disconnected" || attention {
+							ui.add(
+								egui::Label::new(
+									egui::RichText::new(self.state.status)
+										.size(13.0)
+										.color(color),
+								)
+								.wrap(),
+							);
+						}
+						if !self.fixture_only && !self.credential_status.is_empty() {
+							ui.add(
+								egui::Label::new(
+									egui::RichText::new(self.credential_status)
+										.size(12.0)
+										.color(p.muted),
+								)
+								.wrap(),
+							);
+						}
+						if self.cache_error || self.cache_pending > 0 || self.cache_clears.pending()
+						{
+							ui.add(
+								egui::Label::new(
+									egui::RichText::new(self.cache_status)
+										.size(12.0)
+										.color(p.muted),
+								)
+								.wrap(),
+							);
+						}
+					});
+				});
+			});
+	}
+	/// Fixture-only entry into the offline preview, kept visually secondary to signing in.
+	#[cfg(feature = "demo")]
+	fn sign_in_preview(&mut self, ui: &mut egui::Ui) {
+		let p = ui::design::palette(ui);
+		ui.add_space(18.0);
+		ui.horizontal(|ui| {
+			let y = ui.cursor().top() + 8.0;
+			let left = ui.cursor().left();
+			let width = ui.available_width();
+			let galley =
+				ui.painter()
+					.layout_no_wrap("or".into(), egui::FontId::proportional(12.0), p.muted);
+			let text_w = galley.size().x + 20.0;
+			ui.painter().hline(
+				left..=left + (width - text_w) * 0.5,
+				y,
+				egui::Stroke::new(1.0, p.border),
+			);
+			ui.painter().galley(
+				egui::pos2(
+					left + (width - galley.size().x) * 0.5,
+					y - galley.size().y * 0.5,
+				),
+				galley,
+				p.muted,
+			);
+			ui.painter().hline(
+				left + (width + text_w) * 0.5..=left + width,
+				y,
+				egui::Stroke::new(1.0, p.border),
+			);
+			ui.allocate_space(egui::vec2(width, 16.0));
+		});
+		ui.add_space(14.0);
+		if ui::design::secondary_button(ui, "Explore the offline preview").clicked() {
+			if let Some(store) = &mut self.store {
+				store.cancel_load();
+			}
+			self.connection = None;
+			self.pending_save = None;
+			self.pending_account_save = None;
+			let generation = self.state.generation + 1;
+			self.state = test_support::demo_state();
+			test_support::seed_demo_folder_mosaic(&mut self.state);
+			test_support::seed_access_marks(&mut self.state);
+			self.state.generation = generation;
+			self.messaging.clear();
+			self.messaging.show_hidden_channels = true;
+		}
+		ui.add_space(8.0);
+		ui.vertical_centered(|ui| {
+			ui.label(
+				egui::RichText::new("Sample conversations. No Discord connection.")
+					.size(12.0)
+					.color(p.muted),
+			);
+		});
+	}
+	/// Secondary panels: what this client is, and the owner's own session token.
+	fn sign_in_disclosures(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+		let p = ui::design::palette(ui);
+		if ui::design::disclosure(ui, "About Serein", self.about_open).clicked() {
+			self.about_open = !self.about_open;
+		}
+		if self.about_open {
+			ui.add_space(2.0);
+			egui::Frame::NONE
+				.inner_margin(egui::Margin {
+					left: 30,
+					right: 4,
+					top: 2,
+					bottom: 8,
+				})
+				.show(ui, |ui| {
+					ui.spacing_mut().item_spacing.y = 6.0;
+					for line in [
+						"Messaging, reactions, search and read markers have offline tests. Real Discord interoperability is still unverified; attachment uploads and advanced search remain incomplete.",
+						"Messages and drafts are cached locally. Login tokens use the operating system credential store.",
+						"Unofficial clients may put your Discord account at risk.",
+					] {
+						ui.add(
+							egui::Label::new(
+								egui::RichText::new(line).size(12.0).color(p.muted),
+							)
+							.wrap(),
+						);
+					}
+					if !self.fixture_only {
+						ui.add_space(2.0);
+						if ui::design::button(ui, "Forget saved login", ui::design::ButtonKind::Outline)
+							.clicked()
+						{
+							self.logout(ctx);
+						}
+					}
+				});
+		}
+		if ui::design::disclosure(ui, "Sign in with a session token", self.token_open).clicked() {
+			self.token_open = !self.token_open;
+		}
+		if self.token_open {
+			ui.add_space(2.0);
+			egui::Frame::NONE
+				.inner_margin(egui::Margin {
+					left: 30,
+					right: 4,
+					top: 2,
+					bottom: 6,
+				})
+				.show(ui, |ui| {
+					ui.add(
+						egui::Label::new(
+							egui::RichText::new(
+								"For owners who already hold a valid Discord session token, for example from another signed-in Serein install. Passwords and 2FA are never used here; this bypasses Discord's hosted login page entirely.",
+							)
+							.size(12.0)
+							.color(p.muted),
+						)
+						.wrap(),
+					);
+					ui.add_space(8.0);
+					ui::design::input(
+						ui,
+						egui::TextEdit::singleline(&mut *self.token_input)
+							.password(true)
+							.char_limit(2048)
+							.hint_text("Session token"),
+					);
+					ui.add_space(8.0);
+					let connect = ui
+						.add_enabled_ui(self.authorized && !self.token_input.is_empty(), |ui| {
+							ui::design::button(
+								ui,
+								"Connect with this token",
+								ui::design::ButtonKind::Primary,
+							)
+						})
+						.inner;
+					if connect.clicked() && !self.fixture_only {
+						let input = std::mem::take(&mut *self.token_input);
+						match SessionSecret::from_owner_input(input) {
+							Ok(secret) => self.connect(secret, true, ctx),
+							Err(failure) => self.state.status = failure.label(),
+						}
+					}
+				});
+		}
 	}
 	fn clear_avatars(&mut self, ctx: &egui::Context) {
 		self.avatar_start_failed = false;
@@ -3561,6 +4196,29 @@ impl Desktop {
 					}
 					continue;
 				}
+				cache::Outcome::Accounts { roster, pruned } => {
+					self.roster_pending = false;
+					// Pruning is already committed, so clean up regardless of the re-read.
+					for account in pruned {
+						if let Some(store) = &self.store {
+							let _ = store.send.try_send((
+								self.state.generation,
+								credentials::Request::NONE,
+								credentials::Operation::ForgetAccount(*account),
+							));
+						}
+						self.queue_cache_for(*account, cache::Operation::Forget);
+					}
+					match roster {
+						Ok(accounts) => self.messaging.accounts = accounts.clone(),
+						Err(_) => {
+							self.roster_failed = true;
+							self.cache_error = true;
+							self.cache_status = "Could not read or update the saved account list";
+						}
+					}
+					continue;
+				}
 				cache::Outcome::HistoryCleared => {
 					if let Some(cache) = &self.cache
 						&& self.cache_clears.acknowledge(&cache.history)
@@ -3642,6 +4300,7 @@ impl Desktop {
 				| cache::Outcome::GameActivitySaved(_)
 				| cache::Outcome::ReadingPreferences(_)
 				| cache::Outcome::ReadingPreferencesSaved(_)
+				| cache::Outcome::Accounts { .. }
 				| cache::Outcome::HistoryCleared
 				| cache::Outcome::Failed { .. } => unreachable!(),
 			}
@@ -3665,13 +4324,45 @@ impl Desktop {
 			}
 			match outcome {
 				credentials::Outcome::Loaded(result) => {
+					let switching = self.switching.take();
 					if let Ok(Some(secret)) = result {
 						// `connect()` already sets a "Connecting to Discord…" status; avoid
 						// stacking a second, near-duplicate line under the restore screen.
 						self.credential_status = "";
-						self.connect(secret, false, ctx);
+						self.connect(secret, switching.is_some(), ctx);
 					} else {
 						self.credential_status = credentials::loaded_status(&result);
+						if let Some(account) = switching {
+							// The entry stays: the owner decides whether to forget it. Signing
+							// in again with "Use another account" refreshes its token, which the
+							// roster must expect again.
+							self.queue_cache_for(
+								model::Id(0),
+								cache::Operation::SetAccountToken {
+									account,
+									has_token: false,
+								},
+							);
+							self.credential_status = "No saved login for that account on this device. Use another account to sign in again, or forget it with ×.";
+							self.messaging.toasts.push(
+								ui::design::Level::Warning,
+								"That account's saved login is missing; sign in again to refresh it",
+							);
+						}
+					}
+				}
+				credentials::Outcome::AccountSaved(account, result) => {
+					if result.is_ok() {
+						self.queue_cache_for(
+							model::Id(0),
+							cache::Operation::SetAccountToken {
+								account,
+								has_token: true,
+							},
+						);
+					} else {
+						self.credential_status =
+							"Could not save this account for the switcher; sign in again to retry";
 					}
 				}
 				credentials::Outcome::Saved(Ok(())) => {
@@ -3680,6 +4371,14 @@ impl Desktop {
 				credentials::Outcome::Saved(Err(_)) => {
 					self.credential_status =
 						"Could not save login; this session will not restore automatically"
+				}
+				credentials::Outcome::AccountForgotten(result) => {
+					if result.is_err() {
+						self.messaging.toasts.push(
+							ui::design::Level::Error,
+							"Could not remove that account's saved login from the OS credential store",
+						);
+					}
 				}
 				credentials::Outcome::Forgotten(result) => {
 					self.forgetting = false;
@@ -3848,14 +4547,44 @@ impl Desktop {
 				{
 					self.messaging.channel_preferences_reload = true;
 				}
-				if let Some(secret) = self.pending_save.take()
-					&& let Some(store) = &self.store
-					&& store
-						.send
-						.try_send((self.state.generation, credentials::Operation::Save(secret)))
-						.is_err()
-				{
-					self.credential_status = "Could not queue saved login; session only";
+				if let Some(store) = &self.store {
+					// The active entry restores on launch; the per-account entry backs the switcher.
+					let mut queued = true;
+					// A token the owner just supplied replaces whatever was stored before.
+					let fresh_token = self.pending_save.is_some();
+					if let Some(secret) = self.pending_save.take() {
+						queued &= store
+							.send
+							.try_send((
+								self.state.generation,
+								credentials::Request::NONE,
+								credentials::Operation::Save(secret),
+							))
+							.is_ok();
+					}
+					// Writing an existing entry is an access-controlled keychain operation on
+					// macOS, so only write when the roster says none exists or the token is new.
+					if let Some(secret) = self.pending_account_save.take()
+						&& let Some(account) = self.state.user.as_ref().map(|user| user.id)
+						&& (fresh_token
+							|| !self
+								.messaging
+								.accounts
+								.iter()
+								.any(|saved| saved.id == account && saved.has_token))
+					{
+						queued &= store
+							.send
+							.try_send((
+								self.state.generation,
+								credentials::Request::NONE,
+								credentials::Operation::SaveAccount(account, secret),
+							))
+							.is_ok();
+					}
+					if !queued {
+						self.credential_status = "Could not queue saved login; session only";
+					}
 				}
 			}
 			if (ready || resumed)
@@ -3910,6 +4639,7 @@ impl Desktop {
 			}
 			self.connection = None;
 			self.pending_save = None;
+			self.pending_account_save = None;
 			self.state.apply(Envelope {
 				generation: self.state.generation,
 				event: Event::Failure(failure),
@@ -3925,9 +4655,11 @@ impl Desktop {
 			if failure == Failure::Expired
 				&& let Some(store) = &self.store
 			{
-				let _ = store
-					.send
-					.try_send((self.state.generation, credentials::Operation::Forget));
+				let _ = store.send.try_send((
+					self.state.generation,
+					credentials::Request::NONE,
+					credentials::Operation::Forget,
+				));
 			}
 		}
 		if let Some(login) = &self.login {
@@ -4781,18 +5513,7 @@ impl eframe::App for Desktop {
 			self.poll_voice(&ctx);
 			if self.messaging.logout_requested {
 				self.messaging.logout_requested = false;
-				if self.state.has_unsent()
-					|| self.messaging.has_edit()
-					|| self.messaging.has_server_settings_changes()
-					|| self.messaging.extensions.theme_editor_dirty()
-					|| self.state.server_settings.pending
-					|| self.state.server_admin.pending
-					|| self.uploads.has_unsent()
-				{
-					self.confirming_logout = true;
-				} else {
-					self.logout(&ctx);
-				}
+				self.request_session_end(&ctx, SessionEnd::Logout);
 			}
 		} else if let Some(stage) = self.restoring() {
 			self.restoring_screen(ui, stage);
@@ -4876,6 +5597,29 @@ impl eframe::App for Desktop {
 			let key = (variant != ui::design::Variant::Standard).then(|| variant.key().to_owned());
 			self.queue_cache_for(model::Id(0), cache::Operation::SaveThemeVariant(key));
 		}
+		let switch = self.messaging.switch_account_requested.take();
+		let add = std::mem::take(&mut self.messaging.add_account_requested);
+		let forget = self.messaging.forget_account_requested.take();
+		// Fixture builds render the switcher for captures but never end their offline session.
+		if !self.fixture_only {
+			if let Some(account) = switch
+				&& self
+					.state
+					.user
+					.as_ref()
+					.is_none_or(|user| user.id != account)
+			{
+				self.request_session_end(&ctx, SessionEnd::Switch(account));
+			}
+			if add {
+				self.request_session_end(&ctx, SessionEnd::Add);
+			}
+			if let Some(account) = forget {
+				self.confirming_forget = Some(account);
+			}
+		}
+		self.sync_account_roster();
+		self.confirm_forget_dialog(&ctx);
 		if self.confirming_close || self.confirming_logout {
 			let mut notes: Vec<&str> = Vec::new();
 			if self.messaging.extensions.theme_editor_dirty() {
@@ -4906,8 +5650,16 @@ impl eframe::App for Desktop {
 			}
 			let mut confirm = ui::dialog::Confirm::new(
 				"leave-session",
-				"Leave this session?",
-				"Saved text drafts survive exit; selected files must be reselected. Logging out removes local account data.",
+				if self.confirming_logout && !self.end_intent.forgets() {
+					"Leave this account?"
+				} else {
+					"Leave this session?"
+				},
+				if self.confirming_logout && !self.end_intent.forgets() {
+					"Saved text drafts survive the switch; selected files must be reselected. This account stays in the switcher."
+				} else {
+					"Saved text drafts survive exit; selected files must be reselected. Logging out removes local account data."
+				},
 			)
 			.danger()
 			.confirm_label("Discard and Continue")
@@ -4928,13 +5680,15 @@ impl eframe::App for Desktop {
 							ctx.send_viewport_cmd(egui::ViewportCommand::Close);
 						}
 					} else {
-						self.logout(&ctx);
+						let intent = self.end_intent;
+						self.finish_session_end(&ctx, intent);
 					}
 				}
 				Some(ui::dialog::Choice::Cancelled) => {
 					self.updater.cancel_restart();
 					self.confirming_close = false;
 					self.confirming_logout = false;
+					self.end_intent = SessionEnd::Logout;
 					self.download_close_pending = false;
 				}
 				None => {}
