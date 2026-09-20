@@ -1776,8 +1776,10 @@ mod tests {
 				.map(|id| SearchHit {
 					id: Id(id),
 					channel: Id(20),
-					author: "Synthetic".into(),
+					author: crate::message(1, Id(20)).author,
 					excerpt: "pin".into(),
+					attachments: vec![],
+					embeds: vec![],
 				})
 				.collect(),
 			total: 0,
@@ -1906,8 +1908,10 @@ mod tests {
 				hits: vec![SearchHit {
 					id: Id(499),
 					channel: Id(20),
-					author: "Synthetic".into(),
+					author: crate::message(1, Id(20)).author,
 					excerpt: "index text".into(),
+					attachments: vec![],
+					embeds: vec![],
 				}],
 				total: 50,
 				partial: false,

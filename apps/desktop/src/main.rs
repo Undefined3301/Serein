@@ -3054,11 +3054,13 @@ impl Desktop {
 						model::SearchHit {
 							id: message.id,
 							channel,
-							author: message.author.name,
 							excerpt: format!(
 								"Synthetic pinned message: {}",
 								message.content.chars().take(200).collect::<String>()
 							),
+							author: message.author,
+							attachments: message.attachments,
+							embeds: message.embeds,
 						}
 					})
 					.collect();
@@ -3147,8 +3149,10 @@ impl Desktop {
 								hits.push(model::SearchHit {
 									id: message.id,
 									channel,
-									author: message.author.name,
-									excerpt: message.content.chars().take(256).collect(),
+									author: message.author,
+									excerpt: message.content.clone(),
+									attachments: message.attachments,
+									embeds: message.embeds,
 								});
 							}
 						}
