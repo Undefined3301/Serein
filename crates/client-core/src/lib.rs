@@ -114,6 +114,10 @@ pub enum Command {
 		attachments: Vec<String>,
 		request: u64,
 	},
+	ForumSummary {
+		channel: Id,
+		request: u64,
+	},
 	ForumPosts {
 		parent: Id,
 		guild: Id,
@@ -370,6 +374,11 @@ pub enum Event {
 		parent: Id,
 		request: u64,
 		result: Result<model::archives::Page, auth::Failure>,
+	},
+	ForumSummary {
+		channel: Id,
+		request: u64,
+		result: Result<model::forum::Summary, auth::Failure>,
 	},
 	ForumPosts {
 		parent: Id,
@@ -1215,6 +1224,10 @@ impl State {
 			self.apply_archives(parent, request, Err(auth::Failure::Capacity));
 			return;
 		}
+		if let Command::ForumSummary { channel, request } = command {
+			self.apply_forum_summary(channel, request, Err(auth::Failure::Capacity));
+			return;
+		}
 		if let Command::ForumPosts {
 			parent, request, ..
 		} = command
@@ -1483,6 +1496,7 @@ impl State {
 			envelope.event,
 			Event::Ready { .. } | Event::Disconnected | Event::Resync
 		) {
+			self.posts.clear_summaries();
 			self.interactions.reset();
 			self.local_game_activity = Default::default();
 			self.invalidate_messaging_permissions(None);
@@ -1675,6 +1689,14 @@ impl State {
 				result,
 			} => {
 				self.apply_archives(parent, request, result);
+				Ok(())
+			}
+			Event::ForumSummary {
+				channel,
+				request,
+				result,
+			} => {
+				self.apply_forum_summary(channel, request, result);
 				Ok(())
 			}
 			Event::ForumPosts {
@@ -2590,6 +2612,7 @@ impl State {
 			}
 			self.reconcile_notifications();
 			self.prune_resident();
+			self.prune_post_summaries();
 		}
 		if self.search.is_some() && !self.can_search() {
 			self.clear_search();
@@ -2922,6 +2945,9 @@ impl Event {
 				Self::UserAction(user_actions::Event::RequestSpam { .. }) => size_of::<Id>(),
 				Self::Archives { result, .. } => {
 					result.as_ref().map_or(0, model::archives::Page::bytes)
+				}
+				Self::ForumSummary { result, .. } => {
+					result.as_ref().map_or(0, model::forum::Summary::bytes)
 				}
 				Self::ForumPosts { result, .. } => {
 					result.as_ref().map_or(0, model::forum::Page::bytes)

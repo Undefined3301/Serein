@@ -7,6 +7,10 @@ pub const MAX_TITLE: usize = 100;
 /// The on-demand active-post list of one forum; the gateway only delivers joined posts.
 #[derive(Default)]
 pub struct Posts {
+	// At most 200 summaries of at most 4 KiB each across the current session.
+	summaries: std::collections::BTreeMap<Id, (Option<Id>, Option<model::forum::Summary>)>,
+	summary_request: u64,
+	summary_pending: Option<(Id, u64)>,
 	pub parent: Option<Id>,
 	pub request: u64,
 	pub loading: bool,
@@ -14,6 +18,13 @@ pub struct Posts {
 	pub loaded: usize,
 	pub more: bool,
 	pub error: Option<&'static str>,
+}
+
+impl Posts {
+	pub(crate) fn clear_summaries(&mut self) {
+		self.summaries.clear();
+		self.summary_pending = None;
+	}
 }
 
 #[derive(Default)]
@@ -26,6 +37,105 @@ pub struct Posting {
 }
 
 impl State {
+	pub(crate) fn prune_post_summaries(&mut self) {
+		let mut summaries = std::mem::take(&mut self.posts.summaries);
+		summaries.retain(|channel, _| self.can_read_history(*channel));
+		self.posts.summaries = summaries;
+		if self
+			.posts
+			.summary_pending
+			.is_some_and(|(channel, _)| !self.can_read_history(channel))
+		{
+			self.posts.summary_pending = None;
+		}
+	}
+
+	pub fn post_summary(&self, channel: Id) -> Option<&model::forum::Summary> {
+		if !self.gateway_connected || !self.can_read_history(channel) {
+			return None;
+		}
+		let (latest, summary) = self.posts.summaries.get(&channel)?;
+		(*latest == self.channel(channel)?.last_message)
+			.then_some(summary.as_ref())
+			.flatten()
+	}
+
+	pub fn needs_post_summary(&self, channel: Id) -> bool {
+		!self.demo
+			&& self.auth == AuthState::Authenticated
+			&& self.gateway_connected
+			&& self.posts.summary_pending.is_none()
+			&& (self.posts.summaries.contains_key(&channel)
+				|| self.posts.summaries.len() < model::forum::MAX_POSTS)
+			&& self.can_read_history(channel)
+			&& self.channel(channel).is_some_and(|post| {
+				post.parent_id == self.posts.parent
+					&& self.selected == self.posts.parent
+					&& matches!(post.kind, 11 | 12)
+					&& self
+						.posts
+						.summaries
+						.get(&channel)
+						.is_none_or(|(latest, _)| *latest != post.last_message)
+			})
+	}
+
+	pub fn request_post_summary(&mut self, channel: Id) -> Option<Command> {
+		if !self.needs_post_summary(channel) {
+			return None;
+		}
+		let latest = self.channel(channel)?.last_message;
+		self.posts.summary_request = self.posts.summary_request.wrapping_add(1);
+		let request = self.posts.summary_request;
+		self.posts.summary_pending = Some((channel, request));
+		// A failure stays unavailable until Refresh or new activity, without a retry loop.
+		self.posts.summaries.insert(channel, (latest, None));
+		Some(Command::ForumSummary { channel, request })
+	}
+
+	pub fn apply_forum_summary(
+		&mut self,
+		channel: Id,
+		request: u64,
+		result: Result<model::forum::Summary, Failure>,
+	) {
+		if self.posts.summary_pending != Some((channel, request)) {
+			return;
+		}
+		self.posts.summary_pending = None;
+		match result {
+			Ok(summary)
+				if summary.valid(channel)
+					&& self.can_read_history(channel)
+					&& self.gateway_connected =>
+			{
+				if let Some((_, value)) = self.posts.summaries.get_mut(&channel) {
+					*value = Some(summary);
+				}
+			}
+			Err(failure) if failure.ends_session() && failure != Failure::Capacity => {
+				self.fail(failure)
+			}
+			_ => {}
+		}
+	}
+
+	pub fn post_new_count(&self, post: &Channel) -> Option<(usize, bool)> {
+		if !self.post_unread(post) {
+			return Some((0, true));
+		}
+		let marker = self.read_marker(post.id)?;
+		let summary = self.post_summary(post.id)?;
+		let count = summary
+			.messages
+			.iter()
+			.filter(|id| marker.is_none_or(|read| **id > read))
+			.count();
+		let exact = summary.complete
+			|| marker.is_some_and(|read| summary.messages.last().is_some_and(|id| *id <= read));
+		Some((count, exact))
+	}
+
 	pub fn is_forum(&self, channel: Id) -> bool {
 		self.channels
 			.iter()
@@ -131,6 +241,7 @@ impl State {
 			// Keep the request counter monotonic so a late reply cannot match a fresh load.
 			self.posts = Posts {
 				request: self.posts.request,
+				summary_request: self.posts.summary_request,
 				..Posts::default()
 			};
 		}

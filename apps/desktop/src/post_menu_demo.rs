@@ -21,10 +21,126 @@ pub fn check() {
 	let mut permissions = test_support::permission_snapshot(&state);
 	for guild in &mut permissions.guilds {
 		guild.owner = state.user.as_ref().map(|user| user.id);
+		guild
+			.roles
+			.get_or_insert_default()
+			.push(model::permissions::Role {
+				id: Id(101),
+				bits: 0,
+				name: "Synthetic colored role".into(),
+				color: 0x68ada4,
+				position: 1,
+				hoist: false,
+			});
 	}
 	state.permissions.replace(permissions).unwrap();
 	state.select(Id(26));
 	let post = state.forum_posts(Id(26))[0].clone();
+	// READY may contain a cursor before its unjoined forum post is loaded.
+	let latest = post.last_message.unwrap();
+	state.channels.retain(|channel| channel.id != post.id);
+	state.invalidate_navigation();
+	state
+		.apply_read_state(client_core::read_state::Event::Snapshot {
+			entries: Some(vec![(post.id, Some(latest), 0)]),
+			version: None,
+			partial: false,
+		})
+		.unwrap();
+	state.channels.push(post.clone());
+	state.invalidate_navigation();
+	assert!(
+		!state.post_unread(&post),
+		"startup must preserve unloaded thread cursors"
+	);
+	state
+		.apply_read_state(client_core::read_state::Event::Ack {
+			channel: post.id,
+			message: Some(Id(latest.0 - 2)),
+			manual: true,
+			mention_count: Some(0),
+			version: None,
+		})
+		.unwrap();
+	state.demo = false;
+	state.posts.parent = Some(Id(26));
+	let Command::ForumSummary { channel, request } = state.request_post_summary(post.id).unwrap()
+	else {
+		panic!("summary request");
+	};
+	let rows: Vec<_> = (0..3)
+		.map(|offset| {
+			serde_json::json!({
+				"id": (latest.0 - offset).to_string(), "channel_id": post.id.to_string(),
+				"author": {"id": "123", "username": "Synthetic"},
+				"member": {"roles": ["101"]}, "content": "Latest synthetic reply"
+			})
+		})
+		.collect();
+	let wire = serde_json::to_vec(&rows).unwrap();
+	let summary = discord_protocol::decode::<discord_protocol::forum::Recent>(&wire)
+		.unwrap()
+		.into_summary(post.id)
+		.unwrap();
+	state.apply_forum_summary(channel, request, Ok(summary));
+	assert_eq!(state.post_new_count(&post), Some((2, true)));
+	let latest_summary = state
+		.post_summary(post.id)
+		.unwrap()
+		.latest
+		.as_ref()
+		.unwrap();
+	assert_eq!(
+		state.forum_author_color(post.id, latest_summary.webhook, &latest_summary.roles),
+		Some(0x68ada4)
+	);
+	let mut other_forum = state.channel(Id(26)).unwrap().clone();
+	other_forum.id = Id(126);
+	other_forum.name = "Other synthetic forum".into();
+	state.channels.push(other_forum);
+	state.invalidate_navigation();
+	assert!(state.request_forum_posts(Id(126), false).is_some());
+	assert!(state.request_forum_posts(Id(26), false).is_some());
+	assert!(
+		!state.needs_post_summary(post.id),
+		"forum switches reuse a fresh summary"
+	);
+	assert!(
+		discord_protocol::decode::<discord_protocol::forum::Recent>(&wire)
+			.unwrap()
+			.into_summary(Id(999))
+			.is_err()
+	);
+	assert!(!state.needs_post_summary(post.id));
+	let mut bounded = model::forum::Summary {
+		messages: (0..50).map(|offset| Id(latest.0 - offset)).collect(),
+		latest: Some(model::forum::Latest {
+			id: latest,
+			channel: post.id,
+			author: "Synthetic".into(),
+			roles: vec![],
+			webhook: false,
+			excerpt: "Reply".into(),
+		}),
+		complete: false,
+	};
+	assert!(bounded.valid(post.id));
+	bounded.messages.push(Id(latest.0 - 50));
+	assert!(!bounded.valid(post.id));
+	let mut spoiler = rows[0].clone();
+	spoiler["content"] = serde_json::json!("||private spoiler||");
+	let summary = discord_protocol::decode::<discord_protocol::forum::Recent>(
+		&serde_json::to_vec(&vec![spoiler]).unwrap(),
+	)
+	.unwrap()
+	.into_summary(post.id)
+	.unwrap();
+	assert!(!summary.latest.unwrap().excerpt.contains("private spoiler"));
+	println!(
+		"Forum debug check passed: deferred startup cursors, exact unread count, scoped bounded previews, and concealed spoilers."
+	);
+	state.demo = true;
+
 	let mut view = ui::MessagingUi::default();
 	let mut followed = false;
 	let mut frame = |events: Vec<egui::Event>| {
@@ -82,6 +198,12 @@ pub fn check() {
 	};
 	frame(vec![]);
 	let (text, _) = frame(vec![]);
+	assert!(text.iter().any(|(text, _)| text == "(2 New)"));
+	assert!(text.iter().any(|(text, _)| text == "Synthetic:"));
+	assert!(
+		text.iter()
+			.any(|(text, _)| text == "Latest synthetic reply")
+	);
 	let pos = text
 		.iter()
 		.find(|(label, rect)| label == &post.name && rect.left() > 300.0)

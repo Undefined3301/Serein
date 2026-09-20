@@ -831,6 +831,7 @@ impl MessagingUi {
 							} else {
 								let icon = match channel.kind {
 									13 => crate::icons::Icon::Speaker,
+									5 => crate::icons::Icon::Megaphone,
 									15 | 16 => crate::icons::Icon::Forum,
 									10..=12 => crate::icons::Icon::Threads,
 									_ => crate::icons::Icon::Hash,

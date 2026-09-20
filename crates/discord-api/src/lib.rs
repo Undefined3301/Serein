@@ -559,6 +559,11 @@ impl DiscordApi {
 					result,
 				}
 			}
+			Command::ForumSummary { channel, request } => Event::ForumSummary {
+				channel,
+				request,
+				result: self.forum_summary(channel).await,
+			},
 			Command::ForumPosts {
 				parent,
 				guild,

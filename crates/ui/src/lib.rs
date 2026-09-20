@@ -1611,6 +1611,7 @@ impl MessagingUi {
 						Some(c) => {
 							let icon = match c.kind {
 								2 | 13 => icons::Icon::Speaker,
+								5 => icons::Icon::Megaphone,
 								15 | 16 => icons::Icon::Forum,
 								10..=12 => icons::Icon::Threads,
 								_ => icons::Icon::Hash,

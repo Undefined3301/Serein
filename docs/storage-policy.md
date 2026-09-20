@@ -965,3 +965,14 @@ Native modal attachments reuse the bounded upload worker (10 files / 500 MB tota
 with explicit selection and no automatic write retry. Each of at most five form
 file fields stages at most 10 files / 500 MB before the combined submission bound
 is enforced; paths and contents never enter diagnostics or model/UI form data.
+
+### Forum card summaries
+
+Visible active forum posts lazily request one recent history page at a time, using
+at most 512 KiB of HTTP input and 50 records. The worker retains only sorted message
+IDs and the latest author's name, bounded role IDs, webhook marker and plain excerpt;
+spoilers stay concealed. The session keeps at most 200 summaries of 4 KiB each, plus
+bounded map metadata, in RAM and reuses them across forum switches. Refresh,
+disconnect and account reset release them; permission loss prunes inaccessible entries.
+No new disk cache is introduced. Startup read cursors
+for not-yet-loaded threads remain in the existing item/byte-bounded read-state map.

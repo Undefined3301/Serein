@@ -1468,3 +1468,12 @@ Failed lookups keep the snapshot or the normal fallback color. Profile cards
 already request guild membership through the profile endpoint. Normal-account
 Gateway behavior remains unofficial and live compatibility is unverified by the
 synthetic check.
+
+Forum cards now load a bounded recent-message page for visible active posts through
+[Get Channel Messages](https://discord.com/developers/docs/resources/message#get-channel-messages).
+They show the latest plain preview with the author's known guild role color and count IDs newer than the service read cursor;
+`50+ New` indicates that the cursor precedes the retained 50-message window. Failed
+or unavailable summaries remain explicitly unavailable until refresh or new activity;
+successful summaries are reused when returning to a forum during the same session.
+Startup preserves cursors for threads loaded after READY. These changes have synthetic
+offline coverage; normal-account behavior remains unofficial and live-unverified.

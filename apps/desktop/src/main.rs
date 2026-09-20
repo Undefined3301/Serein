@@ -3219,7 +3219,7 @@ impl Desktop {
 					};
 					Event::Members(demo_members(guild, channel, request))
 				}
-				Command::ForumPosts { .. } => return,
+				Command::ForumPosts { .. } | Command::ForumSummary { .. } => return,
 				Command::History { before, after, .. } => {
 					test_support::load_page_with_cursors(&mut self.state, before, after);
 					return;
