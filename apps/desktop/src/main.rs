@@ -2494,6 +2494,7 @@ impl Desktop {
 			self.request_history_clear(account);
 		}
 	}
+	/// Dispatches one queued command to the demo or live transport.
 	fn command(&mut self, command: Command) {
 		if matches!(&command, Command::Interaction(client_core::interactions::Request {data:client_core::interactions::Data::Modal{components,..},..}) if interaction_uploads::has_files(components))
 		{
@@ -2789,6 +2790,7 @@ impl Desktop {
 				Command::UserAction {
 					action: client_core::user_actions::Action::OpenDm(user),
 					request,
+					..
 				} => Event::UserAction(client_core::user_actions::Event::DmOpened {
 					user,
 					request,
@@ -2797,18 +2799,19 @@ impl Desktop {
 				Command::UserAction {
 					action: client_core::user_actions::Action::LoadNote(user),
 					request,
+					..
 				} => Event::UserAction(client_core::user_actions::Event::NoteLoaded {
 					user,
 					request,
 					result: Ok(self.state.user_note(user).unwrap_or("").to_owned()),
 				}),
-				Command::UserAction { action, request } => {
-					Event::UserAction(client_core::user_actions::Event::Written {
-						action,
-						request,
-						result: Ok(()),
-					})
-				}
+				Command::UserAction {
+					action, request, ..
+				} => Event::UserAction(client_core::user_actions::Event::Written {
+					action,
+					request,
+					result: Ok(()),
+				}),
 				Command::GroupAction { action, request } => {
 					use client_core::group_actions::{Action, Event as GroupEvent};
 					use model::Patch;
@@ -4914,6 +4917,7 @@ impl eframe::App for Desktop {
 			);
 		}
 	}
+	/// One UI frame: pumps workers, expires challenges, renders and drains commands.
 	fn logic(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
 		let search_focused = {
 			#[cfg(feature = "demo")]
@@ -4976,8 +4980,8 @@ impl eframe::App for Desktop {
 			ctx.request_repaint_after(Duration::from_millis(250));
 		}
 		self.poll_interaction_files(ctx);
-		self.state.expire_invite_challenge();
-		if self.state.invite_challenge().is_some() {
+		self.state.expire_verification();
+		if self.state.verification().is_some() {
 			ctx.request_repaint_after(Duration::from_secs(1));
 		}
 		if self.login.is_some()

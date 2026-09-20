@@ -178,6 +178,7 @@ impl DiscordApi {
 		self.request_with_captcha(method, path, body, max_bytes, None, None)
 			.await
 	}
+	/// One typed request with an optional captcha retry and challenge output slot.
 	async fn request_with_captcha(
 		&self,
 		method: Method,
@@ -226,7 +227,9 @@ impl DiscordApi {
 			.header(AUTHORIZATION, authorization);
 		if let Some(retry) = retry {
 			if retry.expired() {
-				return Err(Failure::ProtocolAt("Verification expired; join again"));
+				return Err(Failure::ProtocolAt(
+					"Verification expired; start the check again",
+				));
 			}
 			for (name, value) in [
 				("x-captcha-key", Some(retry.passcode())),
@@ -298,9 +301,10 @@ impl DiscordApi {
 		if !status.is_success() {
 			let error = decode::<ErrorBody>(&bytes).unwrap_or_default();
 			if error.captcha_key.is_some() || matches!(error.code, Some(60003 | 50014)) {
-				if matches!(status, StatusCode::BAD_REQUEST | StatusCode::FORBIDDEN)
+				let auth_challenge = matches!(error.code, Some(60003 | 50014));
+				if !auth_challenge
 					&& error.captcha_key.is_some()
-					&& !matches!(error.code, Some(60003 | 50014))
+					&& matches!(status, StatusCode::BAD_REQUEST | StatusCode::FORBIDDEN)
 					&& let Some(output) = challenge.as_mut()
 				{
 					if let Some(parsed) = invite_captcha(&bytes) {
@@ -308,7 +312,15 @@ impl DiscordApi {
 						return Err(Failure::Challenged);
 					}
 					return Err(Failure::ProtocolAt(
-						"This invite's verification is unavailable; try joining in Discord",
+						"This verification is unavailable; complete the action in the official client",
+					));
+				}
+				if !auth_challenge && write && challenge.is_none() {
+					// The service can require a captcha for one write (for example a friend
+					// request). No solver is wired for this action, but it is not a session
+					// challenge: keep the connection and report a bounded local reason.
+					return Err(Failure::ProtocolAt(
+						"Discord requires verification for this action; complete it in the official client",
 					));
 				}
 
@@ -396,6 +408,7 @@ impl DiscordApi {
 	}
 	// Unofficial user endpoint; observed in discord.py-self/http.py accept_invite (2026-09-11).
 	// One explicit human solution may resume this specific write; never loop/retry automatically.
+	/// Accepts one invite, optionally resuming a single user-solved challenge.
 	async fn join_invite(
 		&self,
 		code: &str,
@@ -404,8 +417,14 @@ impl DiscordApi {
 	) -> Event {
 		let mut challenge = None;
 		let result = if client_core::invites::valid_code(code)
-			&& captcha.as_ref().is_none_or(|c| c.matches(code, request))
-		{
+			&& captcha.as_ref().is_none_or(|c| {
+				c.matches(
+					&client_core::captcha::Target::Invite {
+						code: code.to_owned(),
+					},
+					request,
+				)
+			}) {
 			self.request_with_captcha(
 				Method::POST,
 				&format!("/invites/{code}"),
@@ -439,6 +458,7 @@ impl DiscordApi {
 			}
 		}
 	}
+	/// Runs one typed command and returns its typed event.
 	pub async fn execute(&self, command: Command) -> Event {
 		match command {
 			Command::Interaction(request) => {
@@ -510,7 +530,11 @@ impl DiscordApi {
 					result: self.server_action(action).await,
 				})
 			}
-			Command::UserAction { action, request } => {
+			Command::UserAction {
+				action,
+				request,
+				captcha,
+			} => {
 				if let client_core::user_actions::Action::OpenDm(user) = action {
 					return Event::UserAction(client_core::user_actions::Event::DmOpened {
 						user,
@@ -525,7 +549,17 @@ impl DiscordApi {
 						result: self.user_note(user).await,
 					});
 				}
-				let result = self.user_action(&action).await;
+				let mut challenge = None;
+				let slot = client_core::user_actions::establishes_friendship(&action)
+					.then_some(&mut challenge);
+				let result = self.user_action(&action, captcha.as_deref(), slot).await;
+				if let Some(challenge) = challenge {
+					return Event::UserAction(client_core::user_actions::Event::Challenge {
+						action,
+						request,
+						challenge: Box::new(challenge),
+					});
+				}
 				Event::UserAction(client_core::user_actions::Event::Written {
 					action,
 					request,

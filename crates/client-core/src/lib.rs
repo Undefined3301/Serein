@@ -37,6 +37,7 @@ pub mod server_settings;
 mod threads;
 pub mod typing;
 pub mod user_actions;
+mod verification;
 pub mod voice;
 use model::*;
 use session_cache::Timeline;
@@ -96,6 +97,7 @@ pub enum Command {
 	UserAction {
 		action: user_actions::Action,
 		request: u64,
+		captcha: Option<Box<captcha::Retry>>,
 	},
 	JoinInvite {
 		code: String,
@@ -249,6 +251,7 @@ impl Startup {
 			bytes,
 		})
 	}
+	/// Bytes retained by this event for the bounded capacity budget.
 	pub fn bytes(&self) -> usize {
 		size_of::<Self>()
 			+ self.user.heap_bytes()
@@ -1090,6 +1093,7 @@ impl State {
 			reply: self.reply.take(),
 		})
 	}
+	/// Reports a command the transport could not accept as a bounded outcome error.
 	pub fn command_rejected(&mut self, command: Command) {
 		if let Command::Interaction(request) = command {
 			let _ = self.apply_interaction(interactions::Event::Submitted {
@@ -1199,7 +1203,10 @@ impl State {
 			});
 			return;
 		}
-		if let Command::UserAction { action, request } = command {
+		if let Command::UserAction {
+			action, request, ..
+		} = command
+		{
 			let _ = self.apply_user_action(user_actions::Event::Written {
 				action,
 				request,
@@ -2928,6 +2935,9 @@ impl Event {
 					.map_or(0, |(u, n)| u.heap_bytes() + n.capacity()),
 				Self::UserAction(user_actions::Event::FriendProfile((u, n))) => {
 					u.heap_bytes() + n.capacity()
+				}
+				Self::UserAction(user_actions::Event::Challenge { challenge, .. }) => {
+					challenge.bytes()
 				}
 				Self::UserAction(user_actions::Event::Relationships(entries)) => entries
 					.as_ref()
