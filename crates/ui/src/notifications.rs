@@ -412,8 +412,8 @@ mod tests {
 		assert!(cache.sync(&state));
 		assert_eq!(
 			state.channel_unread(state.channel(Id(27)).unwrap()),
-			None,
-			"Threads omitted from read-state stay unknown, not unread"
+			Some(true),
+			"Threads omitted from known read-state start unread"
 		);
 		assert_eq!(&*cache.direct, &[Id(22)]);
 		assert!(!cache.direct.contains(&Id(43)));
