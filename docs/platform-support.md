@@ -213,7 +213,7 @@ available with a visible recovery path on the next update attempt.
 
 ## Linux screen sharing
 
-Screen sharing requires PipeWire, a ScreenCast-capable portal backend for the current
+The system screen-sharing picker requires PipeWire, a ScreenCast-capable portal backend for the current
 desktop (GNOME, KDE or the compositor-specific backend), and GStreamer Base/Good plus
 the PipeWire source plugin. GStreamer 1.24+ is recommended; GPU scaling/encoding also
 needs the applicable VA, NVCodec and OpenGL plugins and working driver support.
@@ -221,6 +221,11 @@ Native packages declare the PipeWire and Base runtime plugins; hardware codec av
 still depends on distribution packaging and drivers. The software fallback reuses bundled
 OpenH264. Flatpak needs compatible plugins/GPU access inside its runtime; no extra sandbox
 permission or host socket access is added. Native Linux validation remains pending.
+
+Native X11 sessions can instead explicitly select “Entire X11 desktop · all monitors ·
+no portal”. This uses `ximagesrc` from GStreamer Good, already a native package
+dependency, and shares the whole desktop. No direct capture starts after a failed or
+cancelled portal request. X11 capture and live delivery remain unverified.
 
 Optional Linux stream audio uses native `libpulse` per-application monitoring on
 PulseAudio or PipeWire's PulseAudio server. Source builds need the libpulse development

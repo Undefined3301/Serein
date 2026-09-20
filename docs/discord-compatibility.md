@@ -293,7 +293,11 @@ Cancellation is checked during portal waits every 50 ms and media waits within 1
 native driver startup/shutdown can still block, retaining the existing retirement barrier.
 Each of at most four encoder attempts gets a fresh PipeWire remote under the same
 approved session. No source, restore token, pixel buffer or stream is persisted.
-Direct X11 fallback and AV1/H.265 sending remain unsupported.
+Native X11 now offers an explicitly selected whole-desktop source through GStreamer
+`ximagesrc`, reusing the bounded encoder/preview pipeline without a portal. It requires
+GStreamer Good and never activates after portal cancellation or failure. Individual
+X11 window selection and native/live validation remain outstanding. AV1/H.265 sending
+remains unsupported.
 The offline debug example does not establish native Linux capture, hardware acceleration,
 measured performance, packaging or live Discord interoperability.
 
