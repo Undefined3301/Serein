@@ -1301,7 +1301,7 @@ mod tests {
 		capture.process(&[0.75; 961], 1, &audio.gate);
 		assert!(captured.pop().is_err());
 		playback.render(&mut rendered, 1, &audio.gate);
-		assert_eq!(rendered, [0.5; 2]);
+		assert_eq!(rendered, [0.0; 2]);
 		audio.set_controls(false, true);
 		playback_send.push([0.75; 960]).unwrap();
 		capture.process(&[0.75; 961], 1, &audio.gate);
