@@ -1455,6 +1455,15 @@ impl Desktop {
 			messaging.preview_settings(&page);
 		}
 		#[cfg(feature = "demo")]
+		if demo
+			&& let Some(tab) = std::env::args().find_map(|arg| {
+				arg.strip_prefix("--demo-theme-maker")
+					.map(|rest| rest.trim_start_matches('=').to_owned())
+			}) {
+			// `--demo-theme-maker` or `--demo-theme-maker=advanced`.
+			messaging.preview_theme_maker(&tab);
+		}
+		#[cfg(feature = "demo")]
 		if demo && std::env::args().any(|arg| arg == "--demo-profile") {
 			// Presence for the fixture card comes from the same synthetic People rows.
 			let _ = state.request_members();

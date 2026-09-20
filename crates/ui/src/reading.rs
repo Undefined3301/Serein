@@ -56,8 +56,18 @@ impl MessagingUi {
 	}
 
 	pub fn reading_settings(&mut self, ui: &mut egui::Ui, demo: bool) {
+		let colors = design::palette(ui);
 		let mut value = self.reading_preferences;
-		design::group(ui, "Reading and layout", |ui| {
+		// The reset sits in the group header so it stays reachable above a tall card.
+		let mut reset = false;
+		ui.add_space(4.0);
+		ui.horizontal(|ui| {
+			ui.label(design::eyebrow(ui, "Reading and layout", colors.muted));
+			ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+				reset = design::text_action(ui, "Reset reading and layout").clicked();
+			});
+		});
+		design::card(ui, |ui| {
 			self.zoom_row(ui, &mut value);
 			ui.add_space(10.0);
 			design::slider_row(
@@ -96,18 +106,13 @@ impl MessagingUi {
 				Some("Ask before opening external links. Discord links always open directly."),
 				&mut value.confirm_external_links,
 			);
-			design::card_divider(ui);
-			ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-				if design::text_action(ui, "Reset reading and layout").clicked() {
-					value = ReadingPreferences::default();
-					self.reading_save_requested = true;
-				}
-			});
 		});
+		if reset {
+			value = ReadingPreferences::default();
+			self.reading_save_requested = true;
+		}
 		if !demo && self.reading_status.contains("could not") {
-			ui.horizontal(|ui| {
-				design::notice(ui, design::Level::Warning, self.reading_status);
-			});
+			design::notice(ui, design::Level::Warning, self.reading_status);
 			if design::text_action(ui, "Retry saving reading settings").clicked() {
 				self.reading_save_requested = true;
 			}
@@ -183,7 +188,7 @@ mod tests {
 				egui::RawInput {
 					screen_rect: Some(egui::Rect::from_min_size(
 						egui::Pos2::ZERO,
-						egui::vec2(480.0, 480.0),
+						egui::vec2(480.0, 900.0),
 					)),
 					events,
 					..Default::default()

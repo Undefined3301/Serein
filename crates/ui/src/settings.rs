@@ -184,6 +184,12 @@ impl MessagingUi {
 		self.settings.query.clear();
 	}
 
+	/// Fixture-only entry point: opens the theme maker on the requested editor tab.
+	#[cfg(feature = "demo")]
+	pub fn preview_theme_maker(&mut self, tab: &str) {
+		self.preview_settings("themes");
+		self.extensions.preview_theme_maker(tab);
+	}
 	/// Fixture-only entry point for the native offline settings preview.
 	pub fn preview_settings(&mut self, page: &str) {
 		self.settings.open = true;

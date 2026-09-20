@@ -198,6 +198,13 @@ impl ExtensionUi {
 			editor.preview_tab(label);
 		}
 	}
+	/// Fixture-only entry point: opens the theme maker on `label` with a fresh draft.
+	#[cfg(feature = "demo")]
+	pub fn preview_theme_maker(&mut self, label: &str) {
+		self.themes = true;
+		self.theme_editor = Some(crate::theme_editor::ThemeEditor::new());
+		self.preview_theme_editor_tab(label);
+	}
 	pub fn receive_theme_image(&mut self, bytes: Vec<u8>, image: Arc<egui::ColorImage>) {
 		if bytes.len() > extensions::MAX_BACKGROUND_BYTES
 			|| image.size.contains(&0)

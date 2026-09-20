@@ -2190,6 +2190,95 @@ pub fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
 		.inner
 }
 
+/// Exclusive choice drawn as one connected group of segments on an inset track. For a small
+/// set of short labels: editor tabs, dark/light pickers. Returns the index clicked this frame.
+pub fn segmented(ui: &mut egui::Ui, labels: &[&str], selected: usize) -> Option<usize> {
+	if labels.is_empty() {
+		return None;
+	}
+	let p = palette(ui);
+	let font = FontId::new(13.0, medium_family(ui.ctx()));
+	let widths: Vec<f32> = labels
+		.iter()
+		.map(|label| {
+			ui.painter()
+				.layout_no_wrap((*label).to_owned(), font.clone(), p.text)
+				.size()
+				.x + 28.0
+		})
+		.collect();
+	let height = 32.0;
+	let total = widths.iter().sum::<f32>() + 8.0;
+	let (rect, base) = ui.allocate_exact_size(
+		egui::vec2(total.min(ui.available_width()), height + 8.0),
+		egui::Sense::hover(),
+	);
+	// Interact before painting so the whole group can be drawn in one pass.
+	let mut x = rect.left() + 4.0;
+	let segments: Vec<(egui::Rect, egui::Response)> = widths
+		.iter()
+		.enumerate()
+		.map(|(index, width)| {
+			let segment = egui::Rect::from_min_size(
+				egui::pos2(x, rect.top() + 4.0),
+				egui::vec2(*width, height),
+			);
+			x += width;
+			let response = ui.interact(segment, base.id.with(index), egui::Sense::click());
+			(segment, response)
+		})
+		.collect();
+	let enabled = ui.is_enabled();
+	let painter = ui.painter();
+	painter.rect_filled(
+		rect,
+		10,
+		p.base.gamma_multiply(if enabled { 1.0 } else { 0.5 }),
+	);
+	let mut clicked = None;
+	for (index, (segment, response)) in segments.iter().enumerate() {
+		let active = index == selected;
+		let hot = enabled && (response.hovered() || response.has_focus());
+		if active {
+			painter.rect_filled(*segment, 8, p.selected);
+		} else if hot {
+			painter.rect_filled(*segment, 8, p.hover);
+		}
+		if response.has_focus() {
+			painter.rect_stroke(
+				segment.shrink(1.0),
+				8,
+				Stroke::new(1.0, p.accent),
+				egui::StrokeKind::Inside,
+			);
+		}
+		let color = if !enabled {
+			p.muted.gamma_multiply(0.5)
+		} else if active {
+			p.text_strong
+		} else if hot {
+			p.text
+		} else {
+			p.muted
+		};
+		painter.text(
+			segment.center(),
+			egui::Align2::CENTER_CENTER,
+			labels[index],
+			font.clone(),
+			color,
+		);
+		let label = labels[index].to_owned();
+		response.widget_info(|| {
+			egui::WidgetInfo::selected(egui::WidgetType::RadioButton, enabled, active, &label)
+		});
+		if response.clicked() && !active {
+			clicked = Some(index);
+		}
+	}
+	clicked
+}
+
 /// Settings row: title and optional detail on the left, `control` laid out right-to-left on
 /// the right. Combo boxes, colour wells and buttons all sit on the same baseline this way.
 pub fn row<R>(
