@@ -27,6 +27,8 @@ pub(crate) struct Components {
 	formatted: markdown::FormatCache,
 	pub(crate) file_request: Option<String>,
 	files: Vec<(String, Vec<(usize, String)>)>,
+	// True while rendering a section accessory, so media draws as a compact thumbnail.
+	accessory: bool,
 }
 
 impl Components {
@@ -222,6 +224,10 @@ impl Components {
 						egui::Frame::new()
 					};
 					frame.show(ui, |ui| {
+						if c.kind != 1 {
+							// Discord separates stacked container/section children by 8px.
+							ui.spacing_mut().item_spacing.y = 8.0;
+						}
 						if c.kind == 1 {
 							ui.horizontal_wrapped(|ui| {
 								for (index, child) in c.components.iter().enumerate() {
@@ -241,13 +247,20 @@ impl Components {
 							});
 						} else if c.kind == 9 {
 							ui.horizontal_top(|ui| {
-								let accessory_width = 110.0_f32.min(ui.available_width() * 0.4);
-								ui.allocate_ui(
+								ui.spacing_mut().item_spacing.x = 16.0;
+								let thumbnail =
+									c.accessory.as_deref().is_some_and(|a| a.kind == 11);
+								let accessory_width =
+									if thumbnail { THUMBNAIL_SIZE } else { 110.0 }
+										.min(ui.available_width() * 0.4);
+								ui.allocate_ui_with_layout(
 									egui::vec2(
-										(ui.available_width() - accessory_width - 8.0).max(40.0),
+										(ui.available_width() - accessory_width - 16.0).max(40.0),
 										0.0,
 									),
+									egui::Layout::top_down(egui::Align::Min),
 									|ui| {
+										ui.spacing_mut().item_spacing.y = 8.0;
 										for (index, child) in c.components.iter().enumerate() {
 											self.show_component(
 												ui,
@@ -265,20 +278,26 @@ impl Components {
 									},
 								);
 								if let Some(accessory) = &c.accessory {
-									ui.allocate_ui(egui::vec2(accessory_width, 0.0), |ui| {
-										self.show_component(
-											ui,
-											accessory,
-											id.with("accessory"),
-											message,
-											state,
-											avatars,
-											opening,
-											enabled,
-											action,
-											media_ui,
-										)
-									});
+									ui.allocate_ui_with_layout(
+										egui::vec2(accessory_width, 0.0),
+										egui::Layout::top_down(egui::Align::Min),
+										|ui| {
+											self.accessory = true;
+											self.show_component(
+												ui,
+												accessory,
+												id.with("accessory"),
+												message,
+												state,
+												avatars,
+												opening,
+												enabled,
+												action,
+												media_ui,
+											);
+											self.accessory = false;
+										},
+									);
 								}
 							});
 						} else {
@@ -437,16 +456,19 @@ impl Components {
 				}
 				11 => {
 					if let Some(media) = &c.media {
+						// A section accessory renders as a compact square thumbnail without controls.
+						let thumbnail = self.accessory;
 						show_media(
 							ui,
 							media,
-							c.description.as_deref(),
+							c.description.as_deref().filter(|_| !thumbnail),
 							avatars,
 							state.demo,
 							opening,
 							message,
 							media_ui,
 							&mut self.revealed,
+							thumbnail,
 						);
 					}
 				}
@@ -472,6 +494,7 @@ impl Components {
 								message,
 								media_ui,
 								&mut self.revealed,
+								false,
 							);
 						}
 					}
@@ -488,6 +511,7 @@ impl Components {
 							message,
 							media_ui,
 							&mut self.revealed,
+							false,
 						);
 					}
 				}
@@ -1055,6 +1079,10 @@ fn field(
 	valid
 }
 #[allow(clippy::too_many_arguments)]
+/// Square side of a section thumbnail accessory, matching Discord's compact card art.
+const THUMBNAIL_SIZE: f32 = 80.0;
+
+#[allow(clippy::too_many_arguments)]
 fn show_media(
 	ui: &mut egui::Ui,
 	media: &model::ComponentMedia,
@@ -1065,6 +1093,7 @@ fn show_media(
 	message: &Message,
 	media_ui: &mut MediaUi<'_>,
 	revealed: &mut std::collections::BTreeSet<u64>,
+	thumbnail: bool,
 ) {
 	let url = resolve_media(&media.url, message);
 	if let Some(attachment) = message.attachments.iter().find(|attachment| {
@@ -1130,6 +1159,15 @@ fn show_media(
 		height: media.height.unwrap_or(180),
 		..Default::default()
 	};
+	if thumbnail {
+		let response = avatars
+			.show_embed(ui, &image, egui::vec2(THUMBNAIL_SIZE, THUMBNAIL_SIZE), demo)
+			.on_hover_cursor(egui::CursorIcon::PointingHand);
+		if response.clicked() {
+			*opening = resolve_media(&media.url, message).and_then(markdown::external_url);
+		}
+		return;
+	}
 	avatars.show_embed(
 		ui,
 		&image,
