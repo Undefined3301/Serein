@@ -2190,6 +2190,295 @@ pub fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
 		.inner
 }
 
+/// Settings row: title and optional detail on the left, `control` laid out right-to-left on
+/// the right. Combo boxes, colour wells and buttons all sit on the same baseline this way.
+pub fn row<R>(
+	ui: &mut egui::Ui,
+	title: &str,
+	detail: Option<&str>,
+	control: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+	let p = palette(ui);
+	let width = ui.available_width();
+	let text_width = (width * 0.55).max(120.0);
+	ui.horizontal(|ui| {
+		ui.spacing_mut().item_spacing.x = 12.0;
+		ui.allocate_ui_with_layout(
+			egui::vec2(text_width, 0.0),
+			egui::Layout::top_down(egui::Align::Min),
+			|ui| {
+				ui.spacing_mut().item_spacing.y = 2.0;
+				ui.add(egui::Label::new(medium(ui, title, 15.0).color(p.text_strong)).wrap());
+				if let Some(detail) = detail {
+					ui.add(
+						egui::Label::new(RichText::new(detail).size(13.0).color(p.muted)).wrap(),
+					);
+				}
+			},
+		);
+		ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), control)
+			.inner
+	})
+	.inner
+}
+
+/// Quiet inline action for secondary verbs such as "Reset" or "Try again": muted text that
+/// brightens and underlines on hover instead of a full button.
+pub fn text_action(ui: &mut egui::Ui, label: &str) -> egui::Response {
+	let p = palette(ui);
+	let galley = ui.painter().layout_no_wrap(
+		label.to_owned(),
+		FontId::new(13.0, medium_family(ui.ctx())),
+		p.muted,
+	);
+	let (rect, response) =
+		ui.allocate_exact_size(galley.size() + egui::vec2(12.0, 12.0), egui::Sense::click());
+	response.widget_info(|| {
+		egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+	});
+	let enabled = ui.is_enabled();
+	let hot = enabled && (response.hovered() || response.has_focus());
+	let color = if !enabled {
+		p.muted.gamma_multiply(0.5)
+	} else if hot {
+		p.text_strong
+	} else {
+		p.muted
+	};
+	let painter = ui.painter();
+	if hot {
+		painter.rect_filled(rect, 6, p.hover);
+	}
+	let pos = rect.center() - galley.size() * 0.5;
+	painter.galley_with_override_text_color(pos, galley.clone(), color);
+	if hot {
+		painter.line_segment(
+			[
+				egui::pos2(pos.x, rect.bottom() - 5.0),
+				egui::pos2(pos.x + galley.size().x, rect.bottom() - 5.0),
+			],
+			Stroke::new(1.0, color),
+		);
+	}
+	response
+}
+
+/// One choice in an exclusive group: the whole row toggles, with a radio marker at the left
+/// and an optional explanation under the label.
+pub fn radio_row(
+	ui: &mut egui::Ui,
+	selected: bool,
+	label: &str,
+	detail: Option<&str>,
+) -> egui::Response {
+	let p = palette(ui);
+	let width = ui.available_width();
+	let text_width = (width - 44.0).max(80.0);
+	let title = ui.painter().layout(
+		label.to_owned(),
+		FontId::new(15.0, medium_family(ui.ctx())),
+		p.text_strong,
+		text_width,
+	);
+	let detail = detail.map(|text| {
+		ui.painter().layout(
+			text.to_owned(),
+			FontId::proportional(13.0),
+			p.muted,
+			text_width,
+		)
+	});
+	let text_height = title.size().y + detail.as_ref().map_or(0.0, |d| d.size().y + 2.0);
+	let (rect, response) = ui.allocate_exact_size(
+		egui::vec2(width, text_height.max(20.0) + 16.0),
+		egui::Sense::click(),
+	);
+	response.widget_info(|| {
+		egui::WidgetInfo::selected(
+			egui::WidgetType::RadioButton,
+			ui.is_enabled(),
+			selected,
+			label,
+		)
+	});
+	let enabled = ui.is_enabled();
+	let hot = enabled && (response.hovered() || response.has_focus());
+	let painter = ui.painter();
+	if hot {
+		painter.rect_filled(rect.expand2(egui::vec2(8.0, 0.0)), 8, p.hover);
+	}
+	let marker = egui::pos2(rect.left() + 10.0, rect.top() + 8.0 + title.size().y * 0.5);
+	let ring = if selected {
+		p.accent
+	} else if hot {
+		p.text
+	} else {
+		p.muted
+	};
+	painter.circle_stroke(
+		marker,
+		9.0,
+		Stroke::new(2.0, ring.gamma_multiply(if enabled { 1.0 } else { 0.4 })),
+	);
+	if selected {
+		painter.circle_filled(
+			marker,
+			4.5,
+			ring.gamma_multiply(if enabled { 1.0 } else { 0.4 }),
+		);
+	}
+	let text_color = if enabled {
+		p.text_strong
+	} else {
+		p.text_strong.gamma_multiply(0.5)
+	};
+	let mut y = rect.top() + 8.0;
+	painter.galley(egui::pos2(rect.left() + 32.0, y), title.clone(), text_color);
+	y += title.size().y + 2.0;
+	if let Some(detail) = detail {
+		painter.galley(egui::pos2(rect.left() + 32.0, y), detail, p.muted);
+	}
+	response
+}
+
+/// Continuous value with a thin track, accent fill and a round grab. Dragging anywhere on the
+/// track moves the value; arrow keys nudge it while focused. The current value is printed in a
+/// pill at the right so the control never needs egui's inline drag-value box.
+pub fn slider<T: egui::emath::Numeric>(
+	ui: &mut egui::Ui,
+	value: &mut T,
+	range: std::ops::RangeInclusive<T>,
+	suffix: &str,
+) -> egui::Response {
+	let p = palette(ui);
+	let (min, max) = (range.start().to_f64(), range.end().to_f64());
+	let span = (max - min).max(f64::EPSILON);
+	let width = ui.available_width();
+	let readout_width = 64.0;
+	let (rect, mut response) =
+		ui.allocate_exact_size(egui::vec2(width, 28.0), egui::Sense::click_and_drag());
+	let track = egui::Rect::from_min_max(
+		egui::pos2(rect.left() + 9.0, rect.center().y - 3.0),
+		egui::pos2(rect.right() - readout_width - 9.0, rect.center().y + 3.0),
+	);
+	let enabled = ui.is_enabled();
+	let mut current = value.to_f64();
+	if enabled {
+		if (response.dragged() || response.clicked() || response.drag_started())
+			&& let Some(pointer) = response.interact_pointer_pos()
+		{
+			let t = ((pointer.x - track.left()) / track.width()).clamp(0.0, 1.0) as f64;
+			current = min + t * span;
+		}
+		if response.has_focus() {
+			let step = if T::INTEGRAL { 1.0 } else { span / 100.0 };
+			let mut delta = 0.0;
+			ui.input(|input| {
+				if input.key_pressed(egui::Key::ArrowLeft)
+					|| input.key_pressed(egui::Key::ArrowDown)
+				{
+					delta -= step;
+				}
+				if input.key_pressed(egui::Key::ArrowRight) || input.key_pressed(egui::Key::ArrowUp)
+				{
+					delta += step;
+				}
+			});
+			current += delta;
+		}
+	}
+	if T::INTEGRAL {
+		current = current.round();
+	}
+	current = current.clamp(min, max);
+	if current != value.to_f64() {
+		*value = T::from_f64(current);
+		response.mark_changed();
+	}
+	let readout = if T::INTEGRAL {
+		format!("{}{suffix}", current as i64)
+	} else {
+		format!("{current:.1}{suffix}")
+	};
+	response.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), current, readout.clone()));
+	let t = ((current - min) / span) as f32;
+	let knob = egui::pos2(track.left() + track.width() * t, track.center().y);
+	let hot = enabled && (response.hovered() || response.dragged() || response.has_focus());
+	let alpha = if enabled { 1.0 } else { 0.4 };
+	let painter = ui.painter();
+	painter.rect_filled(track, 3, p.border.gamma_multiply(alpha));
+	painter.rect_filled(
+		track.with_max_x(knob.x.max(track.left())),
+		3,
+		p.accent.gamma_multiply(alpha),
+	);
+	if hot {
+		painter.circle_filled(knob, 13.0, p.accent.gamma_multiply(0.18));
+	}
+	painter.circle(
+		knob,
+		if response.dragged() { 9.0 } else { 8.0 },
+		Color32::WHITE.gamma_multiply(alpha),
+		Stroke::new(
+			1.0,
+			Color32::from_black_alpha(if enabled { 40 } else { 15 }),
+		),
+	);
+	let pill = egui::Rect::from_min_max(
+		egui::pos2(rect.right() - readout_width, rect.top() + 2.0),
+		egui::pos2(rect.right(), rect.bottom() - 2.0),
+	);
+	painter.rect_filled(pill, 6, p.base.gamma_multiply(alpha));
+	painter.text(
+		pill.center(),
+		egui::Align2::CENTER_CENTER,
+		readout,
+		FontId::new(13.0, medium_family(ui.ctx())),
+		if enabled { p.text_strong } else { p.muted },
+	);
+	if enabled && (response.hovered() || response.dragged()) {
+		ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+	}
+	response
+}
+
+/// Titled [`slider`] with an optional explanation, for settings pages.
+pub fn slider_row<T: egui::emath::Numeric>(
+	ui: &mut egui::Ui,
+	title: &str,
+	detail: Option<&str>,
+	value: &mut T,
+	range: std::ops::RangeInclusive<T>,
+	suffix: &str,
+) -> egui::Response {
+	let p = palette(ui);
+	ui.spacing_mut().item_spacing.y = 4.0;
+	ui.add(egui::Label::new(medium(ui, title, 15.0).color(p.text_strong)).wrap());
+	if let Some(detail) = detail {
+		ui.add(egui::Label::new(RichText::new(detail).size(13.0).color(p.muted)).wrap());
+	}
+	slider(ui, value, range, suffix)
+}
+
+/// Hairline between rows inside a [`card`], with the card's vertical rhythm.
+pub fn card_divider(ui: &mut egui::Ui) {
+	let p = palette(ui);
+	ui.add_space(6.0);
+	let (rect, _) =
+		ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
+	ui.painter()
+		.hline(rect.x_range(), rect.center().y, Stroke::new(1.0, p.border));
+	ui.add_space(6.0);
+}
+
+/// Card body with a group title above it, the way every settings page introduces a group.
+pub fn group<R>(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+	let p = palette(ui);
+	ui.add_space(4.0);
+	ui.label(eyebrow(ui, title, p.muted));
+	card(ui, add)
+}
+
 /// Syntax colours for fenced code blocks: one dark and one light set, tuned to stay legible
 /// on the `raised` surface every preset uses as its code background.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

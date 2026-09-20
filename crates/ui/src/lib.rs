@@ -89,6 +89,7 @@ use model::{Freshness, Id};
 pub use verification::VerificationUi;
 pub use voice::StageFocus;
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct VoiceGain {
 	pub input_percent: u16,
 	pub output_percent: u16,
@@ -447,6 +448,20 @@ impl MessagingUi {
 		})
 	}
 
+	/// Pending profile picture selection: (generation, own user, editor revision).
+	pub fn take_profile_picture_request(&mut self) -> Option<(u64, Id, u64)> {
+		self.settings.editor.avatar_request.take()
+	}
+	pub fn accept_profile_picture(
+		&mut self,
+		ctx: &egui::Context,
+		request: (u64, Id, u64),
+		result: Result<Option<(String, egui::ColorImage)>, &'static str>,
+	) {
+		if let Err(error) = self.settings.editor.accept_avatar(ctx, request, result) {
+			self.toasts.push(design::Level::Error, error);
+		}
+	}
 	pub fn take_group_icon_request(&mut self) -> Option<(u64, Id, u64)> {
 		self.group_menu.icon_request.take()
 	}

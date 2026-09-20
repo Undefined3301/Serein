@@ -1209,15 +1209,11 @@ impl MessagingUi {
 	fn voice_popup_content(&mut self, ui: &mut egui::Ui, demo: bool, active: bool, input: bool) {
 		let colors = design::palette(ui);
 		ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
-		if demo || !self.voice_available {
-			ui.label(
-				RichText::new(if demo {
-					"Offline preview · microphone and speakers are off."
-				} else {
-					"Install a voice-enabled build to use these controls."
-				})
-				.size(13.0)
-				.color(colors.muted),
+		if !demo && !self.voice_available {
+			design::notice(
+				ui,
+				design::Level::Info,
+				"Install a voice-enabled build to use these controls.",
 			);
 		}
 		ui.add_enabled_ui(!demo && self.voice_available, |ui| {
@@ -1343,32 +1339,41 @@ impl MessagingUi {
 			.size(13.0)
 			.color(colors.muted),
 		);
-		ui.horizontal_wrapped(|ui| {
-			if ui
-				.add_enabled(
-					!active,
-					egui::Button::new(if self.voice_preview_requested {
+		ui.horizontal(|ui| {
+			ui.spacing_mut().item_spacing.x = 12.0;
+			ui.add_enabled_ui(!active, |ui| {
+				if design::button(
+					ui,
+					if self.voice_preview_requested {
 						"Stop testing"
 					} else {
 						"Start testing"
-					}),
+					},
+					if self.voice_preview_requested {
+						design::ButtonKind::Outline
+					} else {
+						design::ButtonKind::Primary
+					},
 				)
 				.clicked()
-			{
-				self.voice_preview_requested = !self.voice_preview_requested;
-				self.voice_preview_status = "";
-				self.voice_preview_level = None;
-				ui.ctx().request_repaint();
-			}
-			let db = self.voice_preview_level.unwrap_or(-100.0);
-			ui.label(if self.voice_preview_requested || active {
-				format!("Input level: {db:.0} dBFS")
-			} else {
-				"Test is off".into()
+				{
+					self.voice_preview_requested = !self.voice_preview_requested;
+					self.voice_preview_status = "";
+					self.voice_preview_level = None;
+					ui.ctx().request_repaint();
+				}
 			});
+			if self.voice_preview_requested || active {
+				let db = self.voice_preview_level.unwrap_or(-100.0);
+				ui.label(
+					RichText::new(format!("Input level {db:.0} dBFS"))
+						.size(13.0)
+						.color(colors.muted),
+				);
+			}
 		});
 		let (rect, _) =
-			ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), egui::Sense::hover());
+			ui.allocate_exact_size(egui::vec2(ui.available_width(), 18.0), egui::Sense::hover());
 		let level = ((self.voice_preview_level.unwrap_or(-100.0) + 80.0) / 80.0).clamp(0.0, 1.0);
 		let bars = (rect.width() / 9.0).floor().max(1.0) as usize;
 		for index in 0..bars {
@@ -1413,15 +1418,11 @@ impl MessagingUi {
 		let colors = design::palette(ui);
 		ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
 		ui.spacing_mut().item_spacing.y = if compact { 6.0 } else { 12.0 };
-		if demo || !self.voice_available {
-			ui.label(
-				RichText::new(if demo {
-					"Offline preview · microphone and speakers are off."
-				} else {
-					"Install a voice-enabled build to use these controls."
-				})
-				.size(13.0)
-				.color(colors.muted),
+		if !demo && !self.voice_available {
+			design::notice(
+				ui,
+				design::Level::Info,
+				"Install a voice-enabled build to use these controls.",
 			);
 		}
 		ui.add_enabled_ui(!demo && self.voice_available, |ui| {
@@ -1430,15 +1431,14 @@ impl MessagingUi {
 				egui::CollapsingHeader::new("Voice processing & input mode")
 					.show(ui, |ui| self.voice_processing_controls(ui));
 			} else {
-				ui.label(design::eyebrow(ui, "Devices & levels", colors.muted));
-				design::card(ui, |ui| {
+				design::group(ui, "Devices & levels", |ui| {
 					self.voice_audio_controls(ui);
-					ui.separator();
+					design::card_divider(ui);
 					self.microphone_preview_controls(ui, active);
 				});
-				ui.add_space(8.0);
-				ui.label(design::eyebrow(ui, "Voice processing", colors.muted));
-				design::card(ui, |ui| self.voice_processing_controls(ui));
+				design::group(ui, "Voice processing", |ui| {
+					self.voice_processing_controls(ui)
+				});
 			}
 		});
 		if !compact {
@@ -1449,9 +1449,7 @@ impl MessagingUi {
 				self.global_keybind_status,
 			);
 		}
-		ui.add_space(8.0);
-		ui.label(design::eyebrow(ui, "Camera", colors.muted));
-		design::card(ui, |ui| self.camera_settings_content(ui, demo));
+		design::group(ui, "Camera", |ui| self.camera_settings_content(ui, demo));
 		if active && let Some(code) = &self.voice_privacy_code {
 			egui::CollapsingHeader::new("Voice privacy code").show(ui, |ui| {
 				ui.add(
@@ -1469,12 +1467,9 @@ impl MessagingUi {
 			});
 		}
 		if !compact {
-			ui.label(
-				RichText::new(
-					"Audio preferences are saved on this device. Your microphone starts only when you join a call or start testing.",
-				)
-				.size(12.0)
-				.color(colors.muted),
+			design::hint(
+				ui,
+				"Audio preferences are saved on this device. Your microphone starts only when you join a call or start testing.",
 			);
 		}
 	}
@@ -1511,31 +1506,27 @@ impl MessagingUi {
 			&mut self.voice_camera_device,
 		)
 		.labelled_by(label.id);
-		if ui
-			.add_enabled(
-				!demo && !self.voice_camera_devices_loading,
-				egui::Button::new("Refresh cameras").small(),
-			)
-			.clicked()
-		{
-			self.voice_refresh_cameras = true;
-		}
-		if !self.voice_camera_device_status.is_empty() && !demo {
-			ui.label(
-				RichText::new(self.voice_camera_device_status)
-					.size(12.0)
-					.color(colors.muted),
+		ui.horizontal(|ui| {
+			ui.spacing_mut().item_spacing.x = 4.0;
+			ui.add_enabled_ui(!demo && !self.voice_camera_devices_loading, |ui| {
+				if design::text_action(ui, "Refresh cameras").clicked() {
+					self.voice_refresh_cameras = true;
+				}
+			});
+			if !self.voice_camera_device_status.is_empty() && !demo {
+				ui.label(
+					RichText::new(self.voice_camera_device_status)
+						.size(12.0)
+						.color(colors.muted),
+				);
+			}
+		});
+		if !demo {
+			design::hint(
+				ui,
+				"Changing devices stops your camera and takes effect the next time you turn it on.",
 			);
 		}
-		ui.label(
-			RichText::new(if demo {
-				"Offline preview. These cameras are synthetic; capture is off."
-			} else {
-				"Changing devices stops your camera and takes effect the next time you turn it on."
-			})
-			.size(12.0)
-			.color(colors.muted),
-		);
 	}
 
 	fn camera_settings_popup(&mut self, trigger: &egui::Response, demo: bool) {
@@ -1611,28 +1602,29 @@ impl MessagingUi {
 			device(ui, false);
 		}
 		gain_controls(ui, &mut self.voice_gain);
-		ui.horizontal_wrapped(|ui| {
-			if ui.small_button("Refresh devices").clicked() {
+		ui.horizontal(|ui| {
+			ui.spacing_mut().item_spacing.x = 4.0;
+			if design::text_action(ui, "Refresh devices").clicked() {
 				self.voice_refresh_devices = true;
 			}
-			if ui.small_button("Reset levels").clicked() {
+			if self.voice_gain != crate::VoiceGain::default()
+				&& design::text_action(ui, "Reset levels").clicked()
+			{
 				self.voice_gain = crate::VoiceGain::default();
+			}
+			if !self.voice_device_status.is_empty() {
+				ui.label(
+					RichText::new(self.voice_device_status)
+						.size(12.0)
+						.color(colors.muted),
+				);
 			}
 		});
 		if self.voice_microphone_unavailable {
-			ui.label(
-				RichText::new(
-					"Microphone unavailable · choose another input. You are still connected.",
-				)
-				.size(12.0)
-				.color(colors.warning),
-			);
-		}
-		if !self.voice_device_status.is_empty() {
-			ui.label(
-				RichText::new(self.voice_device_status)
-					.size(12.0)
-					.color(colors.muted),
+			design::notice(
+				ui,
+				design::Level::Warning,
+				"Microphone unavailable · choose another input. You are still connected.",
 			);
 		}
 	}
@@ -1661,45 +1653,38 @@ impl MessagingUi {
 				"Choose your noise suppression, sensitivity and processing.",
 			),
 		] {
-			ui.radio_value(
-				&mut self.voice_processing.profile,
-				profile,
-				design::medium(ui, label, 16.0),
-			);
-			ui.indent(label, |ui| {
-				ui.label(RichText::new(detail).size(13.0).color(colors.muted));
-			});
-			ui.add_space(4.0);
+			if design::radio_row(
+				ui,
+				self.voice_processing.profile == profile,
+				label,
+				Some(detail),
+			)
+			.clicked()
+			{
+				self.voice_processing.profile = profile;
+			}
 		}
 		if self.voice_processing.profile == InputProfile::Custom {
-			ui.separator();
+			design::card_divider(ui);
 			let processing = &mut self.voice_processing.custom;
-			design::section(
-				ui,
-				"Input sensitivity",
-				Some("Only transmit sound above this level. Lower values pick up quieter speech."),
-			);
 			let mut sensitivity = processing.sensitivity_db.is_some();
-			if ui
-				.checkbox(&mut sensitivity, "Use an input threshold")
-				.changed()
+			if design::switch(
+				ui,
+				"Input threshold",
+				Some(if sensitivity {
+					"Only transmit sound above this level. Lower values pick up quieter speech."
+				} else {
+					"Open microphone. Mute and push to talk still apply."
+				}),
+				&mut sensitivity,
+			)
+			.changed()
 			{
 				processing.sensitivity_db = sensitivity.then_some(-55);
 			}
 			if let Some(db) = &mut processing.sensitivity_db {
-				ui.add(
-					egui::Slider::new(db, -80..=0)
-						.suffix(" dBFS")
-						.text("Threshold"),
-				);
-			} else {
-				ui.label(
-					RichText::new(
-						"Open microphone · no sensitivity threshold. Mute and push to talk still apply.",
-					)
-					.size(13.0)
-					.color(colors.muted),
-				);
+				ui.add_space(4.0);
+				design::slider(ui, db, -80..=0, " dBFS");
 			}
 			if let Some(level) = self.voice_preview_level {
 				ui.add(
@@ -1722,50 +1707,66 @@ impl MessagingUi {
 					"Start the microphone test or join a call to see your input level.",
 				);
 			}
-			ui.separator();
-			let label = ui.label(design::medium(ui, "Noise suppression", 15.0));
+			design::card_divider(ui);
 			let choices = [
 				(NoiseSuppression::Off, "Off"),
 				(NoiseSuppression::RnNoise, "RNNoise"),
 				(NoiseSuppression::WebRtc, "WebRTC"),
 			];
-			egui::ComboBox::from_id_salt("voice-noise-suppression")
-				.selected_text(
-					choices
-						.iter()
-						.find(|(value, _)| *value == processing.suppression)
-						.map_or("Off", |(_, label)| *label),
-				)
-				.show_ui(ui, |ui| {
-					for (value, label) in choices {
-						ui.selectable_value(&mut processing.suppression, value, label);
-					}
-				})
-				.response
-				.labelled_by(label.id);
+			design::row(
+				ui,
+				"Noise suppression",
+				Some("Removes keyboard, fan and room noise from your microphone."),
+				|ui| {
+					egui::ComboBox::from_id_salt("voice-noise-suppression")
+						.selected_text(
+							choices
+								.iter()
+								.find(|(value, _)| *value == processing.suppression)
+								.map_or("Off", |(_, label)| *label),
+						)
+						.width(ui.available_width().min(160.0))
+						.show_ui(ui, |ui| {
+							for (value, label) in choices {
+								ui.selectable_value(&mut processing.suppression, value, label);
+							}
+						});
+				},
+			);
 			if processing.suppression == NoiseSuppression::WebRtc {
-				ui.add(
-					egui::Slider::new(&mut processing.suppression_level, 0..=3)
-						.text("Suppression strength"),
-				);
-				design::hint(ui, "0: Low · 1: Moderate · 2: High · 3: Very high");
+				ui.add_space(6.0);
+				let strength = ["Low", "Moderate", "High", "Very high"];
+				design::row(ui, "Suppression strength", None, |ui| {
+					egui::ComboBox::from_id_salt("voice-suppression-strength")
+						.selected_text(strength[usize::from(processing.suppression_level.min(3))])
+						.width(ui.available_width().min(160.0))
+						.show_ui(ui, |ui| {
+							for (index, label) in strength.iter().enumerate() {
+								ui.selectable_value(
+									&mut processing.suppression_level,
+									index as u8,
+									*label,
+								);
+							}
+						});
+				});
 			}
+			design::card_divider(ui);
 			design::switch(
 				ui,
 				"Echo cancellation",
 				Some("Reduce speaker audio picked up by your microphone."),
 				&mut processing.echo_cancellation,
 			);
-			egui::CollapsingHeader::new("Advanced voice settings").show(ui, |ui| {
-				design::switch(
-					ui,
-					"Automatic gain control",
-					Some("Adjust microphone loudness automatically."),
-					&mut processing.automatic_gain,
-				);
-			});
+			design::card_divider(ui);
+			design::switch(
+				ui,
+				"Automatic gain control",
+				Some("Adjust microphone loudness automatically."),
+				&mut processing.automatic_gain,
+			);
 		}
-		ui.separator();
+		design::card_divider(ui);
 		design::switch(
 			ui,
 			"Push to talk",
@@ -3069,17 +3070,9 @@ fn participant_user(state: &State, channel: Id, user: Id) -> Option<&model::User
 fn gain_slider(ui: &mut egui::Ui, value: &mut u16, title: &str) -> egui::Response {
 	ui.scope(|ui| {
 		let colors = design::palette(ui);
+		ui.spacing_mut().item_spacing.y = 4.0;
 		let label = ui.label(RichText::new(title).size(13.0).color(colors.muted));
-		ui.spacing_mut().slider_width = (ui.available_width() - 64.0).max(80.0);
-		ui.visuals_mut().widgets.inactive.bg_fill = colors.border;
-		ui.add(
-			egui::Slider::new(value, 0..=200)
-				.suffix("%")
-				.step_by(1.0)
-				.trailing_fill(true)
-				.handle_shape(egui::style::HandleShape::Circle),
-		)
-		.labelled_by(label.id)
+		design::slider(ui, value, 0..=200, "%").labelled_by(label.id)
 	})
 	.inner
 }
@@ -3099,11 +3092,7 @@ fn gain_controls(ui: &mut egui::Ui, gain: &mut crate::VoiceGain) -> [egui::Respo
 			slider(ui, &mut gain.output_percent, "Speaker volume"),
 		]
 	};
-	ui.label(
-		RichText::new("100% is the original level. Higher levels may distort.")
-			.size(12.0)
-			.color(design::palette(ui).muted),
-	);
+	design::hint(ui, "100% is the original level. Higher levels may distort.");
 	responses
 }
 

@@ -686,6 +686,7 @@ struct Desktop {
 	uploads: uploads::Uploads,
 	interaction_files: interaction_uploads::Files,
 	group_icon: group_icon::GroupIcon,
+	profile_avatar: group_icon::GroupIcon,
 	server_icon: group_icon::GroupIcon,
 	role_icon: group_icon::GroupIcon,
 	role_icon_scope: Option<(u64, model::Id, model::Id, u64)>,
@@ -1726,6 +1727,7 @@ impl Desktop {
 			uploads: uploads::Uploads::default(),
 			interaction_files: Default::default(),
 			group_icon: group_icon::GroupIcon::default(),
+			profile_avatar: group_icon::GroupIcon::default(),
 			server_icon: group_icon::GroupIcon::default(),
 			role_icon: group_icon::GroupIcon::default(),
 			role_icon_scope: None,
@@ -1802,6 +1804,7 @@ impl Desktop {
 		self.role_icon.cancel();
 		self.role_icon_scope = None;
 		self.group_icon.cancel();
+		self.profile_avatar.cancel();
 		self.server_icon.cancel();
 		self.emoji_upload.cancel();
 		if let Some(store) = &mut self.store {
@@ -1859,6 +1862,7 @@ impl Desktop {
 		self.role_icon.cancel();
 		self.role_icon_scope = None;
 		self.group_icon.cancel();
+		self.profile_avatar.cancel();
 		self.server_icon.cancel();
 		self.emoji_upload.cancel();
 		self.notifications.clear();
@@ -3197,6 +3201,11 @@ impl Desktop {
 								}
 								if let Some(color) = changes.accent_color {
 									profile.accent_color = color;
+								}
+								if let Some(avatar) = changes.avatar {
+									// Synthetic hash: the fixture never uploads or fetches images.
+									profile.user.avatar = avatar
+										.map(|_| "0123456789abcdef0123456789abcdef".to_owned());
 								}
 							}
 							Ok(Box::new(profile))
@@ -5253,6 +5262,13 @@ impl eframe::App for Desktop {
 		if let Some((scope, result)) = self.group_icon.poll(&self.state) {
 			self.messaging.accept_group_icon(&ctx, scope, result);
 		}
+		if let Some((scope, result)) = self
+			.profile_avatar
+			.poll_scoped(self.state.generation, |user| {
+				self.state.user.as_ref().is_some_and(|own| own.id == user)
+			}) {
+			self.messaging.accept_profile_picture(&ctx, scope, result);
+		}
 		if let Some((scope, result)) = self.server_icon.poll_server(&self.state) {
 			self.messaging.accept_server_icon(&ctx, scope, result);
 		}
@@ -5565,6 +5581,30 @@ impl eframe::App for Desktop {
 				self.state.status = error;
 			}
 
+			if let Some(scope) = self.messaging.take_profile_picture_request() {
+				let result = if scope.0 != self.state.generation
+					|| !self
+						.state
+						.user
+						.as_ref()
+						.is_some_and(|own| own.id == scope.1)
+				{
+					Err("Sign in before changing your profile picture")
+				} else {
+					self.profile_avatar.start(
+						scope,
+						self.runtime.handle(),
+						&ctx,
+						self.window.clone(),
+						"Choose profile picture",
+						256,
+					)
+				};
+				if let Err(error) = result {
+					self.messaging
+						.accept_profile_picture(&ctx, scope, Err(error));
+				}
+			}
 			if let Some(scope) = self.messaging.take_group_icon_request() {
 				let result = if scope.0 != self.state.generation || !self.state.is_group_dm(scope.1)
 				{
