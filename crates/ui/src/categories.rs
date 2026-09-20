@@ -207,12 +207,7 @@ fn rows<'a>(
 	let channels = &state.channels;
 	let mut categories: Vec<_> = channels
 		.iter()
-		.filter(|c| {
-			guild.is_some()
-				&& c.guild == guild
-				&& c.kind == 4
-				&& (show_hidden || state.can_view(c.id))
-		})
+		.filter(|c| guild.is_some() && c.guild == guild && c.kind == 4)
 		.collect();
 	categories.sort_unstable_by_key(|c| (c.position, c.id));
 	let category_ids: BTreeSet<_> = categories.iter().map(|c| c.id).collect();
@@ -2064,5 +2059,30 @@ mod tests {
 		}
 		assert_eq!(picked, Some(Id(8)));
 		assert!(view.archive_parent.is_none());
+	}
+	#[test]
+	fn issue_341_visible_children_keep_category_heading() {
+		let mut state = test_support::chat_demo_state();
+		state
+			.channels
+			.iter_mut()
+			.find(|channel| channel.id == Id(23))
+			.unwrap()
+			.name = "lowercase".into();
+		state.permissions.channels.remove(&Id(23));
+		state.permissions.clear_cache();
+		assert!(!state.can_view(Id(23)) && state.can_view(Id(20)));
+		let rows = rows(
+			&state,
+			Scope::Guild(Id(10)),
+			&Roster::default(),
+			&BTreeSet::new(),
+			false,
+		);
+		assert!(
+			rows.iter().any(
+				|row| matches!(row, Row::Category(category, _) if category.name == "lowercase")
+			)
+		);
 	}
 }
