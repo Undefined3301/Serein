@@ -493,10 +493,10 @@ pub fn demo_state() -> State {
 					name: "Introductions thread".into(),
 					kind: 11,
 					recipients: vec![],
-					last_message: None,
+					last_message: Some(Id(1_547_722_335_191_040_000)),
 					icon: None,
 					member_list_id: None,
-					message_count: None,
+					message_count: Some(4),
 				},
 			],
 		},
@@ -1111,6 +1111,7 @@ pub fn permission_snapshot(state: &State) -> model::permissions::Snapshot {
 		| p::SPEAK
 		| p::USE_VAD
 		| p::MANAGE_THREADS
+		| p::CREATE_PUBLIC_THREADS
 		| p::MANAGE_CHANNELS;
 	p::Snapshot {
 		guilds: state
@@ -1157,7 +1158,6 @@ pub fn system_demo_state() -> State {
 		(6, ""),
 		(9, ""),
 		(4, "welcome-and-updates"),
-		(18, "Introductions"),
 		(3, ""),
 		(67, ""),
 		(30, ""),
@@ -1168,6 +1168,7 @@ pub fn system_demo_state() -> State {
 		(61, ""),
 		(62, ""),
 		(65, ""),
+		(18, "Introductions thread"),
 		(222, ""),
 	]
 	.into_iter()
