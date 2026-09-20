@@ -181,16 +181,21 @@ impl State {
 				.any(|post| self.is_post_of(post, forum) && self.post_unread(post))
 	}
 
-	/// Mentions across a forum's loaded posts, bounded by the badge the sidebar can show.
-	pub fn forum_mentions(&self, forum: Id) -> u32 {
+	/// Loaded posts whose starter has not been read; replies do not make a post new again.
+	pub fn forum_new_count(&self, forum: Id) -> u32 {
 		if !self.is_forum(forum) {
 			return 0;
 		}
 		self.channels
 			.iter()
-			.filter(|post| self.is_post_of(post, forum))
-			.map(|post| self.mention_count(post.id))
-			.fold(0, u32::saturating_add)
+			.filter(|post| {
+				self.is_post_of(post, forum)
+					&& self.post_unread(post)
+					&& self
+						.read_marker(post.id)
+						.is_some_and(|read| read.is_none_or(|id| id < post.id))
+			})
+			.count() as u32
 	}
 
 	fn is_post_of(&self, post: &Channel, forum: Id) -> bool {

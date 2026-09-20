@@ -2431,8 +2431,8 @@ pub fn radio_row(
 }
 
 /// Continuous value with a thin track, accent fill and a round grab. Dragging anywhere on the
-/// track moves the value; arrow keys nudge it while focused. The current value is printed in a
-/// pill at the right so the control never needs egui's inline drag-value box.
+/// track moves the value; arrow keys nudge it while focused. Click the value to type an exact
+/// number, committed on Enter or focus loss so intermediate digits do not change settings.
 pub fn slider<T: egui::emath::Numeric>(
 	ui: &mut egui::Ui,
 	value: &mut T,
@@ -2444,8 +2444,12 @@ pub fn slider<T: egui::emath::Numeric>(
 	let span = (max - min).max(f64::EPSILON);
 	let width = ui.available_width();
 	let readout_width = 64.0;
-	let (rect, mut response) =
-		ui.allocate_exact_size(egui::vec2(width, 28.0), egui::Sense::click_and_drag());
+	let (id, rect) = ui.allocate_space(egui::vec2(width, 28.0));
+	let mut response = ui.interact(
+		rect.with_max_x(rect.right() - readout_width),
+		id,
+		egui::Sense::click_and_drag(),
+	);
 	let track = egui::Rect::from_min_max(
 		egui::pos2(rect.left() + 9.0, rect.center().y - 3.0),
 		egui::pos2(rect.right() - readout_width - 9.0, rect.center().y + 3.0),
@@ -2517,18 +2521,100 @@ pub fn slider<T: egui::emath::Numeric>(
 		egui::pos2(rect.right() - readout_width, rect.top() + 2.0),
 		egui::pos2(rect.right(), rect.bottom() - 2.0),
 	);
-	painter.rect_filled(pill, 6, p.base.gamma_multiply(alpha));
-	painter.text(
-		pill.center(),
-		egui::Align2::CENTER_CENTER,
-		readout,
-		FontId::new(13.0, medium_family(ui.ctx())),
-		if enabled { p.text_strong } else { p.muted },
+	let editor = ui.put(
+		pill,
+		egui::DragValue::new(value)
+			.range(range)
+			.speed(if T::INTEGRAL { 1.0 } else { span / 100.0 })
+			.fixed_decimals(if T::INTEGRAL { 0 } else { 1 })
+			.suffix(suffix)
+			.update_while_editing(false),
 	);
 	if enabled && (response.hovered() || response.dragged()) {
 		ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
 	}
-	response
+	response | editor
+}
+
+/// Offline pointer/keyboard check for the shared settings control.
+#[cfg(debug_assertions)]
+pub fn debug_slider_check() {
+	let ctx = egui::Context::default();
+	apply(&ctx);
+	let mut value = 94u16;
+	let mut frame = |events| {
+		let mut rect = egui::Rect::NOTHING;
+		let mut changed = false;
+		ctx.run_ui(
+			egui::RawInput {
+				screen_rect: Some(egui::Rect::from_min_size(
+					egui::Pos2::ZERO,
+					egui::vec2(500.0, 100.0),
+				)),
+				events,
+				..Default::default()
+			},
+			|ui| {
+				let response = slider(ui, &mut value, 80..=150, "%");
+				rect = response.rect;
+				changed = response.changed();
+			},
+		)
+		.drop_without_applying_deltas();
+		(value, changed, rect)
+	};
+	frame(vec![]);
+	let (_, _, rect) = frame(vec![]);
+	let pointer = |pos, pressed| {
+		vec![
+			egui::Event::PointerMoved(pos),
+			egui::Event::PointerButton {
+				pos,
+				button: egui::PointerButton::Primary,
+				pressed,
+				modifiers: egui::Modifiers::NONE,
+			},
+		]
+	};
+	let edit = rect.right_center() - egui::vec2(32.0, 0.0);
+	for input in ["110", "999", "invalid"] {
+		let before = frame(vec![]).0;
+		frame(pointer(edit, true));
+		assert_eq!(
+			frame(pointer(edit, false)).0,
+			before,
+			"clicking the value must not move the track"
+		);
+		frame(vec![]);
+		assert_eq!(
+			frame(vec![egui::Event::Text(input.into())]).0,
+			before,
+			"typing must wait for commit"
+		);
+		let (value, changed, _) = frame(vec![egui::Event::Key {
+			key: egui::Key::Enter,
+			physical_key: None,
+			pressed: true,
+			repeat: false,
+			modifiers: egui::Modifiers::NONE,
+		}]);
+		assert_eq!(
+			value,
+			match input {
+				"110" => 110,
+				"999" => 150,
+				_ => before,
+			}
+		);
+		assert_eq!(changed, value != before);
+		frame(vec![]);
+	}
+	let left = rect.left_center() + egui::vec2(9.0, 0.0);
+	frame(pointer(left, true));
+	assert_eq!(frame(pointer(left, false)).0, 80, "track clicks still work");
+	println!(
+		"Settings slider debug check passed: click to edit, deferred commit, range bounds, invalid input, and track clicks."
+	);
 }
 
 /// Titled [`slider`] with an optional explanation, for settings pages.

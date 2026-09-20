@@ -36,6 +36,66 @@ pub fn check() {
 	state.permissions.replace(permissions).unwrap();
 	state.select(Id(26));
 	let post = state.forum_posts(Id(26))[0].clone();
+	{
+		let mut alerts = test_support::demo_state();
+		let owner = alerts.user.clone().unwrap();
+		alerts
+			.apply_notification_preferences(client_core::notifications::Event::Settings {
+				entries: vec![client_core::notifications::Setting {
+					guild: post.guild,
+					muted: Some(false),
+					level: Some(1),
+					..Default::default()
+				}],
+				replace: true,
+			})
+			.unwrap();
+		alerts
+			.apply_notification_preferences(client_core::notifications::Event::Presence(Some(
+				false,
+			)))
+			.unwrap();
+		let mut message = test_support::message(post.last_message.unwrap().0 + 1, post.id);
+		message.author.id = Id(987654321);
+		message.mentions = vec![owner.clone()];
+		message.content = format!(
+			"Hello <@{}> <@!{}> <@&999> <#{}>",
+			owner.id, owner.id, post.id
+		);
+		alerts.apply(Envelope {
+			generation: alerts.generation,
+			event: client_core::Event::Message(message),
+		});
+		let notification = alerts
+			.take_notification()
+			.expect("synthetic mention notification");
+		assert_eq!(
+			notification.preview,
+			format!(
+				"Hello @{} @{} @Unknown role #{}",
+				owner.name, owner.name, post.name
+			)
+		);
+		assert_eq!(alerts.mention_count(post.id), 1);
+		let new_posts = alerts.forum_new_count(Id(26));
+		assert!(new_posts > 0);
+		alerts
+			.apply_read_state(client_core::read_state::Event::Ack {
+				channel: post.id,
+				message: Some(post.id),
+				manual: true,
+				mention_count: Some(1),
+				version: None,
+			})
+			.unwrap();
+		assert!(alerts.post_unread(alerts.channel(post.id).unwrap()));
+		assert_eq!(alerts.forum_new_count(Id(26)), new_posts - 1);
+		assert_eq!(alerts.mention_count(post.id), 1);
+		println!(
+			"Forum notifications debug check passed: readable mentions, post badge, and replies excluded from new posts."
+		);
+	}
+
 	// READY may contain a cursor before its unjoined forum post is loaded.
 	let latest = post.last_message.unwrap();
 	state.channels.retain(|channel| channel.id != post.id);
