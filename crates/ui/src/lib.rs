@@ -282,7 +282,10 @@ pub struct MessagingUi {
 	/// Device-local voice intent, retained between calls and restarts.
 	pub voice_muted: bool,
 	pub voice_deafened: bool,
-	pub voice_noise_suppression: bool,
+	pub voice_processing: model::voice_settings::VoiceProcessing,
+	pub voice_preview_requested: bool,
+	pub voice_preview_level: Option<f32>,
+	pub voice_preview_status: &'static str,
 	/// Device-local application shortcuts; the desktop host mirrors the global binding.
 	pub keybinds: model::Keybinds,
 	keybind_capture: Option<model::KeybindAction>,

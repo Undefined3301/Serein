@@ -138,7 +138,7 @@ AEC3, and its sonora-aec3/agc2/common-audio/fft/ns/simd 0.2.0 components
 dignifiedquire). The unmodified workspace license is
 `assets/licenses/voice/sonora-LICENSE.txt`, staged by existing voice packaging.
 Krisp is not bundled. No extra native SDK or model download is required.
-Sonora noise suppression and AGC are not enabled by this integration.
+Custom microphone profiles can enable Sonora noise suppression and digital AGC2.
 
 The macOS voice permission adapter additionally uses **objc2-av-foundation
 0.3.2** (Zlib OR Apache-2.0 OR MIT) and existing objc2 0.6.4 / block2 0.6.2.

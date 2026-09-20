@@ -46,6 +46,9 @@ pub struct AppPreferences {
 	pub blur: u8,
 	pub transparent_all: bool,
 	pub voice_noise_suppression: bool,
+	/// Absent in older preferences; migrate using the legacy suppression setting.
+	#[serde(default)]
+	pub voice_processing: Option<model::voice_settings::VoiceProcessing>,
 	pub voice_push_to_talk: bool,
 	pub voice_muted: bool,
 	pub voice_deafened: bool,
@@ -79,6 +82,7 @@ impl Default for AppPreferences {
 			blur: 50,
 			transparent_all: false,
 			voice_noise_suppression: false,
+			voice_processing: Some(model::voice_settings::VoiceProcessing::default()),
 			voice_push_to_talk: false,
 			voice_muted: false,
 			voice_deafened: false,
@@ -100,6 +104,9 @@ impl AppPreferences {
 			&& self.blur <= 100
 			&& self.input_percent <= 200
 			&& self.output_percent <= 200
+			&& self
+				.voice_processing
+				.is_none_or(|value| value.custom.is_valid())
 			&& self.expanded_folders.len() <= 256
 			&& self.user_volumes.len() <= 64
 			&& self.user_volumes.iter().all(|(_, volume)| *volume <= 200)
@@ -1551,6 +1558,10 @@ mod tests {
 	fn app_preferences_round_trip_and_reject_invalid_replacement() {
 		let store = LocalStore::initialize(Connection::open_in_memory().unwrap()).unwrap();
 		assert_eq!(store.app_preferences().unwrap(), AppPreferences::default());
+		let legacy: AppPreferences =
+			serde_json::from_str(r#"{"voice_noise_suppression":true}"#).unwrap();
+		assert!(legacy.voice_processing.is_none());
+		assert!(legacy.voice_noise_suppression);
 		let mut value = AppPreferences {
 			notifications_enabled: true,
 			hide_title_bar: true,
@@ -1566,6 +1577,7 @@ mod tests {
 				..Default::default()
 			},
 			voice_noise_suppression: true,
+			voice_processing: Some(model::voice_settings::VoiceProcessing::from_legacy(true)),
 			voice_muted: true,
 			voice_deafened: true,
 			voice_input: Some("synthetic microphone".into()),
@@ -1575,6 +1587,32 @@ mod tests {
 		};
 		store.save_app_preferences(&value).unwrap();
 		assert_eq!(store.app_preferences().unwrap(), value);
+		value
+			.voice_processing
+			.as_mut()
+			.unwrap()
+			.custom
+			.sensitivity_db = Some(-81);
+		assert!(store.save_app_preferences(&value).is_err());
+		value
+			.voice_processing
+			.as_mut()
+			.unwrap()
+			.custom
+			.sensitivity_db = None;
+		value
+			.voice_processing
+			.as_mut()
+			.unwrap()
+			.custom
+			.suppression_level = 4;
+		assert!(store.save_app_preferences(&value).is_err());
+		value
+			.voice_processing
+			.as_mut()
+			.unwrap()
+			.custom
+			.suppression_level = 0;
 		value.transparency = 101;
 		assert!(store.save_app_preferences(&value).is_err());
 		value.transparency = 30;

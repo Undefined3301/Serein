@@ -174,6 +174,10 @@ impl MessagingUi {
 		}
 	}
 
+	pub fn voice_settings_open(&self) -> bool {
+		self.settings.open && self.settings.page == Page::Voice
+	}
+
 	pub(super) fn open_voice_settings(&mut self) {
 		self.settings.open = true;
 		self.settings.page = Page::Voice;
