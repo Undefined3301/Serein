@@ -434,11 +434,21 @@ impl State {
 			.unwrap_or(message.author_roles.as_slice());
 		self.display_roles(guild, roles).1.map(|role| role.color)
 	}
-	pub fn forum_author_color(&self, channel: Id, webhook: bool, roles: &[Id]) -> Option<u32> {
+	pub fn forum_author_color(
+		&self,
+		channel: Id,
+		author: Id,
+		webhook: bool,
+		roles: &[Id],
+	) -> Option<u32> {
 		if webhook {
 			return None;
 		}
 		let guild = self.channel(channel)?.guild?;
+		let roles = self
+			.selected
+			.and_then(|selected| self.live_author_roles(guild, selected, author))
+			.unwrap_or(roles);
 		self.display_roles(guild, roles).1.map(|role| role.color)
 	}
 	fn live_author_roles(&self, guild: Id, channel: Id, user: Id) -> Option<&[Id]> {

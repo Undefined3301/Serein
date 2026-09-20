@@ -42,6 +42,7 @@ pub struct Summary {
 pub struct Latest {
 	pub id: Id,
 	pub channel: Id,
+	pub author_id: Id,
 	pub author: String,
 	pub roles: Vec<Id>,
 	pub webhook: bool,
@@ -67,6 +68,7 @@ impl Summary {
 				Some(hit) => {
 					self.messages.first() == Some(&hit.id)
 						&& hit.channel == channel
+						&& hit.author_id.0 > 0
 						&& hit.author.len() <= 512
 						&& hit.roles.len() <= crate::permissions::MAX_MEMBER_ROLES
 						&& hit.excerpt.len() <= 1024

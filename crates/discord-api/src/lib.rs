@@ -559,11 +559,15 @@ impl DiscordApi {
 					result,
 				}
 			}
-			Command::ForumSummary { channel, request } => Event::ForumSummary {
-				channel,
-				request,
-				result: self.forum_summary(channel).await,
-			},
+			Command::ForumSummaries { channels, request } => {
+				Event::ForumSummaries {
+					request,
+					results: futures_util::future::join_all(channels.into_iter().map(
+						|channel| async move { (channel, self.forum_summary(channel).await) },
+					))
+					.await,
+				}
+			}
 			Command::ForumPosts {
 				parent,
 				guild,

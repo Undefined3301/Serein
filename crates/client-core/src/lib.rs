@@ -114,8 +114,8 @@ pub enum Command {
 		attachments: Vec<String>,
 		request: u64,
 	},
-	ForumSummary {
-		channel: Id,
+	ForumSummaries {
+		channels: Vec<Id>,
 		request: u64,
 	},
 	ForumPosts {
@@ -375,10 +375,9 @@ pub enum Event {
 		request: u64,
 		result: Result<model::archives::Page, auth::Failure>,
 	},
-	ForumSummary {
-		channel: Id,
+	ForumSummaries {
 		request: u64,
-		result: Result<model::forum::Summary, auth::Failure>,
+		results: Vec<(Id, Result<model::forum::Summary, auth::Failure>)>,
 	},
 	ForumPosts {
 		parent: Id,
@@ -1224,8 +1223,14 @@ impl State {
 			self.apply_archives(parent, request, Err(auth::Failure::Capacity));
 			return;
 		}
-		if let Command::ForumSummary { channel, request } = command {
-			self.apply_forum_summary(channel, request, Err(auth::Failure::Capacity));
+		if let Command::ForumSummaries { channels, request } = command {
+			self.apply_forum_summaries(
+				request,
+				channels
+					.into_iter()
+					.map(|channel| (channel, Err(auth::Failure::Capacity)))
+					.collect(),
+			);
 			return;
 		}
 		if let Command::ForumPosts {
@@ -1691,12 +1696,8 @@ impl State {
 				self.apply_archives(parent, request, result);
 				Ok(())
 			}
-			Event::ForumSummary {
-				channel,
-				request,
-				result,
-			} => {
-				self.apply_forum_summary(channel, request, result);
+			Event::ForumSummaries { request, results } => {
+				self.apply_forum_summaries(request, results);
 				Ok(())
 			}
 			Event::ForumPosts {
@@ -2946,8 +2947,15 @@ impl Event {
 				Self::Archives { result, .. } => {
 					result.as_ref().map_or(0, model::archives::Page::bytes)
 				}
-				Self::ForumSummary { result, .. } => {
-					result.as_ref().map_or(0, model::forum::Summary::bytes)
+				Self::ForumSummaries { results, .. } => {
+					results.capacity()
+						* size_of::<(Id, Result<model::forum::Summary, auth::Failure>)>()
+						+ results
+							.iter()
+							.map(|(_, result)| {
+								result.as_ref().map_or(0, model::forum::Summary::bytes)
+							})
+							.sum::<usize>()
 				}
 				Self::ForumPosts { result, .. } => {
 					result.as_ref().map_or(0, model::forum::Page::bytes)

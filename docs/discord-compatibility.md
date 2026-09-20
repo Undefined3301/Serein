@@ -1471,6 +1471,7 @@ synthetic check.
 
 Forum cards now load a bounded recent-message page for visible active posts through
 [Get Channel Messages](https://discord.com/developers/docs/resources/message#get-channel-messages).
+Up to four visible cards load concurrently under the existing REST permit bound.
 They show the latest plain preview with the author's known guild role color and count IDs newer than the service read cursor;
 `50+ New` indicates that the cursor precedes the retained 50-message window. Failed
 or unavailable summaries remain explicitly unavailable until refresh or new activity;

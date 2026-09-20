@@ -64,16 +64,18 @@ pub fn check() {
 		.unwrap();
 	state.demo = false;
 	state.posts.parent = Some(Id(26));
-	let Command::ForumSummary { channel, request } = state.request_post_summary(post.id).unwrap()
+	let Command::ForumSummaries { channels, request } =
+		state.request_post_summaries(vec![post.id]).unwrap()
 	else {
 		panic!("summary request");
 	};
+	assert_eq!(channels, vec![post.id]);
 	let rows: Vec<_> = (0..3)
 		.map(|offset| {
 			serde_json::json!({
 				"id": (latest.0 - offset).to_string(), "channel_id": post.id.to_string(),
-				"author": {"id": "123", "username": "Synthetic"},
-				"member": {"roles": ["101"]}, "content": "Latest synthetic reply"
+				"author": {"id": "987654321", "username": "Synthetic"},
+				"content": "Latest synthetic reply"
 			})
 		})
 		.collect();
@@ -82,7 +84,7 @@ pub fn check() {
 		.unwrap()
 		.into_summary(post.id)
 		.unwrap();
-	state.apply_forum_summary(channel, request, Ok(summary));
+	state.apply_forum_summaries(request, vec![(post.id, Ok(summary))]);
 	assert_eq!(state.post_new_count(&post), Some((2, true)));
 	let latest_summary = state
 		.post_summary(post.id)
@@ -90,8 +92,30 @@ pub fn check() {
 		.latest
 		.as_ref()
 		.unwrap();
+	let author_id = latest_summary.author_id;
+	let webhook = latest_summary.webhook;
+	let author_roles = latest_summary.roles.clone();
 	assert_eq!(
-		state.forum_author_color(post.id, latest_summary.webhook, &latest_summary.roles),
+		state.forum_author_color(post.id, author_id, webhook, &author_roles),
+		None
+	);
+	let Some(Command::MemberSearch(author_request)) = state.request_author_members(&[author_id])
+	else {
+		panic!("forum author lookup")
+	};
+	let mut author_event = discord_gateway::debug_member_search_check(author_request);
+	if let client_core::Event::MemberSearch {
+		result: Ok(rows), ..
+	} = &mut author_event
+	{
+		rows[0].roles = vec![Id(101)];
+	}
+	state.apply(Envelope {
+		generation: state.generation,
+		event: author_event,
+	});
+	assert_eq!(
+		state.forum_author_color(post.id, author_id, webhook, &author_roles),
 		Some(0x68ada4)
 	);
 	let mut other_forum = state.channel(Id(26)).unwrap().clone();
@@ -105,6 +129,19 @@ pub fn check() {
 		!state.needs_post_summary(post.id),
 		"forum switches reuse a fresh summary"
 	);
+	let uncached: Vec<_> = state
+		.forum_posts(Id(26))
+		.into_iter()
+		.filter(|candidate| candidate.id != post.id)
+		.take(client_core::forum::SUMMARY_BATCH)
+		.map(|candidate| candidate.id)
+		.collect();
+	let batch = state.request_post_summaries(uncached).unwrap();
+	assert!(
+		matches!(&batch, Command::ForumSummaries { channels, .. } if channels.len() > 1),
+		"visible forum summaries share one concurrent batch"
+	);
+	state.command_rejected(batch);
 	assert!(
 		discord_protocol::decode::<discord_protocol::forum::Recent>(&wire)
 			.unwrap()
@@ -117,6 +154,7 @@ pub fn check() {
 		latest: Some(model::forum::Latest {
 			id: latest,
 			channel: post.id,
+			author_id: Id(987654321),
 			author: "Synthetic".into(),
 			roles: vec![],
 			webhook: false,

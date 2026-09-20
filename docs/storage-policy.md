@@ -968,8 +968,9 @@ is enforced; paths and contents never enter diagnostics or model/UI form data.
 
 ### Forum card summaries
 
-Visible active forum posts lazily request one recent history page at a time, using
-at most 512 KiB of HTTP input and 50 records. The worker retains only sorted message
+Visible active forum posts request up to four recent history pages concurrently,
+matching the existing REST permit bound. Each uses at most 512 KiB of HTTP input and
+50 records. The worker retains only sorted message
 IDs and the latest author's name, bounded role IDs, webhook marker and plain excerpt;
 spoilers stay concealed. The session keeps at most 200 summaries of 4 KiB each, plus
 bounded map metadata, in RAM and reuses them across forum switches. Refresh,

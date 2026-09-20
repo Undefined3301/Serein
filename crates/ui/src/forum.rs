@@ -95,7 +95,8 @@ impl ForumUi {
 		let mut open = None;
 		let mut archive_request = None;
 		let mut posts_request = false;
-		let mut summary_request = None;
+		let mut summary_requests = Vec::new();
+		let mut author_lookup = Vec::new();
 		session
 			.attach(
 				ui,
@@ -164,11 +165,20 @@ impl ForumUi {
 							}
 							let response =
 								card(ui, state, post, (false, state.post_unread(post)), now);
-							if summary_request.is_none()
+							if summary_requests.len() < client_core::forum::SUMMARY_BATCH
 								&& ui.is_rect_visible(response.rect)
 								&& state.needs_post_summary(post.id)
 							{
-								summary_request = Some(post.id);
+								summary_requests.push(post.id);
+							}
+							if let Some(latest) = state
+								.post_summary(post.id)
+								.and_then(|summary| summary.latest.as_ref())
+								&& !latest.webhook && latest.roles.is_empty()
+								&& author_lookup.len() < client_core::member_search::LIMIT
+								&& !author_lookup.contains(&latest.author_id)
+							{
+								author_lookup.push(latest.author_id);
 							}
 							menu.context(&response, state, post, view);
 							if response.clicked() {
@@ -179,11 +189,11 @@ impl ForumUi {
 						for post in archived {
 							let response =
 								card(ui, state, post, (true, state.post_unread(post)), now);
-							if summary_request.is_none()
+							if summary_requests.len() < client_core::forum::SUMMARY_BATCH
 								&& ui.is_rect_visible(response.rect)
 								&& state.needs_post_summary(post.id)
 							{
-								summary_request = Some(post.id);
+								summary_requests.push(post.id);
 							}
 							menu.context(&response, state, post, view);
 							if response.clicked() {
@@ -195,8 +205,11 @@ impl ForumUi {
 					});
 			});
 		if open.is_none()
-			&& let Some(command) = summary_request.and_then(|id| state.request_post_summary(id))
+			&& let Some(command) = state.request_post_summaries(summary_requests)
 		{
+			commands.push(command);
+		}
+		if let Some(command) = state.request_author_members(&author_lookup) {
 			commands.push(command);
 		}
 		if let Some(open) = open {
@@ -637,7 +650,12 @@ fn card(
 							ui.horizontal(|ui| {
 								ui.spacing_mut().item_spacing.x = 5.0;
 								let author_color = state
-									.forum_author_color(post.id, latest.webhook, &latest.roles)
+									.forum_author_color(
+										post.id,
+										latest.author_id,
+										latest.webhook,
+										&latest.roles,
+									)
 									.map_or(colors.text_strong, |rgb| {
 										design::role_name_color(
 											rgb,

@@ -3,6 +3,7 @@ use crate::{Command, MAX_CONTENT, MAX_NAV, State, auth::AuthState, auth::Failure
 use model::{Channel, Id, permissions as p};
 
 pub const MAX_TITLE: usize = 100;
+pub const SUMMARY_BATCH: usize = 4;
 
 /// The on-demand active-post list of one forum; the gateway only delivers joined posts.
 #[derive(Default)]
@@ -10,7 +11,7 @@ pub struct Posts {
 	// At most 200 summaries of at most 4 KiB each across the current session.
 	summaries: std::collections::BTreeMap<Id, (Option<Id>, Option<model::forum::Summary>)>,
 	summary_request: u64,
-	summary_pending: Option<(Id, u64)>,
+	summary_pending: Option<u64>,
 	pub parent: Option<Id>,
 	pub request: u64,
 	pub loading: bool,
@@ -41,13 +42,6 @@ impl State {
 		let mut summaries = std::mem::take(&mut self.posts.summaries);
 		summaries.retain(|channel, _| self.can_read_history(*channel));
 		self.posts.summaries = summaries;
-		if self
-			.posts
-			.summary_pending
-			.is_some_and(|(channel, _)| !self.can_read_history(channel))
-		{
-			self.posts.summary_pending = None;
-		}
 	}
 
 	pub fn post_summary(&self, channel: Id) -> Option<&model::forum::Summary> {
@@ -64,7 +58,6 @@ impl State {
 		!self.demo
 			&& self.auth == AuthState::Authenticated
 			&& self.gateway_connected
-			&& self.posts.summary_pending.is_none()
 			&& (self.posts.summaries.contains_key(&channel)
 				|| self.posts.summaries.len() < model::forum::MAX_POSTS)
 			&& self.can_read_history(channel)
@@ -80,43 +73,55 @@ impl State {
 			})
 	}
 
-	pub fn request_post_summary(&mut self, channel: Id) -> Option<Command> {
-		if !self.needs_post_summary(channel) {
+	pub fn request_post_summaries(&mut self, channels: Vec<Id>) -> Option<Command> {
+		if self.posts.summary_pending.is_some()
+			|| channels.is_empty()
+			|| channels.len() > SUMMARY_BATCH
+			|| channels.iter().enumerate().any(|(i, channel)| {
+				channels[..i].contains(channel) || !self.needs_post_summary(*channel)
+			}) {
 			return None;
 		}
-		let latest = self.channel(channel)?.last_message;
 		self.posts.summary_request = self.posts.summary_request.wrapping_add(1);
 		let request = self.posts.summary_request;
-		self.posts.summary_pending = Some((channel, request));
-		// A failure stays unavailable until Refresh or new activity, without a retry loop.
-		self.posts.summaries.insert(channel, (latest, None));
-		Some(Command::ForumSummary { channel, request })
+		self.posts.summary_pending = Some(request);
+		for channel in &channels {
+			let latest = self.channel(*channel).and_then(|post| post.last_message);
+			// A failure stays unavailable until Refresh or new activity, without a retry loop.
+			self.posts.summaries.insert(*channel, (latest, None));
+		}
+		Some(Command::ForumSummaries { channels, request })
 	}
 
-	pub fn apply_forum_summary(
+	pub fn apply_forum_summaries(
 		&mut self,
-		channel: Id,
 		request: u64,
-		result: Result<model::forum::Summary, Failure>,
+		results: Vec<(Id, Result<model::forum::Summary, Failure>)>,
 	) {
-		if self.posts.summary_pending != Some((channel, request)) {
+		if self.posts.summary_pending != Some(request) {
 			return;
 		}
 		self.posts.summary_pending = None;
-		match result {
-			Ok(summary)
-				if summary.valid(channel)
-					&& self.can_read_history(channel)
-					&& self.gateway_connected =>
-			{
-				if let Some((_, value)) = self.posts.summaries.get_mut(&channel) {
-					*value = Some(summary);
+		for (channel, result) in results {
+			let current = self.channel(channel).and_then(|post| post.last_message);
+			match result {
+				Ok(summary)
+					if summary.valid(channel)
+						&& self.can_read_history(channel)
+						&& self.gateway_connected =>
+				{
+					if let Some((latest, value)) = self.posts.summaries.get_mut(&channel)
+						&& *latest == current
+					{
+						*value = Some(summary);
+					}
 				}
+				Err(failure) if failure.ends_session() && failure != Failure::Capacity => {
+					self.fail(failure);
+					break;
+				}
+				_ => {}
 			}
-			Err(failure) if failure.ends_session() && failure != Failure::Capacity => {
-				self.fail(failure)
-			}
-			_ => {}
 		}
 	}
 

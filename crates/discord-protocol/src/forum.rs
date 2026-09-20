@@ -101,6 +101,7 @@ impl Recent {
 		let latest = messages.first().map(|message| model::forum::Latest {
 			id: message.id,
 			channel: message.channel,
+			author_id: message.author.id,
 			author: message
 				.author_nick
 				.clone()
