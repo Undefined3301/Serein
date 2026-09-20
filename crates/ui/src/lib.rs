@@ -2024,7 +2024,7 @@ impl MessagingUi {
 					ui.add_space(6.0);
 					ui.label(
 						egui::RichText::new(if available {
-							"Up to 10 files · 20 MB total · Review before sending"
+							"Up to 10 files · 500 MB max · Account limit applies"
 						} else {
 							"Return to an available conversation after the current operation finishes"
 						})
@@ -2365,7 +2365,7 @@ impl MessagingUi {
                             icons::button(ui, icons::Icon::Attach, 28.0, "Attach files")
                         })
                         .inner
-                        .on_hover_text("Choose, drop, or paste files (Ctrl/Cmd/Option+V). Up to 10 files and 20 MB total. Send starts the upload.");
+						.on_hover_text("Choose, drop, or paste files (Ctrl/Cmd/Option+V). Up to 10 files and 500 MB total; account limits may be lower. Send starts the upload.");
                     if !editing_here { self.extensions.composer_menu(ui, state); }
                     if attach.clicked() {
                         self.attach_requested = true;

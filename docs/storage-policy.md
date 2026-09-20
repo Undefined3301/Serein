@@ -332,7 +332,7 @@ The owner explicitly withdrew the no-storage policy on 2026-09-09. Local files, 
 | Avatar, server-icon, profile-banner and message-preview PNGs | Account subdirectory beneath `dirs::data_local_dir()/serein/avatars`; 1 GiB / 4096 files per account, 90 days since last use, at most 2 MiB per preview (512 KiB for icons/avatars) | Clear cache or account logout; versioned avatar/icon/banner keys and hashed media-source keys separate changed images |
 | Selected profile metadata | One session-memory record, at most 64 KiB; profile response body at most 256 KiB | Closing/changing the profile, session reset or logout; no SQLite profile table |
 | Explicit attachment downloads | User-selected destination, 1 byte through 100 MiB per original file; one active dialog/transfer; randomized sibling partial while writing | Cancel/error removes the partial when possible; completed downloads remain user-owned outside cache cleanup |
-| Selected upload source | One session-only path (4096 encoded bytes), filename (256 UTF-8 bytes) and size/modified metadata; file at most 20,000,000 bytes, read in 64 KiB chunks | Removal, send completion/failure, cancellation or session teardown; source is never copied to a recovery/cache file or deleted |
+| Selected upload source | Up to ten session-only paths (4096 encoded bytes each), filenames (256 UTF-8 bytes each) and size/modified metadata; 500,000,000 bytes total, read in 64 KiB chunks | Removal, send completion/failure, cancellation or session teardown; sources are never copied to recovery/cache files or deleted |
 | Drafts | 64 globally, at most 2 MiB content; each draft at most 8192 UTF-8 bytes | Clear draft, confirmed send, or account logout |
 | Appearance | One application-wide SQLite row: Light or Dark; absent means System | Select System to remove the override; retained across account logout |
 | Reading/layout | One application-wide SQLite row with three bounded scalar fields | Reset reading and layout removes only this override; retained across account logout |
@@ -955,7 +955,7 @@ IDs and file selections are never persisted. Private/ephemeral responses are a
 session-only list of at most 16 messages / 512 KiB, each at most 256 KiB, released
 on navigation, disconnect or session change. They bypass the channel timeline,
 notifications and disk writes; the disk adapter rejects ephemeral records.
-Native modal attachments reuse the bounded upload worker (10 files / 20 MB total),
+Native modal attachments reuse the bounded upload worker (10 files / 500 MB total),
 with explicit selection and no automatic write retry. Each of at most five form
-file fields stages at most 10 files / 20 MB before the combined submission bound
+file fields stages at most 10 files / 500 MB before the combined submission bound
 is enforced; paths and contents never enter diagnostics or model/UI form data.

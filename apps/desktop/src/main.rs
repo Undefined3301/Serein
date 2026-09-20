@@ -1327,7 +1327,7 @@ impl Desktop {
 			);
 			messaging.toasts.push(
 				ui::design::Level::Warning,
-				"Attachments must total at most 20 MB",
+				"Attachments must total at most 500 MB; account limits may be lower",
 			);
 			messaging
 				.toasts

@@ -130,7 +130,7 @@ impl Desktop {
 		{
 			self.state.command_rejected(command);
 			self.state.interactions.error =
-				Some("Files were not sent; select up to 10 files totaling at most 20 MB");
+				Some("Files were not sent; select up to 10 files totaling at most 500 MB");
 			return;
 		}
 		let (progress, receive) =
