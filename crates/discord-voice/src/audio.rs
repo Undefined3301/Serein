@@ -697,37 +697,32 @@ fn open_input_stream(
 	let input = choose(host, settings.input.as_deref(), true)?;
 	let input_id = input.id().ok().map(|id| id.to_string());
 	let input_config = config(&input, true)?;
+	let stream_config = input_config.config();
+	#[cfg(target_os = "linux")]
+	let stream_config = {
+		let mut config = stream_config;
+		if host.id() == cpal::HostId::PulseAudio {
+			// Server-default record fragments can exceed our 160 ms ring. An
+			// overrun resets and drains it, repeatedly discarding captured speech.
+			config.buffer_size = cpal::BufferSize::Fixed(config.sample_rate / 50);
+		}
+		config
+	};
 	let (input_write, input_read) = rtrb::RingBuffer::new(8);
 	let capture = Capture::new(input_config.sample_rate(), input_write);
 	let stream = match input_config.sample_format() {
-		cpal::SampleFormat::F32 => input_stream::<f32>(
-			&input,
-			&input_config.config(),
-			capture,
-			gate.clone(),
-			revision,
-		),
-		cpal::SampleFormat::I16 => input_stream::<i16>(
-			&input,
-			&input_config.config(),
-			capture,
-			gate.clone(),
-			revision,
-		),
-		cpal::SampleFormat::I32 => input_stream::<i32>(
-			&input,
-			&input_config.config(),
-			capture,
-			gate.clone(),
-			revision,
-		),
-		cpal::SampleFormat::U16 => input_stream::<u16>(
-			&input,
-			&input_config.config(),
-			capture,
-			gate.clone(),
-			revision,
-		),
+		cpal::SampleFormat::F32 => {
+			input_stream::<f32>(&input, &stream_config, capture, gate.clone(), revision)
+		}
+		cpal::SampleFormat::I16 => {
+			input_stream::<i16>(&input, &stream_config, capture, gate.clone(), revision)
+		}
+		cpal::SampleFormat::I32 => {
+			input_stream::<i32>(&input, &stream_config, capture, gate.clone(), revision)
+		}
+		cpal::SampleFormat::U16 => {
+			input_stream::<u16>(&input, &stream_config, capture, gate.clone(), revision)
+		}
 		_ => Err("Microphone sample format is not supported"),
 	}?;
 	stream
