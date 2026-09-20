@@ -8,6 +8,7 @@ pub mod forum;
 pub mod gifs;
 pub mod guild_folders;
 pub mod permissions;
+pub mod stickers;
 pub use permissions::ChannelAccess;
 #[cfg(test)]
 mod permissions_tests;
@@ -56,6 +57,8 @@ pub const EVENT_SLOTS: usize = 8; // UI drain batch; reliable events share a 32 
 pub const COMMAND_SLOTS: usize = 16; // ordinary commands <=16 KiB; bulk DM settings <=33 KiB; channel edit <=128 KiB; group icon <=350 KiB
 
 pub enum Command {
+	StickerPacks,
+	Sticker(Id),
 	Interaction(interactions::Request),
 	MemberSearch(member_search::Request),
 	MessagingPermissions {
@@ -196,6 +199,7 @@ pub enum Command {
 		request: u64,
 	},
 	Send {
+		sticker: Option<Id>,
 		channel: Id,
 		content: String,
 		nonce: String,
@@ -219,6 +223,7 @@ pub enum Command {
 	},
 }
 pub struct Startup {
+	pub external_stickers: bool,
 	pub user: User,
 	pub guilds: Vec<Guild>,
 	pub channels: Vec<Channel>,
@@ -308,11 +313,16 @@ fn prepare_navigation(
 		|| guilds
 			.iter()
 			.any(|g| g.emojis.as_ref().is_some_and(|e| !valid_custom_emojis(e)))
-		|| guilds.iter().map(Guild::bytes).sum::<usize>()
-			+ channels.iter().map(Channel::bytes).sum::<usize>()
-			+ permissions.bytes()
-			+ spare_bytes
-			> model::account::MAX_BYTES
+		|| guilds.iter().any(|g| {
+			g.stickers.as_ref().is_some_and(|s| {
+				!valid_stickers(s, MAX_GUILD_STICKERS)
+					|| s.iter().any(|sticker| sticker.guild_id != Some(g.id))
+			})
+		}) || guilds.iter().map(Guild::bytes).sum::<usize>()
+		+ channels.iter().map(Channel::bytes).sum::<usize>()
+		+ permissions.bytes()
+		+ spare_bytes
+		> model::account::MAX_BYTES
 	{
 		return Err("Account navigation exceeds safe capacity");
 	}
@@ -343,6 +353,19 @@ fn prepare_navigation(
 	Ok(permission_state)
 }
 pub enum Event {
+	StickerEntitlement {
+		user: Id,
+		premium_type: Patch<u8>,
+	},
+	StickerPacks(Result<Vec<model::StickerPack>, auth::Failure>),
+	Sticker {
+		id: Id,
+		result: Result<model::Sticker, auth::Failure>,
+	},
+	GuildStickers {
+		guild: Id,
+		stickers: Vec<model::Sticker>,
+	},
 	Interaction(interactions::Event),
 	MemberSearch {
 		request: member_search::Request,
@@ -519,6 +542,7 @@ pub struct Envelope {
 	pub event: Event,
 }
 pub struct Pending {
+	pub sticker: Option<Sticker>,
 	pub channel: Id,
 	pub content: String,
 	/// Filenames of the files uploaded with this message, in send order.
@@ -537,6 +561,7 @@ pub struct NavigationIndex {
 }
 
 pub struct State {
+	pub stickers: stickers::Stickers,
 	pub interactions: interactions::Interactions,
 	pub messaging_permissions: messaging_permissions::Settings,
 	pub guild_folders: Option<model::guild_folders::Settings>,
@@ -621,6 +646,7 @@ pub struct State {
 impl Default for State {
 	fn default() -> Self {
 		Self {
+			stickers: Default::default(),
 			interactions: Default::default(),
 			messaging_permissions: Default::default(),
 			guild_folders: None,
@@ -805,6 +831,7 @@ impl State {
 				.map(|p| {
 					p.content.capacity()
 						+ p.nonce.capacity()
+						+ p.sticker.as_ref().map_or(0, Sticker::heap_bytes)
 						+ p.attachments.iter().map(String::capacity).sum::<usize>()
 						+ p.attachments.capacity() * size_of::<String>()
 						+ size_of::<Pending>()
@@ -1048,6 +1075,13 @@ impl State {
 	}
 	/// Queue the draft with up to ten attachment filenames; an empty slice sends text only.
 	pub fn prepare_send_with_attachments(&mut self, filenames: &[&str]) -> Option<Command> {
+		self.prepare_message(filenames, None)
+	}
+	pub(crate) fn prepare_message(
+		&mut self,
+		filenames: &[&str],
+		sticker: Option<&Sticker>,
+	) -> Option<Command> {
 		let channel = self.selected?;
 		if !self.can_send(channel) || (!filenames.is_empty() && !self.can_attach(channel)) {
 			self.status = "Sending is unavailable with the current connection or permissions";
@@ -1068,8 +1102,12 @@ impl State {
 			self.status = "Attachment filename is invalid or too long";
 			return None;
 		}
-		let content = self.drafts.get(&channel).map_or("", String::as_str);
-		if (content.trim().is_empty() && filenames.is_empty())
+		let content = if sticker.is_some() {
+			""
+		} else {
+			self.drafts.get(&channel).map_or("", String::as_str)
+		};
+		if (content.trim().is_empty() && filenames.is_empty() && sticker.is_none())
 			|| content.chars().count() > MAX_CONTENT
 			|| self.pending.len() >= 64
 			|| self.draft_bytes()
@@ -1079,6 +1117,7 @@ impl State {
 					.map(|name| name.len() + size_of::<String>())
 					.sum::<usize>()
 				+ size_of::<Pending>()
+				+ sticker.map_or(0, Sticker::heap_bytes)
 				+ 32 > MAX_DRAFT_BYTES
 		{
 			self.status = "Send exceeds the session input budget";
@@ -1092,6 +1131,7 @@ impl State {
 			.as_millis();
 		let nonce = fingerprint::nonce(epoch, self.send_sequence);
 		self.pending.push(Pending {
+			sticker: sticker.cloned(),
 			channel,
 			content: content.clone(),
 			attachments: filenames.iter().map(|name| (*name).to_owned()).collect(),
@@ -1099,9 +1139,12 @@ impl State {
 			delivery: Delivery::Sending,
 			confirmed: None,
 		});
-		self.drafts.remove(&channel);
+		if sticker.is_none() {
+			self.drafts.remove(&channel);
+		}
 		self.search_target = None;
 		Some(Command::Send {
+			sticker: sticker.map(|s| s.id),
 			channel,
 			content,
 			nonce,
@@ -1110,6 +1153,19 @@ impl State {
 	}
 	/// Reports a command the transport could not accept as a bounded outcome error.
 	pub fn command_rejected(&mut self, command: Command) {
+		match &command {
+			Command::StickerPacks => {
+				self.stickers.loading = false;
+				self.stickers.error = Some("Sticker packs were not queued; try again");
+				return;
+			}
+			Command::Sticker(_) => {
+				self.stickers.detail_loading = None;
+				self.stickers.detail_error = Some("Sticker details were not queued; try again");
+				return;
+			}
+			_ => {}
+		}
 		if let Command::Interaction(request) = command {
 			let _ = self.apply_interaction(interactions::Event::Submitted {
 				nonce: request.nonce,
@@ -1483,6 +1539,7 @@ impl State {
 				..
 			} = *startup;
 			let Startup {
+				external_stickers,
 				user,
 				guilds,
 				channels,
@@ -1507,6 +1564,7 @@ impl State {
 			if self.auth != auth::AuthState::Authenticated {
 				return;
 			}
+			self.stickers.external_allowed = external_stickers;
 			warnings.read_state |= self.apply_read_state(read_state).is_err();
 			if let Some(settings) = notifications {
 				warnings.notifications |= self.apply_notification_preferences(settings).is_err();
@@ -1530,6 +1588,10 @@ impl State {
 			envelope.event,
 			Event::Ready { .. } | Event::Disconnected | Event::Resync
 		) {
+			if matches!(envelope.event, Event::Ready { .. } | Event::Resync) {
+				self.stickers.external_allowed = false;
+			}
+			self.interrupt_stickers();
 			self.posts.clear_summaries();
 			self.interactions.reset();
 			self.local_game_activity = Default::default();
@@ -1663,6 +1725,7 @@ impl State {
 				self.startup_warnings.sessions |= warnings.sessions;
 				self.startup_warnings.presence |= warnings.presence;
 				self.startup_warnings.emojis |= warnings.emojis;
+				self.startup_warnings.stickers |= warnings.stickers;
 				if warnings.read_state {
 					self.read_state.reset();
 				}
@@ -1759,6 +1822,45 @@ impl State {
 				result,
 			} => {
 				self.apply_search(channel, request, result);
+				Ok(())
+			}
+			Event::StickerEntitlement { user, premium_type } => {
+				if self.user.as_ref().is_some_and(|own| own.id == user)
+					&& !matches!(premium_type, Patch::Absent)
+				{
+					self.stickers.external_allowed = matches!(premium_type, Patch::Value(2 | 3));
+				}
+				Ok(())
+			}
+			Event::StickerPacks(result) => {
+				self.apply_sticker_packs(result);
+				Ok(())
+			}
+			Event::Sticker { id, result } => {
+				self.apply_sticker(id, result);
+				Ok(())
+			}
+			Event::GuildStickers { guild, stickers } => {
+				if let Some(index) = self.guilds.iter().position(|g| g.id == guild) {
+					let previous = self.guilds[index]
+						.stickers
+						.as_ref()
+						.map_or(0, sticker_bytes);
+					if !valid_stickers(&stickers, MAX_GUILD_STICKERS)
+						|| stickers.iter().any(|s| s.guild_id != Some(guild))
+						|| self.navigation_bytes().saturating_sub(previous)
+							+ sticker_bytes(&stickers)
+							+ self.permissions.bytes()
+							> model::account::MAX_BYTES
+					{
+						self.guilds[index].stickers = None;
+						self.navigation_index.bytes.set(None);
+						self.fail(auth::Failure::Capacity);
+						return;
+					}
+					self.guilds[index].stickers = Some(stickers);
+					self.navigation_index.bytes.set(None);
+				}
 				Ok(())
 			}
 			Event::Gifs { request, result } => {
@@ -2501,6 +2603,14 @@ impl State {
 									&& known.nonce.as_deref() == Some(nonce.as_str())
 							}));
 						if correlated {
+							if let Some(sticker) = self
+								.pending
+								.iter()
+								.find(|p| p.nonce == nonce && p.channel == m.channel)
+								.and_then(|p| p.sticker.clone())
+							{
+								self.remember_sticker(sticker);
+							}
 							self.observe_last_message(m.channel, m.id);
 						}
 						let accepted_reference = correlated && self.accepts_reply_source(&m);
@@ -2759,6 +2869,14 @@ impl State {
 			return;
 		}
 		if let Some(nonce) = &message.nonce {
+			if let Some(sticker) = self
+				.pending
+				.iter()
+				.find(|p| p.nonce == *nonce && p.channel == message.channel)
+				.and_then(|p| p.sticker.clone())
+			{
+				self.remember_sticker(sticker);
+			}
 			self.pending
 				.retain(|p| !(p.nonce == *nonce && p.channel == message.channel));
 		}
@@ -2772,6 +2890,7 @@ impl State {
 			_ => {}
 		}
 		if failure.ends_session() {
+			self.interrupt_stickers();
 			self.invalidate_messaging_permissions(Some(failure));
 			self.interrupt_own_profile();
 			self.local_game_activity = Default::default();
@@ -3035,6 +3154,9 @@ impl Event {
 				Self::Voice(event) => event.bytes(),
 				Self::Permissions(event) => event.bytes(),
 				Self::GuildEmojis { emojis, .. } => custom_emoji_bytes(emojis),
+				Self::GuildStickers { stickers, .. } => sticker_bytes(stickers),
+				Self::StickerPacks(result) => result.as_ref().map_or(0, stickers::pack_bytes),
+				Self::Sticker { result, .. } => result.as_ref().map_or(0, Sticker::heap_bytes),
 				Self::GuildChanged(patch) => [&patch.name, &patch.icon]
 					.into_iter()
 					.map(|value| match value {
@@ -3111,10 +3233,13 @@ impl Event {
 						_ => 0,
 					};
 					content
-						+ match &p.reactions {
-							Patch::Value(r) => model::reaction_bytes(r),
+						+ match &p.sticker_items {
+							Patch::Value(stickers) => model::sticker_bytes(stickers),
 							_ => 0,
-						} + match &p.mentions {
+						} + match &p.reactions {
+						Patch::Value(r) => model::reaction_bytes(r),
+						_ => 0,
+					} + match &p.mentions {
 						Patch::Value(users) => model::mention_bytes(users),
 						_ => 0,
 					} + match &p.attachments {
@@ -3139,6 +3264,7 @@ mod tests {
 	#[test]
 	fn guild_lookup_caches_misses_and_tracks_navigation_changes() {
 		let guild = |id| Guild {
+			stickers: None,
 			id: Id(id),
 			name: "Synthetic".into(),
 			icon: None,
@@ -3177,6 +3303,7 @@ mod tests {
 		let state = State {
 			guilds: (1..=1_000)
 				.map(|id| Guild {
+					stickers: None,
 					id: Id(id),
 					name: "Synthetic".into(),
 					icon: None,
@@ -3389,6 +3516,7 @@ mod tests {
 			user: Some(message(1).author),
 			guilds: (1..=2)
 				.map(|id| Guild {
+					stickers: None,
 					id: Id(id),
 					name: "Synthetic".into(),
 					icon: None,
@@ -3805,6 +3933,7 @@ mod tests {
 		};
 		let mut state = State {
 			guilds: vec![Guild {
+				stickers: None,
 				id: Id(2),
 				name: "Synthetic".into(),
 				icon: None,
@@ -3874,6 +4003,7 @@ mod tests {
 		let mut state = State::default();
 		let mut guilds: Vec<_> = (1..=700)
 			.map(|id| Guild {
+				stickers: None,
 				id: Id(id),
 				name: "Synthetic".into(),
 				icon: None,
@@ -3914,6 +4044,7 @@ mod tests {
 	fn guild_identity_patches_preserve_omitted_fields_and_change_icon_keys() {
 		let mut state = State {
 			guilds: vec![Guild {
+				stickers: None,
 				emojis: None,
 				id: Id(2),
 				name: "Synthetic server".into(),
@@ -3986,6 +4117,7 @@ mod tests {
 		let mut state = State {
 			user: Some(message(1).author),
 			guilds: vec![Guild {
+				stickers: None,
 				id: Id(1),
 				name: "Synthetic".into(),
 				icon: None,
@@ -4076,6 +4208,7 @@ mod tests {
 	}
 	pub(super) fn message(id: u64) -> Message {
 		Message {
+			sticker_items: Vec::new(),
 			reactions: Some(vec![]),
 			id: Id(id),
 			channel: Id(1),
@@ -4333,6 +4466,7 @@ mod tests {
 			user: Some(message(1).author),
 			channels: vec![channel.clone()],
 			guilds: vec![Guild {
+				stickers: None,
 				id: Id(10),
 				name: "Synthetic".into(),
 				icon: None,
@@ -4469,6 +4603,7 @@ mod tests {
 			message_count: None,
 		};
 		let guild = Guild {
+			stickers: None,
 			id: Id(10),
 			name: "Synthetic".into(),
 			icon: None,

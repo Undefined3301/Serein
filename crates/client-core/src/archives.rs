@@ -281,6 +281,7 @@ mod tests {
 	}
 	fn message(id: u64, channel: Id) -> model::Message {
 		model::Message {
+			sticker_items: Vec::new(),
 			flags: 0,
 			ephemeral: false,
 			components: vec![],
@@ -335,6 +336,7 @@ mod tests {
 				discriminator: 0,
 			}),
 			guilds: vec![Guild {
+				stickers: None,
 				emojis: None,
 				id: Id(1),
 				name: "Synthetic".into(),

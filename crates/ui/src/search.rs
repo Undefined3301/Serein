@@ -933,6 +933,7 @@ impl SearchUi {
 		self.previews
 			.entry(hit.id)
 			.or_insert_with(|| model::Message {
+				sticker_items: Vec::new(),
 				flags: 0,
 				ephemeral: false,
 				components: vec![],

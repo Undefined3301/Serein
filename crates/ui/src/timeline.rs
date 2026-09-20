@@ -29,6 +29,8 @@ struct RevealScroll {
 
 #[derive(Default)]
 pub struct TimelineView {
+	pub(super) sticker_request: Option<Id>,
+	pub(super) browse_sticker: Option<model::Sticker>,
 	pub(super) component_viewing: Option<(Id, u64)>,
 	pub(super) components: crate::components::Components,
 	pub(super) component_action: Option<crate::components::Action>,
@@ -284,6 +286,7 @@ fn layout_key(message: &Message) -> u64 {
 	message.reply_deleted.hash(&mut key);
 	message.unsupported.hash(&mut key);
 	message.extra_content.hash(&mut key);
+	message.sticker_items.hash(&mut key);
 	message.components.hash(&mut key);
 	message.kind.hash(&mut key);
 	message.attachments.hash(&mut key);
@@ -2279,14 +2282,33 @@ impl TimelineView {
 											{
 												ui.colored_label(colors.danger, error);
 											}
+											for sticker in &message.sticker_items {
+												let response = ui
+													.push_id(sticker.id, |ui| {
+														crate::stickers::message(
+															ui,
+															sticker,
+															state,
+															avatars,
+															&mut self.sticker_request,
+															&mut self.browse_sticker,
+														)
+													})
+													.inner;
+												surface.keep(&response);
+											}
 											let unknown_system = message.unsupported
 												&& message.system_summary().is_none();
 											if unknown_system
-												|| message.extra_content.poll || message
+												|| message.extra_content.poll || ((message
 												.extra_content
-												.sticker_items || message.extra_content.stickers
-												|| (message.extra_content.any()
-													&& message.components.is_empty())
+												.sticker_items
+												|| message.extra_content.stickers)
+												&& message.sticker_items.is_empty()) || ((message
+												.extra_content
+												.components
+												|| message.extra_content.components_v2)
+												&& message.components.is_empty())
 											{
 												if unknown_system {
 													ui.label(
@@ -2304,8 +2326,9 @@ impl TimelineView {
 														"Poll · Preview unavailable",
 													),
 													(
-														message.extra_content.sticker_items
-															|| message.extra_content.stickers,
+														(message.extra_content.sticker_items
+															|| message.extra_content.stickers)
+															&& message.sticker_items.is_empty(),
 														"Sticker · Preview unavailable",
 													),
 													(
@@ -3427,6 +3450,7 @@ mod tests {
 		};
 		state.pending = (0..64)
 			.map(|i| client_core::Pending {
+				sticker: None,
 				channel: Id(20),
 				nonce: i.to_string(),
 				content: format!("Pending message {i}"),
@@ -3507,6 +3531,7 @@ mod tests {
 
 	fn text_message(id: u64) -> Message {
 		Message {
+			sticker_items: vec![],
 			id: Id(id),
 			channel: Id(20),
 			author: model::User {
@@ -6054,6 +6079,7 @@ mod tests {
 	#[test]
 	fn channel_rename_invalidates_offscreen_reference_heights() {
 		let message = Message {
+			sticker_items: vec![],
 			id: Id(1),
 			channel: Id(2),
 			author: model::User {
@@ -6210,6 +6236,7 @@ mod tests {
 	#[test]
 	fn same_id_revision_reset_does_not_reuse_reveal_or_height() {
 		let mut message = Message {
+			sticker_items: vec![],
 			reactions: Some(vec![]),
 			id: Id(1),
 			channel: Id(2),
@@ -6305,6 +6332,7 @@ mod tests {
 			}
 		}
 		let mut message = Message {
+			sticker_items: vec![],
 			reactions: Some(vec![]),
 			id: Id(1),
 			channel: Id(2),

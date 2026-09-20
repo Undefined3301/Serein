@@ -1,5 +1,43 @@
 # Discord compatibility — checked 2026-09-10
 
+## Stickers - September 20, 2026
+
+The composer media picker has a Stickers tab with local name/tag/source search,
+collapsible server and standard-pack groups, a section rail, session-only recent
+choices, and a hovered preview. Clicking a sticker sends it as a separate message
+and preserves the typed draft. Reply references, pending/failed delivery and the
+existing nonce reconciliation are reused; uncertain writes are never retried.
+Channel send and external-sticker permissions gate selection. Server stickers
+outside their source server (including DMs) also require a session-confirmed
+Nitro or Nitro Basic entitlement (`premium_type` 2 or 3), populated by READY and
+updated by the current user's USER_UPDATE. Missing, unknown, Classic, or expired
+entitlements do not unlock external stickers. Local selection and send checks
+share this gate; Discord remains authoritative. There is no purchase flow. See
+[Discord subscription benefits](https://support.discord.com/hc/en-us/articles/115000435108-What-are-Nitro-Nitro-Basic).
+
+Received `sticker_items` and legacy `stickers` render transparent artwork in chat.
+Clicking opens details and related previews; View More Stickers opens the source
+in the picker. Standard packs and missing metadata load only on demand. Guild
+catalogs hydrate from READY/GUILD_CREATE and GUILD_STICKERS_UPDATE. The official
+[sticker resource](https://docs.discord.com/developers/resources/sticker) and
+[Create Message](https://docs.discord.com/developers/resources/message#create-message)
+document the object/REST shapes; normal-account interoperability is unofficial
+and live-unverified.
+
+PNG, APNG and GIF use the existing bounded image worker and animation preference.
+GIF uses the media host specified by Discord's
+[CDN reference](https://github.com/discord/discord-api-docs/blob/main/developers/reference.mdx).
+Lottie has only an unofficial, unverified static PNG proxy rendition, with the
+sticker name retained when unavailable. Long animations share the existing
+frame/pixel limits and may remain static. Sticker upload/edit/delete administration
+and synchronized cross-device favorites are not included.
+
+`--features demo -- --demo --demo-stickers` seeds an original offline catalog,
+received message and picker. Tests use only synthetic data/local HTTP. Native
+computer-use capture is blocked in this environment by a missing native pipe;
+framebuffer previews do not verify OS input, accessibility or live compatibility.
+
+
 ## Server-wide member lookup (September 17, 2026)
 
 `@name` autocomplete requests matching members beyond the first 100 subscribed
