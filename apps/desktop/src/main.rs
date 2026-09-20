@@ -5012,8 +5012,7 @@ impl eframe::App for Desktop {
 				#[cfg(target_os = "linux")]
 				platform::tray::Event::Minimize => {
 					if !quitting {
-						self.tray_window.show(ctx);
-						ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+						self.tray_window.minimize(ctx);
 					}
 				}
 				platform::tray::Event::Unavailable => {

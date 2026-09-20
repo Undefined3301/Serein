@@ -7202,6 +7202,7 @@ dependencies = [
  "egui",
  "image",
  "ksni",
+ "platform",
  "tokio",
  "winit",
  "zbus",

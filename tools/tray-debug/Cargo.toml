@@ -7,6 +7,7 @@ publish = false
 
 [dependencies]
 egui.workspace = true
+platform.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 tokio.workspace = true

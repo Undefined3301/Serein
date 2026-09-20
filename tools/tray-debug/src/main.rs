@@ -4,6 +4,9 @@
 mod tray;
 
 pub use egui;
+// `tray_window.rs` addresses the compositor helper through `platform::compositor`, so this
+// tool depends on the real crate; it's already built for other workspace members.
+use platform as _;
 #[path = "../../../apps/desktop/src/tray_window.rs"]
 mod tray_window;
 

@@ -1,20 +1,48 @@
 //! Shared window-close routing for all tray adapters. Exit checks remain in the desktop's rendered UI.
 use super::egui;
 
-#[derive(Default)]
 pub struct State {
 	pub hidden: bool,
 	exiting: bool,
 	close_after_show: bool,
+	/// Compositor IPC for Wayland sessions where winit can neither hide nor minimize (Hyprland).
+	compositor: Option<platform::compositor::Hider>,
+}
+
+impl Default for State {
+	fn default() -> Self {
+		Self {
+			hidden: false,
+			exiting: false,
+			close_after_show: false,
+			compositor: platform::compositor::Hider::detect(),
+		}
+	}
 }
 
 impl State {
 	pub fn show(&mut self, ctx: &egui::Context) {
 		self.hidden = false;
+		if let Some(compositor) = &self.compositor {
+			compositor.show();
+		}
 		ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
 		ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
 		ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
 		ctx.request_repaint();
+	}
+	/// Tray "minimize": hides through the compositor where minimization is ignored, otherwise
+	/// restores the window first so the minimize request lands on a mapped surface.
+	#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+	pub fn minimize(&mut self, ctx: &egui::Context) {
+		if let Some(compositor) = &self.compositor {
+			self.hidden = true;
+			compositor.hide();
+			ctx.request_repaint();
+			return;
+		}
+		self.show(ctx);
+		ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
 	}
 	pub fn quit(&mut self, ctx: &egui::Context) {
 		self.exiting = true;
@@ -40,14 +68,20 @@ impl State {
 			return;
 		}
 		if tray_available && !self.exiting {
-			// Native Wayland cannot hide surfaces through winit. Never label a
+			// Native Wayland cannot hide surfaces through winit, and Hyprland ignores
+			// minimization, so its IPC parks the window instead. Elsewhere never label a
 			// possibly visible window hidden; the compositor may ignore minimization.
-			self.hidden = can_hide;
-			ctx.send_viewport_cmd(if can_hide {
-				egui::ViewportCommand::Visible(false)
+			if let Some(compositor) = &self.compositor {
+				self.hidden = true;
+				compositor.hide();
 			} else {
-				egui::ViewportCommand::Minimized(true)
-			});
+				self.hidden = can_hide;
+				ctx.send_viewport_cmd(if can_hide {
+					egui::ViewportCommand::Visible(false)
+				} else {
+					egui::ViewportCommand::Minimized(true)
+				});
+			}
 		} else {
 			// Registration can finish while the existing exit dialog is open.
 			self.exiting = true;
