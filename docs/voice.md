@@ -332,9 +332,10 @@ Capture uses macOS 14+ ScreenCaptureKit (screen-recording permission in System S
 
 Linux uses the desktop ScreenCast portal and PipeWire. Share Screen opens the system
 screen/window picker after the quality dialog; source discovery never opens that picker.
-The default is 720p30. The worker tries VA-API, NVENC with GPU scaling, NVENC with CPU
-scaling, then the existing OpenH264 software encoder. The call stage identifies the
-active encoder and software fallback. GPU buffers stay native where driver/plugin
+The default is 720p30. The worker tries modern VA-API, legacy VA-API with CPU scaling,
+NVENC with GPU scaling, NVENC with CPU scaling, then the existing OpenH264 software
+encoder. The call stage identifies the active encoder and software fallback.
+GPU buffers stay native where driver/plugin
 negotiation permits; zero-copy is not guaranteed, especially across GPUs. Local preview
 is capped at 640×360/10 fps and suspended when minimized or viewing another channel.
 The system picker requires a ScreenCast-capable portal backend. Native X11 sessions
@@ -343,6 +344,17 @@ GStreamer's `ximagesrc` (Good plugins). This shares the whole desktop, not an in
 window; cancelling or failing the portal never selects it automatically. The existing
 7680×4320 source caps and bounded encoding/preview queues apply. Native X11 capture
 remains unverified. AV1/H.265 sending is not included.
+
+The legacy fallback requires an available `vaapih264enc` from GStreamer VAAPI;
+`vapostproc` alone does not supply it. It uploads CPU-scaled NV12 frames to the
+hardware encoder, so some CPU use remains expected. No legacy plugin or driver is
+installed automatically. Missing or failing encoders continue through the existing
+fallback sequence. Haswell/i965 encoding and live Discord delivery remain unverified.
+On a Linux machine with that encoder, run
+`cargo run --locked -p discord-voice --example linux_screen -- --legacy-vaapi`
+to check synthetic preview, readiness gating and a decodable H.264 keyframe with
+inline parameter sets, without joining a call or capturing a screen or microphone.
+The check fails if the legacy encoder cannot start; it does not silently use software.
 
 System audio defaults off on Linux and Windows. It shares other applications' playback,
 even when sharing one window, and excludes Serein's own audio, including call playback

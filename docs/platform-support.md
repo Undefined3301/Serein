@@ -232,6 +232,13 @@ still depends on distribution packaging and drivers. The software fallback reuse
 OpenH264. Flatpak needs compatible plugins/GPU access inside its runtime; no extra sandbox
 permission or host socket access is added. Native Linux validation remains pending.
 
+Screen sharing also tries the legacy `vaapih264enc` element when modern VA encoding
+fails. This optional system plugin uses CPU scaling and hardware H.264 encoding;
+it does not require `vaapipostproc`. Check availability with
+`gst-inspect-1.0 vaapih264enc` in the same runtime as Serein. Installing the modern
+`va` plugin alone does not provide this legacy element. Driver compatibility still
+requires an actual encode test; `vainfo` only advertises capabilities.
+
 Native X11 sessions can instead explicitly select “Entire X11 desktop · all monitors ·
 no portal”. This uses `ximagesrc` from GStreamer Good, already a native package
 dependency, and shares the whole desktop. No direct capture starts after a failed or
