@@ -160,10 +160,18 @@ impl State {
 		Some(unread)
 	}
 	pub fn can_jump_unread(&self) -> bool {
+		let history_ready = if self.freshness == Freshness::Fresh {
+			!self.history_pending
+		} else {
+			self.freshness == Freshness::Loading
+				&& self.history_pending
+				&& !self.history_targeted
+				&& self.history_before.is_none()
+				&& self.history_after.is_none()
+		};
 		self.auth == AuthState::Authenticated
 			&& self.gateway_connected
-			&& self.freshness == Freshness::Fresh
-			&& !self.history_pending
+			&& history_ready
 			&& self.selected.is_some_and(|channel| {
 				self.can_read_history(channel) && self.unread(channel) == Some(true)
 			})
