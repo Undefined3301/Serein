@@ -652,12 +652,28 @@ fn recolor(mut palette: Palette, theme: ExtensionPalette) -> Palette {
 	palette.surface = palette.sidebar;
 	palette
 }
+/// Index of `accent` in [`THEME_FIELDS`].
+const ACCENT_FIELD: usize = 11;
+/// Whether the active community theme brings its own accent for this mode. Such a theme
+/// replaces the user's primary colour instead of being tinted by it.
+pub fn theme_sets_accent(dark: bool) -> bool {
+	EXTENSION_THEME
+		.get()
+		.is_some_and(|palettes| palettes[usize::from(dark)].colors[ACCENT_FIELD].is_some())
+}
 pub fn colors(dark: bool, variant: Variant) -> Palette {
 	let mut palette = builtin_colors(dark, variant);
+	let mut themed_accent = false;
 	if let Some(palettes) = EXTENSION_THEME.get() {
-		palette = recolor(palette, palettes[usize::from(dark)]);
+		let theme = palettes[usize::from(dark)];
+		themed_accent = theme.colors[ACCENT_FIELD].is_some();
+		palette = recolor(palette, theme);
 	}
-	let mut palette = customize(palette, primary_color());
+	let mut palette = if themed_accent {
+		palette
+	} else {
+		customize(palette, primary_color())
+	};
 	let (enabled, transparency, _, all) = window_effects();
 	if enabled && transparency > 0 {
 		let alpha = 100 - u16::from(transparency);
@@ -716,8 +732,13 @@ pub(crate) fn theme_preview_palette(ui: &egui::Ui, theme: &extensions::Theme) ->
 	} else {
 		&theme.light
 	};
-	let colors = extension_palette(theme).map_or(base, |overrides| recolor(base, overrides));
-	opaque_surfaces(customize(colors, primary_color()))
+	match extension_palette(theme) {
+		Some(overrides) if overrides.colors[ACCENT_FIELD].is_some() => {
+			opaque_surfaces(recolor(base, overrides))
+		}
+		Some(overrides) => opaque_surfaces(customize(recolor(base, overrides), primary_color())),
+		None => opaque_surfaces(customize(base, primary_color())),
+	}
 }
 pub fn palette(ui: &egui::Ui) -> Palette {
 	opaque_surfaces(colors(ui.visuals().dark_mode, variant()))

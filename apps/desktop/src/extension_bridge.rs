@@ -318,13 +318,22 @@ impl Bridge {
 					messaging.extensions.status = "Extension enabled.".into();
 				}
 				Ok(Event::Disabled(id)) => {
+					let theme = self.installed.iter().any(|entry| {
+						entry.manifest.id == id && entry.manifest.kind == ExtensionKind::Theme
+					});
 					self.installed.retain(|entry| entry.manifest.id != id);
 					self.disabled.remove(&id);
 					messaging.extensions.remove_runtime(&id);
 					self.apply_theme(ctx);
 					self.entries(messaging);
-					messaging.extensions.status =
-						"Disabled. Downloaded code and extension data were removed.".into();
+					// The gallery reports the outcome; an open theme editor is a different task.
+					if !messaging.extensions.editing_theme() {
+						messaging.extensions.status = if theme {
+							"Theme removed.".into()
+						} else {
+							"Disabled. Downloaded code and extension data were removed.".into()
+						};
+					}
 				}
 				Ok(Event::Invoked { id, output }) => {
 					if let Some((requested, invocation, context)) =
