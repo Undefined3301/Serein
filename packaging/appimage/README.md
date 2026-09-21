@@ -12,11 +12,11 @@ chmod +x ./serein-<version>-Linux-X64.AppImage
 The x86_64 image contains Serein including voice, its desktop entry, icon and
 application licenses. It uses **host runtime libraries**, including GTK4 and
 WebKitGTK 6.0; it is not a self-contained distribution of those libraries. Release
-builds use Ubuntu 26.04, so older distributions and incompatible native library
-versions are not supported by this artifact. Use the distribution packages or
-Flatpak where their supported runtime is a better match.
+builds use Ubuntu 24.04 (glibc 2.39), so systems with an older glibc or incompatible
+native library versions are not supported by this artifact. Use the distribution
+packages or Flatpak where their supported runtime is a better match.
 
-On Ubuntu 26.04, install the runtime dependencies once:
+On Ubuntu 24.04, install the runtime dependencies once:
 
 ```sh
 sudo apt update
@@ -53,7 +53,7 @@ updates. Keep the outer AppImage file in place while Serein is running.
 
 ## Build and pipeline
 
-On the Ubuntu 26.04 x86_64 build host, first install the existing
+On the Ubuntu 24.04 x86_64 build host, first install the existing
 [native build dependencies](../linux/README.md), then:
 
 ```sh
@@ -77,8 +77,8 @@ supplied to appimagetool with `--runtime-file`. These references preserve upstre
 source/relink information; this fast pass does not certify redistribution license
 coverage. License review remains in the dedicated license CI workflow.
 
-The Ubuntu job in `linux-packages.yml` builds the AppImage alongside the `.deb`,
-then uploads the exact release name above in its existing artifact. The release
+The Ubuntu 24.04 job in `linux-packages.yml` builds the AppImage separately from
+the Ubuntu 26.04 `.deb`, then uploads the exact release name above. The release
 workflow gathers it, writes `SHA256SUMS.txt`, and publishes both through the existing
 release flow. Local artifacts use the workspace version; release filenames use the
 release tag, including its `v` prefix and any prerelease suffix. Release publication

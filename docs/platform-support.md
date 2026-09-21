@@ -50,11 +50,12 @@ Linux packaging uses the target distribution's native tools: `dpkg-dev` for Debi
 dependencies, installation commands and supported distribution versions.
 
 `cargo xtask package --format appimage` creates a Linux x86_64 Type 2 AppImage
-including voice. The Ubuntu 26.04 release job publishes it alongside the native
-packages and release checksums. It uses host GTK4/WebKitGTK 6.0, audio and graphics
-libraries, rather than bundling a separate browser runtime. See [AppImage setup and
-builds](../packaging/appimage/README.md) for installation requirements, pinned tooling
-and package inspection. Native AppImage startup and upgrading remain unverified in
+including voice. A separate Ubuntu 24.04 (glibc 2.39) release job publishes it
+alongside the native packages and release checksums. It uses host GTK4/WebKitGTK 6.0,
+audio and graphics libraries, rather than bundling a separate browser runtime. See
+[AppImage setup and builds](../packaging/appimage/README.md) for installation
+requirements, pinned tooling and package inspection. Native AppImage startup and
+upgrading remain unverified in
 the initial fast local pass.
 
 `cargo xtask package` builds the locked default release configuration. macOS gets `dist/Serein.app`; Windows gets an executable plus license files; Debian/Ubuntu Linux additionally produces a `.deb` with desktop integration and dependency metadata. On macOS, packaging replaces the executable through a fresh sibling file and rename, then seals the completed bundle with `codesign --force --sign -` and runs `codesign --verify --strict`. This is a **local ad-hoc signature**, with no signing identity, Developer ID certificate, or notarization. It verifies the staged bundle's integrity and does not certify Gatekeeper acceptance or a trusted publisher. The distinction between signature validity and trust is described in [Apple's code-signing guidance](https://developer.apple.com/library/archive/technotes/tn2206/_index.html).
