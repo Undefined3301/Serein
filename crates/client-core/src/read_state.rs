@@ -319,7 +319,9 @@ impl State {
 		}
 		let channel = self.selected?;
 		let cursor = Id(message.0 - 1);
-		let mention_count = self.private_loaded_unread_count(channel, cursor);
+		let mention_count = self
+			.private_loaded_unread_count(channel, cursor)
+			.or_else(|| self.loaded_guild_mentions(channel, cursor));
 		Some(self.mark_read_command(channel, cursor, true, mention_count))
 	}
 	fn private_loaded_unread_count(&self, channel: Id, after: Id) -> Option<u32> {
@@ -340,17 +342,41 @@ impl State {
 			.count();
 		u32::try_from(count).unwrap_or(u32::MAX)
 	}
+	fn loaded_guild_mentions(&self, channel: Id, after: Id) -> Option<u32> {
+		if self
+			.channel(channel)
+			.is_none_or(|known| known.guild.is_none())
+		{
+			return None;
+		}
+		let Some(previous) = self.read_marker(channel).flatten() else {
+			return Some(self.mention_count(channel));
+		};
+		if after >= previous {
+			return Some(self.mention_count(channel));
+		}
+		let added = self
+			.timeline
+			.iter()
+			.filter(|message| {
+				message.channel == channel
+					&& message.id > after
+					&& message.id <= previous
+					&& self.counts_toward_mention_badge(message)
+			})
+			.count();
+		Some(
+			self.mention_count(channel)
+				.saturating_add(u32::try_from(added).unwrap_or(u32::MAX)),
+		)
+	}
 	fn manual_private_count(
 		&self,
 		channel: Id,
 		after: Option<Id>,
 		echoed: Option<u32>,
 	) -> Option<u32> {
-		if echoed.is_some()
-			|| self
-				.channel(channel)
-				.is_none_or(|known| known.guild.is_some())
-		{
+		if echoed.is_some() {
 			return echoed;
 		}
 		if let Some(Pending::Channel {
@@ -364,6 +390,12 @@ impl State {
 			&& after == Some(*message)
 		{
 			return *mention_count;
+		}
+		if self
+			.channel(channel)
+			.is_some_and(|known| known.guild.is_some())
+		{
+			return after.and_then(|cursor| self.loaded_guild_mentions(channel, cursor));
 		}
 		let loaded = self.loaded_private_unreads(channel, after);
 		if loaded > 0 {
