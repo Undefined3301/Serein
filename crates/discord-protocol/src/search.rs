@@ -72,18 +72,7 @@ impl Reply {
 			if matches.next().is_some() {
 				return Err("Ambiguous search hit");
 			}
-			let mut result = SearchHit {
-				id: hit.id,
-				channel: hit.channel_id,
-				author: hit.author.into_model(),
-				excerpt: hit.content,
-				attachments: hit.attachments.0,
-				embeds: crate::embeds::bounded(hit.embeds.0),
-			};
-			if result.excerpt.len() > 8192 {
-				result.excerpt = "Message exceeds preview limit - open message to read".into();
-			}
-			hits.push(result);
+			hits.push(hit.into_hit());
 		}
 		hits.sort_unstable_by_key(|h| std::cmp::Reverse(h.id));
 		let page = SearchPage {
@@ -101,11 +90,10 @@ impl Reply {
 
 impl Hit {
 	pub(crate) fn into_hit(self) -> SearchHit {
-		// No Markdown, media fetch or spoiler reveal in snapshot previews.
-		let excerpt = if self.content.contains("||") {
-			"Spoiler content - open message to reveal".into()
+		let excerpt = if self.content.len() > 8192 {
+			"Message exceeds preview limit - open message to read".into()
 		} else {
-			self.content.chars().take(256).collect()
+			self.content
 		};
 		SearchHit {
 			id: self.id,

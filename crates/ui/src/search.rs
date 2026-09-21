@@ -83,6 +83,7 @@ impl SearchUi {
 	pub fn sync(&mut self, ctx: &egui::Context, state: &mut State, commands: &mut Vec<Command>) {
 		if self.open
 			&& self.filter_draft.is_none()
+			&& self.viewing.is_none()
 			&& ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
 		{
 			self.open = false;
@@ -401,13 +402,16 @@ impl SearchUi {
 		}
 	}
 	/// Anchored pinned-messages popout under the header pin button, like Discord's.
+	#[allow(clippy::too_many_arguments)]
 	pub fn pins_popout(
 		&mut self,
-		ctx: &egui::Context,
+		ui: &mut egui::Ui,
 		state: &mut State,
 		anchor: egui::Rect,
 		dm: bool,
 		commands: &mut Vec<Command>,
+		avatars: &mut crate::avatars::Avatars,
+		mut media: MediaUi<'_>,
 	) {
 		if !(self.open && self.pins) {
 			return;
@@ -417,7 +421,9 @@ impl SearchUi {
 		{
 			commands.push(command);
 		}
-		let colors = design::palette_for(ctx);
+		let ctx = ui.ctx().clone();
+		let viewing = self.viewing.is_some();
+		let colors = design::palette_for(&ctx);
 		let bounds = ctx.content_rect().shrink(8.0);
 		let width = PANE_WIDTH.min(bounds.width());
 		let max_height = (bounds.height() * 0.7).clamp(240.0, 560.0);
@@ -431,7 +437,7 @@ impl SearchUi {
 			.fixed_pos(egui::pos2(x, y))
 			.constrain_to(bounds)
 			.interactable(true)
-			.show(ctx, |ui| {
+			.show(&ctx, |ui| {
 				egui::Frame::new()
 					.fill(colors.sidebar)
 					.stroke(egui::Stroke::new(1.0, colors.border))
@@ -516,7 +522,7 @@ impl SearchUi {
 								.inner_margin(egui::Margin::symmetric(12, 12))
 								.show(ui, |ui| {
 									ui.set_width(ui.available_width());
-									self.pins_content(ui, state, commands);
+									self.pins_content(ui, state, commands, avatars, &mut media);
 								});
 						}
 					});
@@ -529,9 +535,10 @@ impl SearchUi {
 			ctx.input(|i| i.pointer.interact_pos())
 				.unwrap_or(anchor.center()),
 		);
-		if clicked_outside {
+		if clicked_outside && !viewing {
 			self.open = false;
 		}
+		self.viewer(ui, state, avatars, media.download);
 	}
 	fn pins_empty(ui: &mut egui::Ui, dm: bool) {
 		let colors = design::palette(ui);
@@ -567,7 +574,14 @@ impl SearchUi {
 			});
 	}
 	/// Pinned message cards, load-more control and status lines.
-	fn pins_content(&mut self, ui: &mut egui::Ui, state: &mut State, commands: &mut Vec<Command>) {
+	fn pins_content(
+		&mut self,
+		ui: &mut egui::Ui,
+		state: &mut State,
+		commands: &mut Vec<Command>,
+		avatars: &mut crate::avatars::Avatars,
+		media: &mut MediaUi<'_>,
+	) {
 		let colors = design::palette(ui);
 		let allowed = state.can_search();
 		let mut older_pins = false;
@@ -629,7 +643,7 @@ impl SearchUi {
 								continue;
 							}
 							ui.push_id(hit.id, |ui| {
-								Self::hit_card(ui, hit, allowed, &mut target);
+								self.result_card(ui, state, hit, "", avatars, media, &mut target);
 							});
 						}
 					});
@@ -653,39 +667,6 @@ impl SearchUi {
 			commands.push(command);
 			self.open = false;
 		}
-	}
-	fn hit_card(ui: &mut egui::Ui, hit: &model::SearchHit, allowed: bool, target: &mut Option<Id>) {
-		let colors = design::palette(ui);
-		egui::Frame::new()
-			.fill(colors.raised)
-			.stroke(egui::Stroke::new(1.0, colors.border))
-			.corner_radius(8)
-			.inner_margin(egui::Margin::same(10))
-			.show(ui, |ui| {
-				ui.set_width(ui.available_width());
-				ui.horizontal(|ui| {
-					ui.label(
-						design::semibold(ui, &hit.author.name, 14.0).color(colors.text_strong),
-					);
-					ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-						if ui
-							.add_enabled(
-								allowed && hit.id.0 < u64::MAX,
-								egui::Button::new(RichText::new("Jump").size(12.0)),
-							)
-							.on_hover_text("Open this message in the timeline")
-							.clicked()
-						{
-							*target = Some(hit.id);
-						}
-					});
-				});
-				ui.add(
-					egui::Label::new(RichText::new(&hit.excerpt).color(colors.text))
-						.wrap()
-						.selectable(true),
-				);
-			});
 	}
 	/// Results pane rendered where the member list normally lives.
 	pub fn pane(
@@ -722,7 +703,8 @@ impl SearchUi {
 			if submit && let Some(command) = state.request_pins() {
 				commands.push(command);
 			}
-			self.pins_content(ui, state, commands);
+			self.pins_content(ui, state, commands, avatars, &mut media);
+			self.viewer(ui, state, avatars, media.download);
 			return;
 		}
 		if submit && let Some(command) = state.request_search(self.query.trim().into(), None) {
@@ -902,20 +884,7 @@ impl SearchUi {
 				}
 			}
 		}
-		if let Some((message, attachment)) = self.viewing {
-			self.viewing = self.previews.get(&message).and_then(|preview| {
-				crate::attachments::viewer(
-					ui,
-					&preview.attachments,
-					attachment,
-					avatars,
-					media.download,
-					&mut self.opening,
-					state.demo,
-				)
-				.map(|id| (message, id))
-			});
-		}
+		self.viewer(ui, state, avatars, media.download);
 		if let Some((query, before)) = older
 			&& let Some(command) = state.request_search(query, before)
 		{
@@ -926,6 +895,28 @@ impl SearchUi {
 		{
 			commands.push(command);
 			self.open = false;
+		}
+	}
+	fn viewer(
+		&mut self,
+		ui: &mut egui::Ui,
+		state: &State,
+		avatars: &mut crate::avatars::Avatars,
+		download: &mut crate::attachments::DownloadUi,
+	) {
+		if let Some((message, attachment)) = self.viewing {
+			self.viewing = self.previews.get(&message).and_then(|preview| {
+				crate::attachments::viewer(
+					ui,
+					&preview.attachments,
+					attachment,
+					avatars,
+					download,
+					&mut self.opening,
+					state.demo,
+				)
+				.map(|id| (message, id))
+			});
 		}
 	}
 	/// Bounded message shell that lets the chat attachment and embed renderers draw a hit.
@@ -977,7 +968,9 @@ impl SearchUi {
 	) {
 		let colors = design::palette(ui);
 		ui.spacing_mut().item_spacing.y = 6.0;
-		if let Some(channel) = state.channel(hit.channel) {
+		if !self.pins
+			&& let Some(channel) = state.channel(hit.channel)
+		{
 			channel_heading(ui, state, channel);
 		}
 		// The card senses clicks on its previous-frame rect so child widgets keep priority.

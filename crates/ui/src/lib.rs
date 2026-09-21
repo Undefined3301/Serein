@@ -3079,15 +3079,6 @@ impl MessagingUi {
 							video: &mut self.timeline.video,
 						},
 					);
-					if let Some(link) = self.search.opening.take() {
-						self.timeline.opening = Some(link);
-					}
-					if let Some(profile) = self.search.profile.take() {
-						self.profile = Some(profile);
-					}
-					if let Some(channel) = self.search.channel_reference.take() {
-						self.timeline.channel_reference = Some(channel);
-					}
 				});
 		}
 		if show_members {
@@ -3530,11 +3521,31 @@ impl MessagingUi {
 				.channels
 				.iter()
 				.any(|c| Some(c.id) == state.selected && c.guild.is_none());
-			self.search
-				.pins_popout(&ctx, state, anchor, dm, &mut commands);
+			self.search.pins_popout(
+				ui,
+				state,
+				anchor,
+				dm,
+				&mut commands,
+				&mut self.avatars,
+				search::MediaUi {
+					download: &mut self.timeline.download,
+					audio: &mut self.timeline.audio,
+					video: &mut self.timeline.video,
+				},
+			);
 			if !(self.search.open && self.search.pins()) {
 				self.pins_anchor = None;
 			}
+		}
+		if let Some(link) = self.search.opening.take() {
+			self.timeline.opening = Some(link);
+		}
+		if let Some(profile) = self.search.profile.take() {
+			self.profile = Some(profile);
+		}
+		if let Some(channel) = self.search.channel_reference.take() {
+			self.timeline.channel_reference = Some(channel);
 		}
 		// A forum pane lists its own archived posts inline instead of the floating window.
 		if !(selected_forum
