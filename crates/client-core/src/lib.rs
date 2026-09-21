@@ -2726,7 +2726,9 @@ impl State {
 					&& self.can_view(p.channel)
 					&& self.freshness != Freshness::Unavailable
 				{
-					if let Patch::Value(content) = std::mem::replace(&mut p.content, Patch::Absent)
+					if self.timeline.get_display(p.id).is_some()
+						&& let Patch::Value(content) =
+							std::mem::replace(&mut p.content, Patch::Absent)
 					{
 						let edited_at = match p.edited {
 							Patch::Value(at) => Some(at),
