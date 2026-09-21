@@ -294,6 +294,14 @@ fn layout_key(message: &Message) -> u64 {
 	message.embeds_suppressed.hash(&mut key);
 	key.finish()
 }
+pub(crate) const MESSAGE_LINE: f32 = 22.0;
+
+pub(crate) fn fill_header_line(ui: &mut egui::Ui, compact: bool, text_line: egui::Rect) {
+	let slack = MESSAGE_LINE - text_line.height();
+	if !compact && slack > 0.0 && ui.min_rect().bottom() - text_line.bottom() < 1.0 {
+		ui.expand_to_include_y(text_line.bottom() + slack);
+	}
+}
 // Discord snowflakes carry milliseconds since 2015-01-01. All u64 IDs fit time's range.
 fn timestamp(id: Id) -> time::OffsetDateTime {
 	crate::local_time::local(
@@ -2077,7 +2085,7 @@ impl TimelineView {
 							ui.horizontal_top(|ui| {
 								if system.is_some() {
 									let (gutter, _) = ui.allocate_exact_size(
-										egui::vec2(40.0, 22.0),
+										egui::vec2(40.0, MESSAGE_LINE),
 										egui::Sense::hover(),
 									);
 									let (icon, tint) = system_icon(message.kind, &colors);
@@ -2093,7 +2101,7 @@ impl TimelineView {
 								} else if compact {
 									time_rect = Some(
 										ui.allocate_exact_size(
-											egui::vec2(40.0, 22.0),
+											egui::vec2(40.0, MESSAGE_LINE),
 											egui::Sense::hover(),
 										)
 										.0,
@@ -2115,9 +2123,10 @@ impl TimelineView {
 								}
 								ui.vertical(|ui| {
 									ui.set_width(ui.available_width());
+									let mut text_line = egui::Rect::NOTHING;
 									if !compact && system.is_none() {
 										ui.allocate_ui_with_layout(
-											egui::vec2(ui.available_width(), 22.0),
+											egui::vec2(ui.available_width(), MESSAGE_LINE),
 											egui::Layout::left_to_right(egui::Align::Center),
 											|ui| {
 												ui.spacing_mut().item_spacing.x = 8.0;
@@ -2225,33 +2234,36 @@ impl TimelineView {
 														message,
 													)) {
 												let jumbo = formatted.jumbo();
-												ui.scope(|ui| {
-													if jumbo {
-														crate::design::jumbo_emoji(ui);
-													}
-													let source = crate::mentions::MentionSource {
-														state,
-														channel: message.channel,
-													};
-													formatted.show_references(
-														ui,
-														&mut self.opening,
-														&message.mentions,
-														Some(&source),
-														profile,
-														(
-															&state.channels,
-															&mut self.channel_reference,
-															&state.guilds,
-															crate::mentions::known_roles(
-																state,
-																message.channel,
+												text_line = ui
+													.scope(|ui| {
+														if jumbo {
+															crate::design::jumbo_emoji(ui);
+														}
+														let source = crate::mentions::MentionSource {
+															state,
+															channel: message.channel,
+														};
+														formatted.show_references(
+															ui,
+															&mut self.opening,
+															&message.mentions,
+															Some(&source),
+															profile,
+															(
+																&state.channels,
+																&mut self.channel_reference,
+																&state.guilds,
+																crate::mentions::known_roles(
+																	state,
+																	message.channel,
+																),
 															),
-														),
-														(avatars, state.demo, &mut text),
-														&mut surface,
-													);
-												});
+															(avatars, state.demo, &mut text),
+															&mut surface,
+														);
+													})
+													.response
+													.rect;
 											}
 											if formatted.limited {
 												ui.label(
@@ -2516,6 +2528,7 @@ impl TimelineView {
 											}
 										}
 									}
+									fill_header_line(ui, compact, text_line);
 								});
 							});
 							let mut cover = ui.min_rect();
