@@ -125,6 +125,11 @@ its remembered channel, otherwise preferring an accessible ordinary text/forum
 channel. Voice selection only opens its existing preview, never joins a call.
 With no accessible channel, the existing conversation remains intact.
 
+Opened threads keep a separate session-only list of at most 1,024 IDs (8 KiB
+vector payload). The channel sidebar shows the four most recently opened threads
+under each parent, newest first; loading a thread does not count as opening it.
+Removal and logout clear the corresponding entries. Nothing is written to disk.
+
 ## Friends-home derived UI caches (September 14, 2026)
 
 Friends Online/All retain one filtered, sorted boxed ID list: at most 4,000 IDs

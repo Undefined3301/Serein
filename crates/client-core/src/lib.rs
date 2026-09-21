@@ -623,6 +623,9 @@ pub struct State {
 	/// Session-local guild/channel ID pairs, oldest visit first; at most 16 KiB.
 	#[doc(hidden)]
 	pub last_viewed_channels: Vec<(Id, Id)>,
+	/// Session-local opened threads, newest first; at most 1,024 IDs / 8 KiB.
+	#[doc(hidden)]
+	pub last_viewed_threads: Vec<Id>,
 	pub timeline: Timeline,
 	pub preserve_deleted_messages: bool,
 	pub resident: resident::Windows,
@@ -701,6 +704,7 @@ impl Default for State {
 			navigation_index: NavigationIndex::default(),
 			selected: None,
 			last_viewed_channels: Vec::new(),
+			last_viewed_threads: Vec::new(),
 			timeline: Timeline::default(),
 			preserve_deleted_messages: false,
 			resident: resident::Windows::default(),
@@ -891,6 +895,14 @@ impl State {
 			self.remember_channel(previous);
 		}
 		self.remember_channel(channel);
+		if self
+			.channel(channel)
+			.is_some_and(|c| matches!(c.kind, 10..=12))
+		{
+			self.last_viewed_threads.retain(|id| *id != channel);
+			self.last_viewed_threads.truncate(1023);
+			self.last_viewed_threads.insert(0, channel);
+		}
 		self.retire_archived_thread(Some(channel));
 		self.typing.clear();
 		self.select_resident(channel);
@@ -2831,6 +2843,7 @@ impl State {
 	}
 	fn remove_channels(&mut self, removed: &BTreeSet<Id>) {
 		self.invalidate_navigation();
+		self.last_viewed_threads.retain(|id| !removed.contains(id));
 		for id in removed {
 			self.resident.remove(*id);
 		}

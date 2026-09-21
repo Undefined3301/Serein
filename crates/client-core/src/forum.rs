@@ -328,18 +328,21 @@ impl State {
 	}
 
 	pub fn can_create_post(&self, parent: Id) -> bool {
+		self.posting.pending.is_none() && self.can_post(parent)
+	}
+
+	fn can_post(&self, parent: Id) -> bool {
 		self.auth == AuthState::Authenticated
 			&& self.gateway_connected
 			&& self.is_forum(parent)
-			&& self.posting.pending.is_none()
 			&& self.can_view(parent)
 			&& self.permission(parent, p::SEND_MESSAGES) == Some(true)
 	}
 
 	/// A forum container is not a text channel, so `can_attach` never covers it; the starter
-	/// message still needs the container's own attachment permission.
+	/// message still needs the container's own attachment permission, including while pending.
 	pub fn can_attach_post(&self, parent: Id) -> bool {
-		self.can_create_post(parent) && self.permission(parent, p::ATTACH_FILES) == Some(true)
+		self.can_post(parent) && self.permission(parent, p::ATTACH_FILES) == Some(true)
 	}
 
 	pub fn create_post(&mut self, parent: Id, title: &str, content: &str) -> Option<Command> {

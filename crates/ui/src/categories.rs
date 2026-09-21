@@ -7,7 +7,7 @@ use egui::RichText;
 use model::{Channel, Id, Shortcut};
 use std::collections::{BTreeMap, BTreeSet};
 
-const MAX_VISIBLE_THREADS: usize = 3;
+const MAX_VISIBLE_THREADS: usize = 4;
 
 /// Where a channel row came from. A mirrored guild channel differs from its tree copy by slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -221,6 +221,9 @@ fn rows<'a>(
 	for channel in channels.iter().filter(|c| {
 		scope.admits(c, state) && (show_hidden || state.can_view(c.id)) && !roster.lifted(c.id)
 	}) {
+		if matches!(channel.kind, 10..=12) && !state.last_viewed_threads.contains(&channel.id) {
+			continue;
+		}
 		if matches!(channel.kind, 10..=12)
 			&& let Some(parent) = channel.parent_id.and_then(|id| parents.get(&id))
 			&& parent.parent_id != Some(channel.id)
@@ -233,12 +236,15 @@ fn rows<'a>(
 			.filter(|id| !matches!(channel.kind, 10..=12) && category_ids.contains(id));
 		groups.entry(parent).or_default().push(channel);
 	}
-	for group in groups.values_mut().chain(threads.values_mut()) {
+	for group in groups.values_mut() {
 		if guild.is_some() {
 			group.sort_unstable_by_key(|c| (c.position, c.id));
 		} else {
 			group.sort_unstable_by_key(|c| std::cmp::Reverse((state.channel_activity(c), c.id)));
 		}
+	}
+	for group in threads.values_mut() {
+		group.sort_unstable_by_key(|c| state.last_viewed_threads.iter().position(|id| *id == c.id));
 	}
 	let append = |channel: &'a Channel, slot: Slot, hidden: bool, rows: &mut Vec<Row<'a>>| {
 		if hidden {
@@ -1169,6 +1175,77 @@ impl MessagingUi {
 	}
 }
 
+/// Offline regression check for attachment permission and opened-thread ordering.
+#[cfg(feature = "demo")]
+pub fn debug_thread_navigation_check(state: &mut State) {
+	let parent = Id(26);
+	state.auth = client_core::auth::AuthState::Authenticated;
+	state.gateway_connected = true;
+	state.select(parent);
+	let visible = |state: &State| {
+		rows(
+			state,
+			Scope::Guild(Id(10)),
+			&Roster::default(),
+			&BTreeSet::new(),
+			false,
+		)
+		.into_iter()
+		.filter_map(|row| match row {
+			Row::Channel(c, _, true) if c.parent_id == Some(parent) => Some(c.id),
+			_ => None,
+		})
+		.collect::<Vec<_>>()
+	};
+	assert!(visible(state).is_empty(), "Loaded threads are not visits");
+	let template = state.channel(Id(27)).unwrap().clone();
+	for id in 1000..1005 {
+		let client_core::Command::CreatePost {
+			request,
+			attachments,
+			..
+		} = state
+			.create_post_with_attachments(parent, "Image post", "", &["synthetic.png"])
+			.unwrap()
+		else {
+			panic!("Expected post command")
+		};
+		assert_eq!(attachments, ["synthetic.png"]);
+		assert!(
+			!state.can_create_post(parent),
+			"Duplicate submissions stay blocked"
+		);
+		assert!(
+			state.can_attach_post(parent),
+			"Pending post must allow its upload"
+		);
+		state.gateway_connected = false;
+		assert!(!state.can_attach_post(parent));
+		state.gateway_connected = true;
+		let mut post = template.clone();
+		post.id = Id(id);
+		state.apply_post(parent, request, Ok(post));
+		let created = state.posting.created.take().unwrap();
+		assert!(
+			state
+				.forum_posts(parent)
+				.iter()
+				.any(|post| post.id == created)
+		);
+		state.select(created);
+		assert_eq!(visible(state)[0], created);
+		state.select(parent);
+	}
+	assert_eq!(visible(state), [Id(1004), Id(1003), Id(1002), Id(1001)]);
+	state.select(Id(1002));
+	assert_eq!(visible(state), [Id(1002), Id(1004), Id(1003), Id(1001)]);
+	state.select(Id(1000));
+	assert_eq!(visible(state), [Id(1000), Id(1002), Id(1004), Id(1003)]);
+	println!(
+		"Thread debug check passed: image post dispatch permission, created posts, four opened threads, newest first."
+	);
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -1251,6 +1328,7 @@ mod tests {
 			.permissions
 			.replace(test_support::permission_snapshot(&state))
 			.unwrap();
+		state.select(Id(8));
 		let preferences = model::ChannelPreferences {
 			pinned: vec![Id(7)],
 			favorites: vec![Id(7), Id(9)],
@@ -1954,6 +2032,10 @@ mod tests {
 		hierarchy.iter_mut().find(|c| c.id == Id(26)).unwrap().guild = Some(Id(101));
 		let hierarchy_state = State {
 			channels: hierarchy.clone(),
+			last_viewed_threads: vec![9, 8, 11, 13, 20, 21, 22, 23, 24, 25, 27]
+				.into_iter()
+				.map(Id)
+				.collect(),
 			..State::default()
 		};
 		let expanded = tree(&hierarchy_state, BTreeSet::new());
@@ -2043,7 +2125,7 @@ mod tests {
 			view.channel_cache.rows.as_slice(),
 			[CachedRow::Category(_, 1)]
 		));
-		// Forum containers never request history; their loaded posts remain keyboard-selectable.
+		// Forum containers never request history; opened posts remain keyboard-selectable.
 		state.channels = vec![channel(7, 15, 0, None), channel(8, 11, 0, Some(Id(7)))];
 		state.revision += 1;
 		state.invalidate_navigation();
@@ -2051,6 +2133,8 @@ mod tests {
 			.permissions
 			.replace(test_support::permission_snapshot(&state))
 			.unwrap();
+		state.selected = None;
+		state.select(Id(8));
 		assert!(state.select(Id(7)).is_none());
 		let ctx = egui::Context::default();
 		let mut picked = None;
