@@ -177,6 +177,7 @@ pub struct MessagingUi {
 	avatars: avatars::Avatars,
 	profile: Option<model::User>,
 	user_action: Option<user_menu::Action>,
+	pending_mention: Option<Id>,
 	contact_editor: contact_editor::ContactEditor,
 	profile_link: Option<String>,
 	profile_formatted: markdown::FormatCache,
@@ -406,6 +407,11 @@ fn mention_switch(ui: &mut egui::Ui, colors: &design::Palette, on: &mut bool) {
 		)
 	});
 	response.on_hover_text(hover);
+}
+
+enum MentionWrite {
+	Inserted,
+	DidNotFit,
 }
 
 impl MessagingUi {
@@ -2011,6 +2017,9 @@ impl MessagingUi {
 			}
 		}
 		if !editing_here && !state.can_compose(channel) {
+			if self.pending_mention.take().is_some() {
+				state.status = "You don't have permission to mention anyone in this channel.";
+			}
 			// Returning to an edit must restore its focus after visiting a read-only channel.
 			self.composer_edit = None;
 			self.mention_menu = mentions::Menu::default();
@@ -2523,8 +2532,15 @@ impl MessagingUi {
                         } else {
                             &mut new_draft
                         };
-                        let mut mention_changed = false;
-                        if let Some(pick) = pick {
+						let mut mention_changed = false;
+						match self.apply_pending_mention(ctx, composer_id, draft, remaining) {
+							None => {}
+							Some(MentionWrite::Inserted) => mention_changed = true,
+							Some(MentionWrite::DidNotFit) => {
+								state.status = "Mention will not fit. Shorten this message or free draft space.";
+							}
+						}
+						if let Some(pick) = pick {
                             let mut edit_state =
                                 egui::text_edit::TextEditState::load(ctx, composer_id).unwrap_or_default();
                             let range = edit_state.cursor.char_range();
@@ -2785,7 +2801,66 @@ impl MessagingUi {
 	fn shows_title_bar(&self) -> bool {
 		!cfg!(target_os = "linux") && !self.hide_title_bar
 	}
+	fn apply_pending_mention(
+		&mut self,
+		ctx: &egui::Context,
+		composer_id: egui::Id,
+		draft: &mut String,
+		remaining: usize,
+	) -> Option<MentionWrite> {
+		let user_id = self.pending_mention.take()?;
+		if user_id == Id(0) {
+			return None;
+		}
+		let loaded = egui::text_edit::TextEditState::load(ctx, composer_id);
+		let had_editor = loaded.is_some();
+		let mut edit_state = loaded.unwrap_or_default();
+		let range = edit_state
+			.cursor
+			.char_range()
+			.filter(|_| had_editor)
+			.or_else(|| {
+				Some(egui::text::CCursorRange::one(egui::text::CCursor::new(
+					draft.chars().count(),
+				)))
+			});
+		let start = range.map_or(draft.chars().count(), |range| {
+			range
+				.as_sorted_char_range()
+				.start
+				.0
+				.min(draft.chars().count())
+		});
+		let glue = start > 0
+			&& draft
+				.chars()
+				.nth(start - 1)
+				.is_some_and(|c| !c.is_whitespace());
+		let token = mentions::user_mention_token(user_id);
+		let token = if glue { format!(" {token}") } else { token };
+		let Some(cursor) = emoji_picker::insert(draft, &token, range, remaining) else {
+			return Some(MentionWrite::DidNotFit);
+		};
+		edit_state
+			.cursor
+			.set_char_range(Some(egui::text::CCursorRange::one(
+				egui::text::CCursor::new(cursor),
+			)));
+		edit_state.store(ctx, composer_id);
+		Some(MentionWrite::Inserted)
+	}
 	pub fn show(&mut self, ui: &mut egui::Ui, state: &mut State) -> Vec<Command> {
+		let mention_waiting = self.pending_mention.is_some();
+		let composer_open = self.editing.is_some()
+			|| state.selected.is_some_and(|id| {
+				state
+					.channel(id)
+					.is_some_and(|channel| channel.supports_text())
+			});
+		if mention_waiting && !composer_open {
+			self.pending_mention = None;
+			state.status = "This view has no message box, so the mention was not added.";
+		}
 		if self.editing.is_none()
 			&& let Some(index) = state
 				.message_actions
@@ -3791,6 +3866,13 @@ impl MessagingUi {
 				}
 				user_menu::Action::Shortcut(intent) => {
 					self.apply_shortcut(state, intent);
+					None
+				}
+				user_menu::Action::Mention(user) => {
+					if user.id != Id(0) {
+						self.pending_mention = Some(user.id);
+						ctx.request_repaint();
+					}
 					None
 				}
 				action => user_menu::prepare(action, state),
