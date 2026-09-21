@@ -4551,7 +4551,8 @@ mod tests {
 		assert_eq!(state.reply, None);
 		assert_eq!(state.timeline.row_ids().collect::<Vec<_>>(), positions);
 		assert!(state.timeline.is_empty());
-		assert_eq!(state.timeline.bytes(), 0);
+		assert!(state.timeline.bytes() > 0);
+		assert!(state.timeline.get_display(Id(100)).is_some());
 		assert!(state.can_load_older());
 		assert!(!state.can_edit(Id(1), Id(100)));
 		assert!(matches!(
@@ -4602,9 +4603,11 @@ mod tests {
 		);
 		assert_eq!(
 			state.timeline.row_ids().collect::<Vec<_>>(),
-			[Id(99), Id(150)]
+			(99..=150).map(Id).collect::<Vec<_>>()
 		);
 		assert!(state.timeline.get(Id(99)).is_none());
+		assert!(state.timeline.get_display(Id(99)).is_some());
+		assert!(state.timeline.get(Id(150)).is_some());
 		state.history(None);
 		let request = state.request;
 		apply(&mut state, Event::Resync);
