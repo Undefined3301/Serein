@@ -865,6 +865,10 @@ async fn run_inner(
 							continue;
 						}
 					};
+					if let client_core::voice::Command::Leave { channel, request } = command
+						&& packet.is_none() && !calls.has_call() {
+						emit(Event::Voice(client_core::voice::Event::Departed { channel, request }))?;
+					}
 					if let Some(channel)=connect && let Some(packet)=calls.packet(client_core::voice::Command::Sync { channel })?
 						&& !matches!(timeout(Duration::from_secs(5),socket.send(packet)).await,Ok(Ok(()))) {break;}
 					if let Some(packet)=packet && !matches!(timeout(Duration::from_secs(5),socket.send(packet)).await,Ok(Ok(()))) {break;}

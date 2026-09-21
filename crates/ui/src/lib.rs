@@ -250,6 +250,8 @@ pub struct MessagingUi {
 	pending_upload: Option<pending::Upload>,
 	pub clear_cache_requested: bool,
 	pub voice_available: bool,
+	pub voice_switch_ready: bool,
+	voice_switch: Option<voice::CallSwitch>,
 	pub screen: screen::ScreenUi,
 	pub voice_camera_available: bool,
 	pub voice_camera_status: &'static str,
@@ -259,6 +261,10 @@ pub struct MessagingUi {
 	pub voice_camera_device_status: &'static str,
 	pub voice_camera_devices_loading: bool,
 	pub voice_camera_preview: Option<egui::TextureHandle>,
+	pub camera_test_requested: bool,
+	pub camera_test_available: bool,
+	pub camera_test_status: &'static str,
+	pub camera_test_texture: Option<egui::TextureHandle>,
 	/// Decoded remote cameras by user; the desktop bounds and replaces them.
 	pub voice_remote_video: Vec<(Id, egui::TextureHandle)>,
 	/// Latest picture of the screen share this device chose to watch.
@@ -3963,6 +3969,7 @@ impl MessagingUi {
 				None => {}
 			}
 		}
+		self.show_call_switch(&ctx, state, &mut commands);
 		self.verification.show(&ctx, state);
 		self.scroll.clear_if_unbound(&ctx);
 		self.scroll.paint(&ctx);

@@ -116,6 +116,8 @@ pub struct Call {
 #[derive(Default)]
 pub struct State {
 	pub active: Option<Call>,
+	/// Last service-confirmed departure, scoped to its local request.
+	pub departed: Option<(Id, u64)>,
 	pub incoming: Option<Id>,
 	/// Known service calls, independent of ringing and this device's media session.
 	pub(crate) dm_calls: Vec<Id>,
@@ -186,6 +188,10 @@ pub enum Command {
 	},
 }
 pub enum Event {
+	Departed {
+		channel: Id,
+		request: u64,
+	},
 	Snapshot {
 		partial: bool,
 		guild: Option<Id>,
@@ -382,6 +388,7 @@ impl ClientState {
 	}
 	pub fn leave_call(&mut self) -> Option<crate::Command> {
 		let call = self.voice.active.take()?;
+		self.voice.departed = None;
 		Some(crate::Command::Voice(Command::Leave {
 			channel: call.channel,
 			request: call.request,
@@ -453,6 +460,9 @@ impl ClientState {
 	}
 	pub fn apply_voice(&mut self, event: Event) {
 		match event {
+			Event::Departed { channel, request } => {
+				self.voice.departed = Some((channel, request));
+			}
 			Event::Snapshot {
 				partial,
 				guild,

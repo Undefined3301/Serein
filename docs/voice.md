@@ -48,8 +48,8 @@ Start calls the selected existing DM; incoming calls require Answer or Decline. 
 Opening a one-to-one or group DM also requests its existing call state. An ongoing call shows a
 **Call in progress** banner and **Join call**, even after ringing stops or this device leaves.
 Join uses the existing connection flow without ringing again; browsing never joins or opens
-audio devices. Incoming ringing retains Answer/Decline. Join is disabled while offline, in a
-voice-unavailable session, or while another local call still exists. Ended/unavailable calls disappear.
+audio devices. Incoming ringing retains Answer/Decline. Join is disabled while offline or in a voice-unavailable session. Joining or answering another
+call asks **Switch calls?** before leaving the current call. Ended/unavailable calls disappear.
 This uses the existing unofficial Gateway opcode 13 and CALL_CREATE/UPDATE/DELETE contract,
 checked against [discord.py-self's Gateway implementation](https://github.com/dolfies/discord.py-self/blob/master/discord/gateway.py)
 and [call dispatch handling](https://github.com/dolfies/discord.py-self/blob/master/discord/state.py)
@@ -115,7 +115,7 @@ Until actual two-way official-client audio and the relevant encryption/teardown 
 
 ## Server channel workflow and live gate
 
-Select an existing server voice channel to inspect its roster, then explicitly Join. Browsing alone never opens media devices. Participant rows show names/avatars and separate mute/deafen states; the connected channel shows elapsed local connection time. Mute/deafen, audio settings and Leave remain available while reading other channels. Server-enforced mute/deafen cannot be overridden locally. To switch rooms, leave the current room and join the next after departure is acknowledged. A rejected/full/inaccessible room fails visibly after the bounded allocation deadline.
+Select an existing server voice channel to inspect its roster, then explicitly Join. Browsing alone never opens media devices. Participant rows show names/avatars and separate mute/deafen states; the connected channel shows elapsed local connection time. Mute/deafen, audio settings and Leave remain available while reading other channels. Server-enforced mute/deafen cannot be overridden locally. To switch rooms, select the next room and Join, then confirm **Switch call**. The current call closes immediately; the new call waits for the matching service departure acknowledgment and local audio teardown. Cancelling keeps the current call. The pending switch expires after 12 seconds and is cancelled on disconnect, account change or lost target access; it never retries automatically. A rejected/full/inaccessible room fails visibly after the bounded allocation deadline.
 
 An authenticated empty room displays “Connected · waiting for others”; audio devices open for local microphone detection, respecting mute, deafen, push-to-talk and SPEAK permission. Captured audio is consumed locally while alone; transmission waits until another participant joins and DAVE is secured. The client does not transmit unencrypted microphone audio to make an empty room appear connected. A server move, changed voice endpoint/session or main Gateway failure requires an explicit rejoin. The roster is session-only, bounded to 4,096 entries and 1 MiB, and is cleared on fresh login/resync and relevant access invalidation; during a resumable disconnect it is labeled last-known until missed events replay. Missing user details use a fallback identity rather than fetching a whole guild directory.
 
@@ -468,12 +468,19 @@ bitrate or RTP retransmission. Physical
 permission/device behavior, delivery to the official client and network-loss performance
 require the owner-controlled live gate; an offline launch does not establish those results.
 
-Windows exposes a camera picker in Voice & Audio settings and beside both call
-camera controls. Discovery runs on a worker without activating a camera. Up to
+Windows, macOS and Linux expose a camera picker in Voice & Audio settings and beside both call
+camera controls. Discovery runs on a worker without starting capture. macOS uses AVFoundation device discovery; Linux queries up to 64 V4L2 nodes without configuring or streaming them. Up to
 32 device IDs (4 KiB each) and names (256 bytes each) are retained. The selected
 ID is session-local. Refresh discovers added/removed devices; a missing selected
 device is reported rather than silently opening another camera. Changing selection
 stops active capture and requires another camera-on click.
+
+Voice & Audio also offers an explicit **Preview camera / Stop preview** control outside
+calls. It reuses the bounded camera worker and latest-frame texture; frames have no
+network sender and are never recorded. Closing the voice settings page, changing
+camera, joining a call, logout, or an error stops the preview. During a camera-enabled
+call, settings show the existing call preview. Demo mode never opens a camera.
+Physical capture and native permission behavior still require owner verification.
 
 Media Foundation devices use a native 640×480 mode convertible to RGB32.
 DirectShow discovery/capture additionally covers virtual cameras such as OBS and

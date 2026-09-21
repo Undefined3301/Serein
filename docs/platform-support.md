@@ -93,8 +93,10 @@ server negotiates H264; capture starts only after an explicit click in a connect
 call. All adapters send 640×480 video at most 15 encoded frames/s.
 Windows needs desktop camera permission; Linux needs an accessible streaming
 `/dev/videoN` node supporting progressive YUYV or MJPEG. Linux portal-only camera
-access is not implemented. Windows has a device picker in settings and call controls,
-including DirectShow virtual cameras; macOS/Linux still use their default selection.
+access is not implemented. All three platforms have a device picker in settings and call controls,
+including DirectShow virtual cameras on Windows, AVFoundation discovery on macOS,
+and single-plane streaming V4L2 devices on Linux. Settings also provide an explicit
+local camera preview outside calls. Physical selection/preview remains unverified.
 See [camera limits and validation](voice.md#camera-in-calls-macos-windows-and-linux).
 Windows compilation and isolated Linux adapter tests do not establish working
 physical capture or delivery to an official Discord client; these remain unverified.

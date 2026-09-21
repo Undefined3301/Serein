@@ -1049,3 +1049,14 @@ Up to ten selected images remain in session RAM (80 MiB encoded artwork maximum)
 with no temporary files or recovery cache. Navigation/logout cancel pending preparation;
 The picker selection authorizes one send after validation; ordinary upload permissions
 and cleanup apply. Existing selected files are never included in that send.
+
+
+### Local camera settings preview
+
+The explicit settings preview shares the process-wide single camera-worker limit with
+calls. It retains one 640×480 RGBA picture (1,228,800 bytes), one UI texture and its
+upload copy, alongside the existing bounded native capture/encoding buffers. It has
+no network sender, recording or persistent storage. Device choices stay session-local;
+discovery retains at most 32 IDs/names (136 KiB). Closing Voice & Audio, changing the
+camera, joining a call or logout releases the preview; asynchronous native teardown
+keeps the worker slot reserved until it finishes.
