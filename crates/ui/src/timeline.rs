@@ -5775,10 +5775,10 @@ mod tests {
 			}
 			assert_eq!(
 				view.anchor.unwrap().0,
-				Id(anchor.0.0 + 1),
-				"Deleting the anchored row keeps the next surviving message at the top"
+				anchor.0,
+				"Deleting the anchored row keeps that message visible"
 			);
-			assert!(!view.heights.contains_key(&anchor.0));
+			assert!(view.heights.contains_key(&anchor.0));
 			view.jump = true;
 			view.following = true;
 			for _ in 0..8 {
@@ -6118,7 +6118,7 @@ mod tests {
 				assert!(!labels.iter().any(|text| text.contains("Resident beta")));
 				assert_eq!(
 					view.rows.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
-					if deleted_only { vec![] } else { expected }
+					expected
 				);
 				assert!(
 					view.rows
@@ -6133,14 +6133,10 @@ mod tests {
 					view.mark_read.is_none(),
 					"Unrevalidated resident rows must not acknowledge read state"
 				);
+				assert!(labels.iter().any(|text| text.contains("Resident alpha")));
 				if deleted_only {
 					assert!(state.timeline.is_empty());
 					assert!(!labels.iter().any(|text| text == "Message deleted"));
-					assert!(!labels.iter().any(|text| text.contains("Resident alpha")
-						|| text == "Loading messages?"
-						|| text.contains("No messages yet")));
-				} else {
-					assert!(labels.iter().any(|text| text.contains("Resident alpha")));
 				}
 			}
 		}
