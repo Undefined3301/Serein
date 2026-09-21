@@ -626,6 +626,28 @@ impl State {
 		}
 		Ok(())
 	}
+	pub(crate) fn counts_toward_mention_badge(&self, message: &Message) -> bool {
+		// Private recipient-remove rows are not mentions. Discord message type 2.
+		if message.kind == 2
+			|| !model::valid_mention_roles(&message.mention_roles)
+			|| self
+				.user
+				.as_ref()
+				.is_some_and(|owner| message.author.id == owner.id)
+		{
+			return false;
+		}
+		let direct = self
+			.user
+			.as_ref()
+			.is_some_and(|owner| message.mentions.iter().any(|user| user.id == owner.id));
+		self.mention_matches(
+			message.channel,
+			direct,
+			message.mention_everyone,
+			&message.mention_roles,
+		)
+	}
 	fn mention_matches(&self, channel: Id, direct: bool, everyone: bool, roles: &[Id]) -> bool {
 		let Some(channel) = self.channel(channel) else {
 			return false;
@@ -748,12 +770,7 @@ impl State {
 			return;
 		}
 		let direct = message.mentions.iter().any(|u| u.id == owner.id);
-		let mention = self.mention_matches(
-			message.channel,
-			direct,
-			message.mention_everyone,
-			&message.mention_roles,
-		);
+		let mention = self.counts_toward_mention_badge(message);
 		// Silent messages still contribute to badges, but never enqueue an OS alert.
 		let allowed = !message.suppress_notifications
 			&& self.user_blocked(message.author.id) != Some(true)
@@ -1317,5 +1334,75 @@ mod tests {
 		activity.delete(Id(1), Id(2));
 		assert!(activity.observed_counts.is_empty());
 		assert!(activity.observed.is_empty());
+	}
+	#[test]
+	fn marking_unread_badges_guild_mentions_inside_the_new_range() {
+		let mut state = notification_state();
+		state.freshness = model::Freshness::Fresh;
+		state.selected = Some(Id(20));
+		state
+			.channels
+			.iter_mut()
+			.find(|channel| channel.id == Id(20))
+			.unwrap()
+			.last_message = Some(Id(100));
+		state
+			.apply_read_state(crate::read_state::Event::Ack {
+				channel: Id(20),
+				message: Some(Id(100)),
+				manual: false,
+				mention_count: Some(0),
+				version: Some(2),
+			})
+			.unwrap();
+		let mut plain = message(96, 20);
+		plain.mentions.clear();
+		let ping = message(97, 20);
+		let mut mine = message(98, 20);
+		mine.author.id = Id(2);
+		mine.mentions.clear();
+		let mut everyone = message(99, 20);
+		everyone.mentions.clear();
+		everyone.mention_everyone = true;
+		let mut later = message(100, 20);
+		later.mentions.clear();
+		for row in [plain, ping, mine, everyone, later] {
+			state.timeline.insert(row, false, false).unwrap();
+		}
+		assert_eq!(state.mention_count(Id(20)), 0);
+		assert_eq!(state.unread(Id(20)), Some(false));
+		let crate::Command::MarkRead {
+			channel,
+			message,
+			request,
+			manual: true,
+			mention_count,
+		} = state.prepare_mark_unread(Id(96)).unwrap()
+		else {
+			panic!("mark unread");
+		};
+		assert_eq!(message, Id(95));
+		assert_eq!(mention_count, Some(2));
+		state
+			.apply_read_state(crate::read_state::Event::Result {
+				channel,
+				message,
+				request,
+				result: Ok(()),
+			})
+			.unwrap();
+		assert_eq!(state.unread(Id(20)), Some(true));
+		assert_eq!(state.mention_count(Id(20)), 2);
+		state
+			.apply_read_state(crate::read_state::Event::Ack {
+				channel,
+				message: Some(message),
+				manual: true,
+				mention_count: None,
+				version: Some(3),
+			})
+			.unwrap();
+		assert_eq!(state.mention_count(Id(20)), 2);
+		assert_eq!(state.unread(Id(20)), Some(true));
 	}
 }
