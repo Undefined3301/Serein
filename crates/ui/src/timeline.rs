@@ -104,6 +104,7 @@ pub struct TimelineView {
 	// A fingerprint of the revealed content prevents a reload that resets model revisions from
 	// revealing edits, without cloning payloads. Pruned with the active window: at most 500 records.
 	revealed: BTreeMap<Id, Revealed>,
+	prior_revealed: BTreeMap<(Id, u16), u32>,
 	pub(super) viewing: Option<(Id, Id)>,
 	/// Fixture-only: viewer to open once its message has arrived in the timeline.
 	pending_viewer: Option<(Id, Id)>,
@@ -1383,6 +1384,8 @@ impl TimelineView {
 					.get_display(*id)
 					.is_some_and(|m| content.matches(m))
 			});
+			self.prior_revealed
+				.retain(|(id, _), _| row_ids.binary_search(id).is_ok());
 			let mut previous = None;
 			let mut lead_basis = 0.0;
 			self.rows = starter
@@ -2136,12 +2139,63 @@ impl TimelineView {
 												);
 												ui.add_space(4.0);
 											}
-											for prior in message.prior_contents.as_slice() {
-												ui.label(
-													RichText::new(prior)
-														.size(16.0)
-														.color(colors.muted),
-												);
+											for (index, prior) in
+												message.prior_contents.as_slice().iter().enumerate()
+											{
+												let part =
+													u16::try_from(index + 1).unwrap_or(u16::MAX);
+												let mut revealed = self
+													.prior_revealed
+													.get(&(id, part))
+													.copied()
+													.unwrap_or(0);
+												let before = revealed;
+												{
+													let formatted =
+														self.formatted.get_part(id, part, prior);
+													ui.scope(|ui| {
+														ui.visuals_mut().override_text_color =
+															Some(colors.muted);
+														let mut surface =
+															crate::select::Surface::new(
+																ui, "prior",
+															);
+														let source =
+															crate::mentions::MentionSource {
+																state,
+																channel: message.channel,
+															};
+														formatted.show_references(
+															ui,
+															&mut self.opening,
+															&message.mentions,
+															Some(&source),
+															profile,
+															(
+																&state.channels,
+																&mut self.channel_reference,
+																&state.guilds,
+																crate::mentions::known_roles(
+																	state,
+																	message.channel,
+																),
+															),
+															(avatars, state.demo, &mut revealed),
+															&mut surface,
+														);
+														surface.finish(ui);
+													});
+												}
+												if revealed != before {
+													if revealed == 0 {
+														self.prior_revealed.remove(&(id, part));
+													} else {
+														self.prior_revealed
+															.insert((id, part), revealed);
+													}
+													self.heights.remove(&id);
+													ui.ctx().request_repaint();
+												}
 											}
 											let body_color = if deleted
 												&& !self.suppressed_deleted_highlight.contains(&id)
