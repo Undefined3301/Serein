@@ -2050,6 +2050,18 @@ impl MessagingUi {
 				.is_some_and(|call| call.phase != Phase::Failed)
 	}
 
+	fn queue_voice_toggle_cue(&mut self, deafen: bool, active: bool) {
+		let cue = match (deafen, active) {
+			(true, true) => model::notification_preferences::Sound::Deafen,
+			(true, false) => model::notification_preferences::Sound::Undeafen,
+			(false, true) => model::notification_preferences::Sound::Mute,
+			(false, false) => model::notification_preferences::Sound::Unmute,
+		};
+		if self.notification_options.allows(cue) {
+			self.notification_preview = Some(cue);
+		}
+	}
+
 	/// Mute or deafen toggle: red slashed glyph while active, like Discord's user area.
 	pub(super) fn mute_toggle(
 		&mut self,
@@ -2094,8 +2106,10 @@ impl MessagingUi {
 			if response.clicked() {
 				if deafen {
 					self.voice_deafened = !active;
+					self.queue_voice_toggle_cue(true, !active);
 				} else {
 					self.voice_muted = !active;
+					self.queue_voice_toggle_cue(false, !active);
 				}
 			}
 			return response.on_hover_text(format!("{label}; applies to your next call."));
@@ -2151,8 +2165,10 @@ impl MessagingUi {
 		if response.clicked() {
 			if deafen {
 				deafened = !deafened;
+				self.queue_voice_toggle_cue(true, deafened);
 			} else {
 				muted = !muted;
+				self.queue_voice_toggle_cue(false, muted);
 			}
 			self.voice_muted = muted;
 			self.voice_deafened = deafened;
@@ -2353,9 +2369,11 @@ impl MessagingUi {
 		}
 		if mute_clicked {
 			muted = !muted;
+			self.queue_voice_toggle_cue(false, muted);
 		}
 		if deafen_clicked {
 			deafened = !deafened;
+			self.queue_voice_toggle_cue(true, deafened);
 		}
 		if mute_clicked || deafen_clicked {
 			self.voice_muted = muted;
@@ -3441,6 +3459,28 @@ mod tests {
 		view.set_voice_user_mutes(&(0..200).collect::<Vec<u64>>());
 		assert_eq!(view.voice_user_mutes().len(), MAX_USER_MUTES);
 		assert!(!view.voice_user_mutes().contains(&0));
+	}
+
+	#[test]
+	fn voice_toggle_cues_follow_the_resulting_state_and_preferences() {
+		use model::notification_preferences::Sound;
+
+		let mut view = MessagingUi::default();
+		view.notification_options.discord_sounds = true;
+		for (deafen, active, expected) in [
+			(false, true, Sound::Mute),
+			(false, false, Sound::Unmute),
+			(true, true, Sound::Deafen),
+			(true, false, Sound::Undeafen),
+		] {
+			view.notification_preview = None;
+			view.queue_voice_toggle_cue(deafen, active);
+			assert_eq!(view.notification_preview, Some(expected));
+		}
+		view.notification_options.mute = false;
+		view.notification_preview = None;
+		view.queue_voice_toggle_cue(false, true);
+		assert_eq!(view.notification_preview, None);
 	}
 
 	#[test]

@@ -69,6 +69,7 @@ mod tests {
 				"Badges",
 				"Enable Unread Message Badge",
 				"Incoming Ring",
+				"Classic Discord Sounds",
 			] {
 				assert!(
 					labels.iter().any(|(s, _)| s.eq_ignore_ascii_case(label)),
@@ -78,6 +79,56 @@ mod tests {
 			for label in ["Email", "Advanced", "Friends come online"] {
 				assert!(!labels.iter().any(|(s, _)| s == label), "stale {label}");
 			}
+			assert!(!labels.iter().any(|(s, _)| s == "Microphone Muted"));
+			assert!(!labels.iter().any(|(s, _)| s == "Microphone Unmuted"));
+			assert!(!labels.iter().any(|(s, _)| s == "Deafen"));
+			assert!(!labels.iter().any(|(s, _)| s == "Undeafen"));
+			assert!(!labels.iter().any(|(s, _)| s == "Outgoing Ring"));
+			assert!(!labels.iter().any(|(s, _)| s == "Camera On"));
+			assert!(!labels.iter().any(|(s, _)| s == "Screen Share Started"));
+			assert!(!labels.iter().any(|(s, _)| s == "Call Joined"));
+			assert!(!labels.iter().any(|(s, _)| s == "User Left Call"));
+			view.notification_options.discord_sounds = true;
+			let discord_labels = render(&mut view, vec![]);
+			assert!(discord_labels.iter().any(|(s, _)| s == "Microphone Muted"));
+			assert!(
+				discord_labels
+					.iter()
+					.any(|(s, _)| s == "Microphone Unmuted")
+			);
+			assert!(discord_labels.iter().any(|(s, _)| s == "Deafen"));
+			assert!(discord_labels.iter().any(|(s, _)| s == "Undeafen"));
+			for (label, sound) in [
+				("Outgoing Ring", Sound::OutgoingRing),
+				("Camera On", Sound::CameraOn),
+				("Screen Share Started", Sound::ScreenShareOn),
+				("Call Joined", Sound::UserJoin),
+				("User Left Call", Sound::UserLeave),
+			] {
+				let point = discord_labels
+					.iter()
+					.skip_while(|(text, _)| text != label)
+					.find(|(text, _)| text == "Preview Sound")
+					.unwrap_or_else(|| panic!("missing preview for {label}"))
+					.1
+					.center();
+				for pressed in [true, false] {
+					render(
+						&mut view,
+						vec![
+							egui::Event::PointerMoved(point),
+							egui::Event::PointerButton {
+								pos: point,
+								button: egui::PointerButton::Primary,
+								pressed,
+								modifiers: egui::Modifiers::NONE,
+							},
+						],
+					);
+				}
+				assert_eq!(view.notification_preview.take(), Some(sound));
+			}
+			view.notification_options.discord_sounds = false;
 			let labels = render(&mut view, vec![]);
 			let point = labels
 				.iter()
@@ -163,7 +214,16 @@ impl MessagingUi {
 		});
 		self.settings.notifications.heading(ui, Tab::Sounds);
 		design::card(ui, |ui| {
-			for (index, (label, value, sound)) in [
+			design::switch(
+				ui,
+				"Classic Discord Sounds",
+				Some(
+					"Use classic Discord notification sounds and ringtones instead of Serein defaults.",
+				),
+				&mut self.notification_options.discord_sounds,
+			);
+			design::card_divider(ui);
+			let mut sounds = vec![
 				(
 					"New Message",
 					&mut self.notification_options.new_message,
@@ -179,10 +239,55 @@ impl MessagingUi {
 					&mut self.notification_options.incoming_ring,
 					Sound::IncomingRing,
 				),
-			]
-			.into_iter()
-			.enumerate()
-			{
+			];
+			if self.notification_options.discord_sounds {
+				sounds.push((
+					"Outgoing Ring",
+					&mut self.notification_options.outgoing_ring,
+					Sound::OutgoingRing,
+				));
+				sounds.push((
+					"Microphone Muted",
+					&mut self.notification_options.mute,
+					Sound::Mute,
+				));
+				sounds.push((
+					"Microphone Unmuted",
+					&mut self.notification_options.unmute,
+					Sound::Unmute,
+				));
+				sounds.push((
+					"Deafen",
+					&mut self.notification_options.deafen,
+					Sound::Deafen,
+				));
+				sounds.push((
+					"Undeafen",
+					&mut self.notification_options.undeafen,
+					Sound::Undeafen,
+				));
+				sounds.push((
+					"Camera On",
+					&mut self.notification_options.camera_on,
+					Sound::CameraOn,
+				));
+				sounds.push((
+					"Screen Share Started",
+					&mut self.notification_options.screen_share_on,
+					Sound::ScreenShareOn,
+				));
+				sounds.push((
+					"Call Joined",
+					&mut self.notification_options.user_join,
+					Sound::UserJoin,
+				));
+				sounds.push((
+					"User Left Call",
+					&mut self.notification_options.user_leave,
+					Sound::UserLeave,
+				));
+			}
+			for (index, (label, value, sound)) in sounds.into_iter().enumerate() {
 				if index > 0 {
 					design::card_divider(ui);
 				}

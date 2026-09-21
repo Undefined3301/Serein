@@ -11,12 +11,13 @@ use std::{
 	time::{Duration, Instant},
 };
 
-// Five seconds of audio plus a gap; shared with the automatic incoming-call timer.
+// Each complete ringtone plus a short gap; shared with the automatic call timers.
 pub const RING_INTERVAL: Duration = Duration::from_secs(6);
+pub const OUTGOING_RING_INTERVAL: Duration = Duration::from_secs(3);
 
 #[derive(Default)]
 pub struct Sounds {
-	send: Option<SyncSender<(u64, Sound)>>,
+	send: Option<SyncSender<(u64, Sound, bool)>>,
 	generation: Arc<AtomicU64>,
 	status: Arc<AtomicU8>,
 }
@@ -32,22 +33,23 @@ impl Sounds {
 		self.generation.fetch_add(1, Ordering::AcqRel);
 		self.status.store(0, Ordering::Release);
 	}
-	pub fn play(&mut self, sound: Sound, ctx: &eframe::egui::Context) {
+	pub fn play(&mut self, sound: Sound, discord: bool, ctx: &eframe::egui::Context) {
 		if self.send.is_none() {
-			let (send, receive) = mpsc::sync_channel::<(u64, Sound)>(1);
+			let (send, receive) = mpsc::sync_channel::<(u64, Sound, bool)>(1);
 			let generation = self.generation.clone();
 			let status = self.status.clone();
 			let context = ctx.clone();
 			if std::thread::Builder::new()
 				.name("serein-notification-audio".into())
 				.spawn(move || {
-					while let Ok((request, sound)) = receive.recv() {
+					while let Ok((request, sound, discord)) = receive.recv() {
 						if generation.load(Ordering::Acquire) != request {
 							continue;
 						}
 						let finished = Arc::new(AtomicBool::new(false));
 						match open(
 							sound,
+							discord,
 							generation.clone(),
 							request,
 							status.clone(),
@@ -98,7 +100,7 @@ impl Sounds {
 			.send
 			.as_ref()
 			.expect("worker started")
-			.try_send((request, sound))
+			.try_send((request, sound, discord))
 			.is_err()
 		{
 			self.status.store(0, Ordering::Release);
@@ -111,23 +113,67 @@ impl Drop for Sounds {
 	}
 }
 
-fn samples(sound: Sound, rate: u32, current: &impl Fn() -> bool) -> Result<Vec<[f32; 2]>, ()> {
-	let bytes: &[u8] = match sound {
-		Sound::Message => include_bytes!("../../../assets/sounds/message.mp3"),
-		Sound::CurrentChannel => include_bytes!("../../../assets/sounds/current-channel.mp3"),
-		Sound::IncomingRing => include_bytes!("../../../assets/sounds/incoming-ring.mp3"),
+fn samples(
+	sound: Sound,
+	discord: bool,
+	rate: u32,
+	current: &impl Fn() -> bool,
+) -> Result<Vec<[f32; 2]>, ()> {
+	let bytes: &[u8] = if discord {
+		match sound {
+			Sound::Message | Sound::CurrentChannel => {
+				include_bytes!("../../../assets/sounds/discord/message.mp3")
+			}
+			Sound::IncomingRing => {
+				include_bytes!("../../../assets/sounds/discord/incoming-ring.mp3")
+			}
+			Sound::OutgoingRing => {
+				include_bytes!("../../../assets/sounds/discord/outgoing-ring.mp3")
+			}
+			Sound::Mute => include_bytes!("../../../assets/sounds/discord/mute.mp3"),
+			Sound::Unmute => include_bytes!("../../../assets/sounds/discord/unmute.mp3"),
+			Sound::Deafen => include_bytes!("../../../assets/sounds/discord/deafen.mp3"),
+			Sound::Undeafen => include_bytes!("../../../assets/sounds/discord/undeafen.mp3"),
+			Sound::CameraOn => include_bytes!("../../../assets/sounds/discord/camera-on.mp3"),
+			Sound::ScreenShareOn => {
+				include_bytes!("../../../assets/sounds/discord/screen-share-on.mp3")
+			}
+			Sound::UserJoin => include_bytes!("../../../assets/sounds/discord/user-join.mp3"),
+			Sound::UserLeave => include_bytes!("../../../assets/sounds/discord/user-leave.mp3"),
+		}
+	} else {
+		match sound {
+			Sound::Message => include_bytes!("../../../assets/sounds/message.mp3"),
+			Sound::CurrentChannel => include_bytes!("../../../assets/sounds/current-channel.mp3"),
+			Sound::IncomingRing => include_bytes!("../../../assets/sounds/incoming-ring.mp3"),
+			Sound::OutgoingRing
+			| Sound::Mute
+			| Sound::Unmute
+			| Sound::Deafen
+			| Sound::Undeafen
+			| Sound::CameraOn
+			| Sound::ScreenShareOn
+			| Sound::UserJoin
+			| Sound::UserLeave => return Err(()),
+		}
 	};
 	if bytes.len() > 128 * 1024 || !(8000..=192000).contains(&rate) {
 		return Err(());
 	}
 	let mut pcm = Vec::new();
+	let mut source_rate = 0;
 	crate::audio::decode_stream(
 		Box::new(Cursor::new(bytes)),
 		current,
-		&mut |chunk, channels, source_rate, _| {
-			if channels != 2 || source_rate != 48000 || pcm.len() + chunk.len() > 48000 * 2 * 5 {
+		&mut |chunk, channels, rate, _| {
+			if channels != 2
+				|| !matches!(rate, 44100 | 48000)
+				|| (source_rate != 0 && source_rate != rate)
+				|| pcm.len() + chunk.len() > rate as usize * 2 * 6
+			{
 				return Err("Invalid bundled notification sound");
 			}
+			source_rate = rate;
 			pcm.extend(chunk.iter().map(|sample| {
 				if sample.is_finite() {
 					sample.clamp(-1.0, 1.0)
@@ -144,9 +190,9 @@ fn samples(sound: Sound, rate: u32, current: &impl Fn() -> bool) -> Result<Vec<[
 	}
 	let frames = pcm.len() / 2;
 	// ponytail: linear rate conversion; use a band-limited resampler if quality measurements require it.
-	Ok((0..(frames * rate as usize).div_ceil(48000))
+	Ok((0..(frames * rate as usize).div_ceil(source_rate as usize))
 		.map(|frame| {
-			let position = frame as f64 * 48000.0 / f64::from(rate);
+			let position = frame as f64 * f64::from(source_rate) / f64::from(rate);
 			let index = (position as usize).min(frames - 1);
 			let next = (index + 1).min(frames - 1);
 			std::array::from_fn(|channel| {
@@ -159,6 +205,7 @@ fn samples(sound: Sound, rate: u32, current: &impl Fn() -> bool) -> Result<Vec<[
 }
 fn open(
 	sound: Sound,
+	discord: bool,
 	generation: Arc<AtomicU64>,
 	request: u64,
 	status: Arc<AtomicU8>,
@@ -170,7 +217,7 @@ fn open(
 	if !(8000..=192000).contains(&config.sample_rate) || !(1..=8).contains(&config.channels) {
 		return Err(());
 	}
-	let samples = samples(sound, config.sample_rate, &|| {
+	let samples = samples(sound, discord, config.sample_rate, &|| {
 		generation.load(Ordering::Acquire) == request
 	})?;
 	let duration = Duration::from_secs_f64(samples.len() as f64 / f64::from(config.sample_rate));
@@ -313,16 +360,83 @@ mod tests {
 	#[test]
 	fn bundled_cues_decode_in_full_at_supported_rates_and_cancel() {
 		for rate in [8000, 44100, 48000, 192000] {
-			let cues = [Sound::Message, Sound::CurrentChannel, Sound::IncomingRing]
-				.map(|s| samples(s, rate, &|| true).unwrap());
-			assert_ne!(cues[0], cues[1]);
-			for (cue, (min, max)) in cues.iter().zip([(0.2, 0.5), (0.1, 0.4), (3.9, 4.3)]) {
+			let default_cues = [Sound::Message, Sound::CurrentChannel, Sound::IncomingRing]
+				.map(|s| samples(s, false, rate, &|| true).unwrap());
+			assert_ne!(default_cues[0], default_cues[1]);
+			for (cue, (min, max)) in default_cues
+				.iter()
+				.zip([(0.2, 0.5), (0.1, 0.4), (3.9, 4.3)])
+			{
 				let seconds = cue.len() as f64 / f64::from(rate);
 				assert!(
 					(min..max).contains(&seconds),
 					"unexpected cue duration {seconds}"
 				);
-				assert!(cue.len() <= rate as usize * 5);
+				assert!(cue.len() <= rate as usize * 6);
+				assert!(
+					cue.iter()
+						.flatten()
+						.all(|s| s.is_finite() && s.abs() <= 1.0)
+				);
+				assert!(cue.iter().flatten().any(|s| s.abs() > 0.01));
+				assert!(
+					Duration::from_secs_f64(seconds) + Duration::from_millis(100) < RING_INTERVAL
+				);
+			}
+			assert!(samples(Sound::Mute, false, rate, &|| true).is_err());
+			assert!(samples(Sound::Unmute, false, rate, &|| true).is_err());
+			assert!(samples(Sound::Deafen, false, rate, &|| true).is_err());
+			assert!(samples(Sound::Undeafen, false, rate, &|| true).is_err());
+			assert!(samples(Sound::CameraOn, false, rate, &|| true).is_err());
+			assert!(samples(Sound::ScreenShareOn, false, rate, &|| true).is_err());
+			assert!(samples(Sound::OutgoingRing, false, rate, &|| true).is_err());
+			assert!(samples(Sound::UserJoin, false, rate, &|| true).is_err());
+			assert!(samples(Sound::UserLeave, false, rate, &|| true).is_err());
+
+			let discord_cues = [
+				Sound::Message,
+				Sound::CurrentChannel,
+				Sound::IncomingRing,
+				Sound::Mute,
+				Sound::Unmute,
+				Sound::Deafen,
+				Sound::Undeafen,
+				Sound::CameraOn,
+				Sound::ScreenShareOn,
+				Sound::OutgoingRing,
+				Sound::UserJoin,
+				Sound::UserLeave,
+			]
+			.map(|s| samples(s, true, rate, &|| true).unwrap());
+			assert_eq!(discord_cues[0], discord_cues[1]);
+			assert_ne!(discord_cues[3], discord_cues[4]);
+			assert_ne!(discord_cues[5], discord_cues[6]);
+			let discord_expectations = [
+				(0.2, 0.5),
+				(0.2, 0.5),
+				(5.0, 5.6),
+				(0.3, 0.6),
+				(0.3, 0.6),
+				(0.6, 0.9),
+				(0.6, 1.0),
+				(0.9, 1.1),
+				(1.6, 1.9),
+				(2.3, 2.6),
+				(1.0, 1.2),
+				(0.9, 1.1),
+			];
+			assert!(
+				Duration::from_secs_f64(discord_cues[9].len() as f64 / f64::from(rate))
+					+ Duration::from_millis(100)
+					< OUTGOING_RING_INTERVAL
+			);
+			for (cue, (min, max)) in discord_cues.iter().zip(discord_expectations) {
+				let seconds = cue.len() as f64 / f64::from(rate);
+				assert!(
+					(min..max).contains(&seconds),
+					"unexpected cue duration {seconds}"
+				);
+				assert!(cue.len() <= rate as usize * 6);
 				assert!(
 					cue.iter()
 						.flatten()
@@ -334,7 +448,9 @@ mod tests {
 				);
 			}
 		}
-		assert!(samples(Sound::Message, 48000, &|| false).is_err());
-		assert!(samples(Sound::Message, 0, &|| true).is_err());
+		assert!(samples(Sound::Message, false, 48000, &|| false).is_err());
+		assert!(samples(Sound::Message, true, 48000, &|| false).is_err());
+		assert!(samples(Sound::Message, false, 0, &|| true).is_err());
+		assert!(samples(Sound::Message, true, 0, &|| true).is_err());
 	}
 }
