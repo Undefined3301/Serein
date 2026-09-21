@@ -9,6 +9,15 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const MAX_VISIBLE_THREADS: usize = 3;
 
+/// Voice and stage channels keep a separate position list, drawn below other channels.
+fn voice_lane(kind: u8) -> bool {
+	matches!(kind, 2 | 13)
+}
+
+fn sidebar_rank(channel: &Channel) -> (bool, i32, Id) {
+	(voice_lane(channel.kind), channel.position, channel.id)
+}
+
 /// Where a channel row came from. A mirrored guild channel differs from its tree copy by slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Slot {
@@ -107,10 +116,11 @@ fn drop_move(
 				.filter(|c| {
 					c.guild == source.guild
 						&& c.parent_id == Some(target.id)
+						&& voice_lane(c.kind) == voice_lane(source.kind)
 						&& !matches!(c.kind, 4 | 10..=12)
 				})
 				.collect();
-			siblings.sort_unstable_by_key(|c| (c.position, c.id));
+			siblings.sort_unstable_by_key(|c| sidebar_rank(c));
 			if let Some(pos) = siblings.iter().position(|c| c.id == source.id) {
 				siblings.remove(pos);
 			}
@@ -136,10 +146,11 @@ fn drop_move(
 				.filter(|c| {
 					c.guild == source.guild
 						&& c.parent_id.is_none()
+						&& voice_lane(c.kind) == voice_lane(source.kind)
 						&& !matches!(c.kind, 4 | 10..=12)
 				})
 				.collect();
-			siblings.sort_unstable_by_key(|c| (c.position, c.id));
+			siblings.sort_unstable_by_key(|c| sidebar_rank(c));
 			let new_idx = siblings.len() as i32;
 			return Some(ChannelMove {
 				parent: None,
@@ -159,10 +170,11 @@ fn drop_move(
 		.filter(|c| {
 			c.guild == source.guild
 				&& c.parent_id == target.parent
+				&& voice_lane(c.kind) == voice_lane(source.kind)
 				&& !matches!(c.kind, 4 | 10..=12)
 		})
 		.collect();
-	siblings.sort_unstable_by_key(|c| (c.position, c.id));
+	siblings.sort_unstable_by_key(|c| sidebar_rank(c));
 	if let Some(pos) = siblings.iter().position(|c| c.id == source.id) {
 		siblings.remove(pos);
 	}
@@ -235,7 +247,7 @@ fn rows<'a>(
 	}
 	for group in groups.values_mut().chain(threads.values_mut()) {
 		if guild.is_some() {
-			group.sort_unstable_by_key(|c| (c.position, c.id));
+			group.sort_unstable_by_key(|c| sidebar_rank(c));
 		} else {
 			group.sort_unstable_by_key(|c| std::cmp::Reverse((state.channel_activity(c), c.id)));
 		}
@@ -2099,6 +2111,42 @@ mod tests {
 			rows.iter().any(
 				|row| matches!(row, Row::Category(category, _) if category.name == "lowercase")
 			)
+		);
+	}
+	#[test]
+	fn voice_channels_stay_below_text_like_channels_that_share_positions() {
+		let category = Id(1);
+		let mut channels = vec![channel(1, 4, 0, None)];
+		channels.push(channel(100, 15, 0, Some(category)));
+		for index in 0..7 {
+			channels.push(channel(200 + index, 0, index as i32 + 1, Some(category)));
+		}
+		for index in 0..8 {
+			channels.push(channel(50 + index, 2, index as i32, Some(category)));
+		}
+		let state = State {
+			channels,
+			..State::default()
+		};
+		let ids = rows(
+			&state,
+			Scope::Guild(Id(100)),
+			&Roster::default(),
+			&BTreeSet::new(),
+			true,
+		)
+		.into_iter()
+		.map(|row| match row {
+			Row::Channel(channel, ..) | Row::Category(channel, _) => channel.id.0,
+			Row::Participant(entry) => entry.participant.user.0,
+			Row::Heading(..) => 0,
+		})
+		.collect::<Vec<_>>();
+		assert_eq!(
+			ids,
+			[
+				1, 100, 200, 201, 202, 203, 204, 205, 206, 50, 51, 52, 53, 54, 55, 56, 57
+			]
 		);
 	}
 }
