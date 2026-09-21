@@ -61,6 +61,21 @@ const SIGN_IN_HEADER_HEIGHT: f32 = if cfg!(target_os = "windows") {
 fn main() -> eframe::Result {
 	#[cfg(all(debug_assertions, feature = "demo"))]
 	if std::env::args().any(|arg| arg == "--demo")
+		&& std::env::args().any(|arg| arg == "--demo-check-notification-click")
+	{
+		let mut state = test_support::demo_state();
+		for channel in [model::Id(22), model::Id(20)] {
+			let target = platform::notifications::debug_activation_check(channel);
+			state.select(target);
+			assert_eq!(state.selected, Some(channel));
+		}
+		println!(
+			"Notification click debug check passed: DM/guild navigation and stale click rejection."
+		);
+		return Ok(());
+	}
+	#[cfg(all(debug_assertions, feature = "demo"))]
+	if std::env::args().any(|arg| arg == "--demo")
 		&& std::env::args().any(|arg| arg == "--demo-check-settings-sliders")
 	{
 		ui::design::debug_slider_check();
@@ -5334,6 +5349,14 @@ impl eframe::App for Desktop {
 		if self.state.auth != AuthState::Authenticated && !self.state.demo {
 			self.notifications.clear();
 		}
+		if let Some(channel) = self.notifications.take_activation()
+			&& self.state.auth == AuthState::Authenticated
+		{
+			self.tray_window.show(ctx);
+			if let Some(command) = self.state.select(channel) {
+				self.command(command);
+			}
+		}
 		if let Some(alert) = self.notification_runtime.poll(
 			&mut self.state,
 			&mut self.messaging,
@@ -5343,12 +5366,15 @@ impl eframe::App for Desktop {
 		) {
 			match alert {
 				notification_runtime::Alert::Message {
+					channel,
 					title,
 					body,
 					avatar_key,
 					image_path,
 				} => {
-					if self.notifications.notify_message(title, body, image_path)
+					if self
+						.notifications
+						.notify_channel(channel, title, body, image_path)
 						&& let Some(worker) = &self.avatars
 					{
 						worker.request(avatar_key);

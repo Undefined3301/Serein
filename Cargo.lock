@@ -5086,6 +5086,7 @@ dependencies = [
  "image",
  "keyring",
  "ksni",
+ "mac-usernotifications",
  "model",
  "notify-rust",
  "objc2 0.6.4",

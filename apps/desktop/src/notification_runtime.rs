@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 pub enum Alert {
 	Message {
+		channel: Id,
 		title: String,
 		body: String,
 		avatar_key: String,
@@ -92,6 +93,7 @@ impl Runtime {
 						crate::avatars::notification_image_path(user.id, &notification.avatar_key)
 					});
 					alert = Some(Alert::Message {
+						channel: notification.channel,
 						title: notification.sender,
 						body: notification.preview,
 						avatar_key: notification.avatar_key,
