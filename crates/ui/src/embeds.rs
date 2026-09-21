@@ -67,10 +67,23 @@ fn text(
 	cache: &mut FormatCache,
 	opening: &mut Option<String>,
 	profile: &mut Option<model::User>,
-	media: (&mut Avatars, bool, &[model::Guild]),
+	media: (
+		&mut Avatars,
+		bool,
+		&[model::Guild],
+		&crate::mentions::MentionSource<'_>,
+	),
 ) {
+	let (images, demo, guilds, source) = media;
 	let formatted = cache.get_part(message.id, part.0, part.1);
-	formatted.show_with_images(ui, opening, &message.mentions, profile, media);
+	formatted.show_with_images(
+		ui,
+		opening,
+		&message.mentions,
+		Some(source),
+		profile,
+		(images, demo, guilds),
+	);
 	if formatted.limited {
 		ui.small("Text display limited");
 	}
@@ -285,6 +298,10 @@ pub fn show(
 	if message.embeds_suppressed {
 		return None;
 	}
+	let source = crate::mentions::MentionSource {
+		state,
+		channel: message.channel,
+	};
 	let demo = state.demo;
 	let mut favorite_action = None;
 	let mut index = 0;
@@ -450,7 +467,7 @@ pub fn show(
 											cache,
 											opening,
 											profile,
-											(images, demo, &state.guilds),
+											(images, demo, &state.guilds, &source),
 										);
 									}
 								});
@@ -504,7 +521,7 @@ pub fn show(
 												cache,
 												opening,
 												profile,
-												(images, demo, &state.guilds),
+												(images, demo, &state.guilds, &source),
 											);
 										});
 									}

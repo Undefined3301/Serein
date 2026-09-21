@@ -1184,6 +1184,7 @@ pub fn show(
 													ui,
 													opening,
 													&[],
+													None,
 													&mut linked_user,
 													(avatars, state.demo, &state.guilds),
 												);

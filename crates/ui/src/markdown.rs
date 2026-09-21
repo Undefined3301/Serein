@@ -478,6 +478,7 @@ fn normalize_fences(input: &str) -> std::borrow::Cow<'_, str> {
 struct Render<'a> {
 	opening: &'a mut Option<String>,
 	users: &'a [model::User],
+	source: Option<&'a crate::mentions::MentionSource<'a>>,
 	profile: &'a mut Option<model::User>,
 	channels: &'a [model::Channel],
 	channel: &'a mut Option<Id>,
@@ -1016,6 +1017,7 @@ impl Formatted {
 			ui,
 			opening,
 			users,
+			None,
 			profile,
 			(&mut crate::avatars::Avatars::default(), true, &[]),
 		);
@@ -1025,6 +1027,7 @@ impl Formatted {
 		ui: &mut egui::Ui,
 		opening: &mut Option<String>,
 		users: &[model::User],
+		source: Option<&crate::mentions::MentionSource<'_>>,
 		profile: &mut Option<model::User>,
 		media: (&mut crate::avatars::Avatars, bool, &[model::Guild]),
 	) {
@@ -1035,6 +1038,7 @@ impl Formatted {
 			ui,
 			opening,
 			users,
+			source,
 			profile,
 			(&[], &mut None, guilds, &[]),
 			(images, demo, &mut revealed),
@@ -1048,6 +1052,7 @@ impl Formatted {
 		ui: &mut egui::Ui,
 		opening: &mut Option<String>,
 		users: &[model::User],
+		source: Option<&crate::mentions::MentionSource<'_>>,
 		profile: &mut Option<model::User>,
 		references: (
 			&[model::Channel],
@@ -1058,7 +1063,9 @@ impl Formatted {
 		media: (&mut crate::avatars::Avatars, bool, &mut u32),
 		surface: &mut crate::select::Surface,
 	) {
-		self.show_search(ui, opening, users, profile, references, media, surface, "");
+		self.show_search(
+			ui, opening, users, source, profile, references, media, surface, "",
+		);
 	}
 	#[allow(clippy::too_many_arguments)]
 	pub fn show_search(
@@ -1066,6 +1073,7 @@ impl Formatted {
 		ui: &mut egui::Ui,
 		opening: &mut Option<String>,
 		users: &[model::User],
+		source: Option<&crate::mentions::MentionSource<'_>>,
 		profile: &mut Option<model::User>,
 		references: (
 			&[model::Channel],
@@ -1096,6 +1104,7 @@ impl Formatted {
 		let mut render = Render {
 			opening,
 			users,
+			source,
 			profile,
 			channels,
 			channel,
@@ -1271,11 +1280,8 @@ impl Formatted {
 					if let Some(id) = spans[start].1.mention {
 						reserve(ui);
 						let colors = crate::design::palette(ui);
-						let user = render.users.iter().find(|user| user.id == id);
-						let label = format!(
-							"@{}",
-							user.map_or_else(|| id.to_string(), |u| u.name.clone())
-						);
+						let user = crate::mentions::find_user(id, render.users, render.source);
+						let label = crate::mentions::mention_label(id, render.users, render.source);
 						let response = ui
 							.add(egui::Link::new(
 								egui::RichText::new(&label)
@@ -1902,6 +1908,7 @@ impl Formatted {
 		job: &mut LayoutJob,
 		ui: &egui::Ui,
 		users: &[model::User],
+		source: Option<&crate::mentions::MentionSource<'_>>,
 		roles: &[model::permissions::Role],
 		channels: &[model::Channel],
 	) {
@@ -1926,11 +1933,10 @@ impl Formatted {
 				continue;
 			}
 			let (display, format) = if let Some(id) = style.mention {
-				let name = users
-					.iter()
-					.find(|user| user.id == id)
-					.map_or_else(|| id.to_string(), |user| user.name.clone());
-				(format!("@{name}"), pill.clone())
+				(
+					crate::mentions::mention_label(id, users, source),
+					pill.clone(),
+				)
 			} else if let Some(id) = style.role {
 				let name = roles
 					.iter()
@@ -2724,6 +2730,7 @@ mod tests {
 							ui,
 							&mut opening,
 							&[],
+							None,
 							&mut profile,
 							(&[], &mut channel, &[], &[]),
 							(&mut images, false, mask),
@@ -2824,6 +2831,7 @@ mod tests {
 						ui,
 						&mut None,
 						&[],
+						None,
 						&mut None,
 						(&[], &mut None, &[], &[]),
 						(&mut images, false, &mut mask),
@@ -2986,6 +2994,7 @@ mod tests {
 							ui,
 							&mut opening,
 							&[],
+							None,
 							&mut profile,
 							(&channels, &mut channel, &[], &[]),
 							(&mut crate::avatars::Avatars::default(), true, &mut revealed),
@@ -3026,6 +3035,7 @@ mod tests {
 						ui,
 						&mut None,
 						&[],
+						None,
 						&mut None,
 						(&mut avatars, true, &[]),
 					)
@@ -3189,6 +3199,7 @@ mod tests {
 								ui,
 								&mut None,
 								&[],
+								None,
 								&mut None,
 								(&mut images, true, &state.guilds),
 							)
@@ -3727,7 +3738,7 @@ mod tests {
 		output.drop_without_applying_deltas();
 		let mut job = LayoutJob::default();
 		ctx.run_ui(Default::default(), |ui| {
-			parsed.append_inline_preview(&mut job, ui, &[], &[], &[]);
+			parsed.append_inline_preview(&mut job, ui, &[], None, &[], &[]);
 		})
 		.drop_without_applying_deltas();
 		assert!(job.text.contains("ago"), "relative style: {}", job.text);

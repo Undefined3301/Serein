@@ -99,12 +99,17 @@ impl Components {
 			self.text_revealed.clear();
 		}
 		let mut surface = crate::select::Surface::new(ui, "private-body");
+		let source = crate::mentions::MentionSource {
+			state,
+			channel: message.channel,
+		};
 		self.formatted
 			.get(message.id, &message.content)
 			.show_references(
 				ui,
 				opening,
 				&message.mentions,
+				Some(&source),
 				&mut None,
 				(
 					&state.channels,
@@ -432,6 +437,10 @@ impl Components {
 					}
 					let revealed = self.text_revealed.entry(id.value()).or_default();
 					let mut surface = crate::select::Surface::new(ui, "component-text");
+					let source = crate::mentions::MentionSource {
+						state,
+						channel: message.channel,
+					};
 					self.formatted
 						.get_part(
 							message.id,
@@ -442,6 +451,7 @@ impl Components {
 							ui,
 							opening,
 							&message.mentions,
+							Some(&source),
 							&mut None,
 							(
 								&state.channels,
@@ -1034,12 +1044,17 @@ fn field(
 					revealed.clear();
 				}
 				let mut surface = crate::select::Surface::new(ui, "modal-markdown");
+				let source = crate::mentions::MentionSource {
+					state,
+					channel: state.selected.unwrap_or(Id(0)),
+				};
 				formatted
 					.get(Id(key), c.content.as_deref().unwrap_or_default())
 					.show_references(
 						ui,
 						opening,
 						&[],
+						Some(&source),
 						&mut None,
 						(&state.channels, &mut None, &state.guilds, &[]),
 						(avatars, state.demo, revealed.entry(key).or_default()),
