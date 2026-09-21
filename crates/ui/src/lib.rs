@@ -2822,10 +2822,8 @@ impl MessagingUi {
 		self.timeline.video.seen = false;
 		let side = self.drain_side_press();
 		let mut commands = Vec::new();
-		if side.back || side.forward {
-			if self.timeline.video.is_fullscreen() {
-				// No one-call public exit; swallow so the trail does not move under video.
-			} else if self.settings.open {
+		if (side.back || side.forward) && !self.timeline.video.is_fullscreen() {
+			if self.settings.open {
 				if side.back {
 					self.settings.open = false;
 				}

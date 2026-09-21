@@ -1,19 +1,19 @@
 use model::Id;
 
-/// A navigable place in the session. Settings are not places.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Place {
 	Home,
 	Channel(Id),
 }
 
-/// Session-only back and forward list. Cap 32. Empty, or `cursor < len`.
 #[doc(hidden)]
 #[derive(Default)]
 pub struct Trail {
 	places: Vec<Place>,
 	cursor: usize,
 }
+
+const MAX_PLACES: usize = 32;
 
 impl Trail {
 	pub(super) fn is_empty(&self) -> bool {
@@ -32,7 +32,7 @@ impl Trail {
 			self.places.truncate(self.cursor + 1);
 		}
 		self.places.push(place);
-		if self.places.len() > 32 {
+		if self.places.len() > MAX_PLACES {
 			self.places.remove(0);
 		}
 		self.cursor = self.places.len() - 1;
@@ -54,7 +54,6 @@ impl Trail {
 		self.cursor += 1;
 	}
 
-	/// Remove the current entry. The cursor stays on what followed it, or the new end.
 	pub(super) fn drop_current(&mut self) {
 		if self.cursor >= self.places.len() {
 			return;

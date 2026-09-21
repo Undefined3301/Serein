@@ -646,7 +646,6 @@ pub struct State {
 	pub gateway_connected: bool,
 	pub revision: u64,
 	pub demo: bool,
-	/// Session back/forward list. Public only so `..State::default()` works outside this crate.
 	#[doc(hidden)]
 	pub trail: Trail,
 }
@@ -657,7 +656,8 @@ pub struct NavStep {
 }
 
 enum Apply {
-	Moved(Option<Command>),
+	Opened(Option<Command>),
+	AlreadyHere,
 	Rejected(&'static str),
 }
 
@@ -899,10 +899,11 @@ impl State {
 			return None;
 		}
 		match self.apply_channel(channel) {
-			Apply::Moved(command) => {
+			Apply::Opened(command) => {
 				self.record(Place::Channel(channel));
 				command
 			}
+			Apply::AlreadyHere => None,
 			Apply::Rejected(status) => {
 				self.status = status;
 				None
@@ -918,9 +919,8 @@ impl State {
 	}
 
 	fn apply_channel(&mut self, channel: Id) -> Apply {
-		// Same channel is a successful land so back/forward can commit the cursor.
 		if self.selected == Some(channel) && self.freshness != Freshness::Unavailable {
-			return Apply::Moved(None);
+			return Apply::AlreadyHere;
 		}
 		if !self.channel(channel).is_some_and(navigable) {
 			return Apply::Rejected("This channel kind is unsupported");
@@ -950,9 +950,9 @@ impl State {
 		if self.channel(channel).is_some_and(|c| !c.supports_text()) {
 			self.cancel_history();
 			self.freshness = Freshness::Fresh;
-			return Apply::Moved(None);
+			return Apply::Opened(None);
 		}
-		Apply::Moved(Some(self.history(None)))
+		Apply::Opened(Some(self.history(None)))
 	}
 
 	/// Open Friends / Home. Does not clear the timeline or emit a command.
@@ -962,9 +962,6 @@ impl State {
 	}
 
 	/// Land on Home because the open channel is gone.
-	///
-	/// The vanished channel is removed from the trail first. Leaving it in place would make
-	/// every later back press target a channel that can no longer open.
 	pub fn arrived_home(&mut self) {
 		if let Some(Place::Channel(id)) = self.trail.current()
 			&& self.selected == Some(id)
@@ -999,20 +996,19 @@ impl State {
 			let apply = match place {
 				Place::Home => {
 					self.selected = None;
-					Apply::Moved(None)
+					Apply::Opened(None)
 				}
 				Place::Channel(channel) => self.apply_channel(channel),
 			};
 			match apply {
-				Apply::Moved(command) => {
-					if back {
-						self.trail.commit_back();
-					} else {
-						self.trail.commit_forward();
-					}
+				Apply::Opened(command) => {
+					self.commit_nav(back);
 					return Some(NavStep { command });
 				}
-				// Drop the unreachable neighbor and keep walking this same press.
+				Apply::AlreadyHere => {
+					self.commit_nav(back);
+					return Some(NavStep { command: None });
+				}
 				Apply::Rejected(status) => {
 					blocked = Some(status);
 					if back {
@@ -1024,6 +1020,14 @@ impl State {
 			}
 		}
 	}
+	fn commit_nav(&mut self, back: bool) {
+		if back {
+			self.trail.commit_back();
+		} else {
+			self.trail.commit_forward();
+		}
+	}
+
 	pub fn request_members(&mut self) -> Option<Command> {
 		let index = self.channel_index(self.selected?)?;
 		let channel = &self.channels[index];
