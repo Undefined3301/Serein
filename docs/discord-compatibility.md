@@ -142,8 +142,11 @@ favorites. Pinned DMs sit above the home list. Guild channels use the existing
 Favorites shelf. Neither uses an unverified settings-proto field.
 
 The empty channel-list area also has a server-scoped right-click menu. Hide Muted
-Channels is a bounded, session-only per-server view preference; the selected channel
-stays visible. Create Channel, Create Category and Invite to Server reuse the same
+Channels is Discord's per-server `hide_muted_channels` flag on user guild settings,
+the same account record as channel mute. READY and User Guild Settings Update
+restore it, and the toggle sends `PATCH /users/@me/guilds/{guild}/settings`.
+The selected channel stays visible. A preloaded user-settings proto update does
+not clear these mutes. Create Channel, Create Category and Invite to Server reuse the same
 permission checks, confirmation UI and request lanes as the existing channel and
 server menus.
 

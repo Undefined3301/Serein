@@ -109,6 +109,7 @@ pub fn execute(
 				level: Some(level),
 				mute_until: None,
 			},
+			Action::HideMuted(hide) => Outcome::HideMuted(hide),
 			action => {
 				let mut updated = source.clone();
 				let permission_source = if matches!(action, Action::Create { .. }) {

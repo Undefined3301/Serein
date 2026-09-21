@@ -120,6 +120,7 @@ pub enum Action {
 	Delete,
 	Mute(Mute),
 	Notifications(u8),
+	HideMuted(bool),
 }
 impl Action {
 	pub fn valid(&self) -> bool {
@@ -169,6 +170,7 @@ pub enum Outcome {
 		level: Option<u8>,
 		mute_until: Option<i64>,
 	},
+	HideMuted(bool),
 }
 impl Outcome {
 	pub fn bytes(&self) -> usize {
@@ -447,7 +449,10 @@ impl State {
 		self.clear_channel_action_result(channel);
 		let source = self.channel(channel)?;
 		let guild = source.guild?;
-		let personal = matches!(action, Action::Mute(_) | Action::Notifications(_));
+		let personal = matches!(
+			action,
+			Action::Mute(_) | Action::Notifications(_) | Action::HideMuted(_)
+		);
 		if !action.valid()
 			|| !self.can_view(channel)
 			|| (!personal
@@ -531,6 +536,13 @@ impl State {
 		}
 		if matches!(action, Action::Load) && !self.demo {
 			self.channel_actions.details = None;
+		}
+		if let Action::HideMuted(hide) = &action
+			&& let Err(status) = self.confirm_guild_hides_muted(guild, *hide)
+		{
+			self.channel_actions.status = Some((channel, status, false));
+			self.status = status;
+			return None;
 		}
 		self.channel_actions.sequence = self.channel_actions.sequence.wrapping_add(1);
 		let request = self.channel_actions.sequence;
@@ -627,7 +639,11 @@ impl State {
 				crate::Event::NotificationPreferences(crate::notifications::Event::Settings {
 					entries,
 					..
-				}) if matches!(action, Action::Mute(_) | Action::Notifications(_)) => {
+				}) if matches!(
+					action,
+					Action::Mute(_) | Action::Notifications(_) | Action::HideMuted(_)
+				) =>
+				{
 					entries.iter().any(|s| s.guild == Some(*guild))
 				}
 				_ => false,
@@ -731,6 +747,7 @@ impl State {
 				(Action::Notifications(wanted), Outcome::Preferences { level, .. }) => {
 					*level == Some(*wanted)
 				}
+				(Action::HideMuted(hide), Outcome::HideMuted(actual)) => hide == actual,
 				_ => false,
 			};
 			if valid && outcome.bytes() <= 64 * 1024 {
@@ -741,6 +758,11 @@ impl State {
 		});
 		let status = match result {
 			Err(failure) => {
+				if let Action::HideMuted(hide) = &action
+					&& !observed
+				{
+					let _ = self.confirm_guild_hides_muted(guild, !*hide);
+				}
 				if failure.ends_session() {
 					self.fail(failure);
 				}
@@ -967,6 +989,18 @@ impl State {
 					return Ok(());
 				}
 				"Notification settings updated"
+			}
+			Ok(Outcome::HideMuted(hide)) => {
+				if let Err(status) = self.confirm_guild_hides_muted(guild, hide) {
+					self.channel_actions.status = Some((channel, status, false));
+					self.status = status;
+					return Ok(());
+				}
+				if hide {
+					"Muted channels hidden"
+				} else {
+					"Muted channels shown"
+				}
 			}
 		};
 		self.channel_actions.status = Some((channel, status, true));

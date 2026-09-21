@@ -282,7 +282,10 @@ impl DiscordApi {
 		if guild.0 == 0 || channel.0 == 0 || !action.valid() {
 			return Err(Failure::Protocol);
 		}
-		if matches!(action, Action::Mute(_) | Action::Notifications(_)) {
+		if matches!(
+			action,
+			Action::Mute(_) | Action::Notifications(_) | Action::HideMuted(_)
+		) {
 			return self
 				.channel_notification_action(guild, channel, action)
 				.await;
@@ -671,6 +674,23 @@ impl DiscordApi {
 		channel: Id,
 		action: &Action,
 	) -> Result<Outcome, Failure> {
+		if let Action::HideMuted(hide) = action {
+			let bytes = self
+				.request_limited(
+					Method::PATCH,
+					&format!("/users/@me/guilds/{guild}/settings"),
+					Some(json!({"hide_muted_channels": hide})),
+					512 * 1024,
+				)
+				.await
+				.map_err(write_failure)?;
+			let setting: discord_protocol::notifications::Setting =
+				discord_protocol::decode(&bytes).map_err(|_| Failure::Ambiguous)?;
+			if setting.guild_id != Some(guild) || setting.hide_muted_channels != Some(*hide) {
+				return Err(Failure::Ambiguous);
+			}
+			return Ok(Outcome::HideMuted(*hide));
+		}
 		let mut requested_until = None;
 		let override_body = match action {
 			Action::Notifications(level) => json!({"message_notifications":level}),
