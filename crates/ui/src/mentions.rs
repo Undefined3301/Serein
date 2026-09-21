@@ -62,6 +62,11 @@ enum Candidate {
 		server: String,
 	},
 }
+
+pub(crate) fn user_mention_token(user: Id) -> String {
+	format!("<@{user}> ")
+}
+
 impl Candidate {
 	#[cfg(test)]
 	fn id(&self) -> Id {
@@ -76,7 +81,7 @@ impl Candidate {
 	fn token(&self) -> String {
 		match self {
 			Candidate::Role { id, .. } => format!("<@&{id}> "),
-			Candidate::User { user } => format!("<@{}> ", user.id),
+			Candidate::User { user } => user_mention_token(user.id),
 			Candidate::Mass { name } => format!("@{name} "),
 			Candidate::Channel { id, .. } => format!("<#{id}> "),
 			Candidate::Unicode { text, .. } => format!("{text} "),
