@@ -1,5 +1,11 @@
 # Third-party notices
 
+AppImage delta updates use **md4 0.10.2** (MIT OR Apache-2.0) for legacy zsync
+block matching only; SHA-256 remains the final update integrity check. The
+unmodified upstream MIT license is bundled at
+`assets/licenses/files/md4-0.10.2-LICENSE-MIT`; `Cargo.lock` records the registry
+archive checksum. Source: https://crates.io/crates/md4/0.10.2 (RustCrypto/hashes).
+
 Linux tray integration uses **ksni 0.3.6** (Unlicense), reusing zbus, Tokio and image.
 The unmodified license is retained in `assets/licenses/files/ksni-0.3.6-UNLICENSE`;
 `Cargo.lock` records the archive checksum.
