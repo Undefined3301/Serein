@@ -46,6 +46,15 @@ impl MessageActions {
 			edit.observed = true;
 		}
 	}
+
+	/// Wording from before an in-flight own edit, if the service has not echoed it yet.
+	pub fn unobserved_previous(&self, channel: Id, message: Id) -> Option<String> {
+		let edit = self.edits.get(&(channel, message))?;
+		if edit.observed || edit.before == edit.after {
+			return None;
+		}
+		Some(edit.before.clone())
+	}
 }
 impl State {
 	pub(crate) fn cancel_message_actions(&mut self) {
@@ -146,9 +155,20 @@ impl State {
 					&& session_cache::Timeline::valid_message(&updated) =>
 			{
 				if !edit.observed && self.selected == Some(channel) && self.can_view(channel) {
-					let mut patch = content_patch(channel, message, updated.content);
-					patch.edited = updated.edited_at.map_or(Patch::Null, Patch::Value);
-					patch.mentions = Patch::Value(updated.mentions);
+					let mentions = updated.mentions.clone();
+					let _ = self.timeline.observe_content(
+						message,
+						session_cache::ContentRevision {
+							content: updated.content,
+							edited_at: updated.edited_at,
+							source: session_cache::ContentSource::OwnConfirm {
+								previous: edit.before,
+							},
+						},
+					);
+					let mut patch = content_patch(channel, message, String::new());
+					patch.content = model::Patch::Absent;
+					patch.mentions = model::Patch::Value(mentions);
 					let _ = self.timeline.patch(patch);
 				}
 			}
@@ -160,9 +180,14 @@ impl State {
 						.get(message)
 						.is_some_and(|m| m.content == edit.after)
 				{
-					let _ = self
-						.timeline
-						.patch(content_patch(channel, message, edit.before));
+					let _ = self.timeline.observe_content(
+						message,
+						session_cache::ContentRevision {
+							content: edit.before,
+							edited_at: None,
+							source: session_cache::ContentSource::Rollback,
+						},
+					);
 				}
 				self.message_actions
 					.failed_edits

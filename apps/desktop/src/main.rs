@@ -407,12 +407,11 @@ fn demo_check_updates() {
 /// One offline debug path through the shipped Wasm, reducer, and egui rows.
 #[cfg(feature = "demo")]
 fn demo_check_extensions() {
-	let enabled =
+	let _ =
 		extensions::demo_check_examples().expect("starter packages activate with consent");
 	let mut state = test_support::demo_state();
 	let channel = state.selected.expect("demo conversation");
 	state.timeline.clear();
-	state.set_preserve_deleted_messages(enabled);
 	let mut message = test_support::message(600, channel);
 	message.content = "A useful message stays readable".into();
 	message.attachments.clear();
@@ -504,10 +503,10 @@ fn demo_check_extensions() {
 		saw_deleted && saw_author && saw_avatar,
 		"retained row renders red text ({saw_deleted}), author ({saw_author}), and a normal 40-pixel avatar ({saw_avatar})"
 	);
-	state.set_preserve_deleted_messages(false);
+	state.discard_preserved_deleted(message.id);
 	assert!(
 		state.timeline.get_display(message.id).is_none(),
-		"disabling releases preserved text"
+		"local remove drops the retained payload"
 	);
 	let next = test_support::message(601, channel);
 	state.timeline.insert(next.clone(), true, false).unwrap();
@@ -519,11 +518,12 @@ fn demo_check_extensions() {
 		},
 	});
 	assert!(
-		state.timeline.get_display(next.id).is_none(),
-		"default deletion still removes the payload"
+		state.timeline.get_display(next.id).is_some(),
+		"loaded deletes stay in the window"
 	);
+	assert!(state.timeline.get(next.id).is_none());
 	println!(
-		"Extension debug check passed: one Wasm protector, five themes, consent, red deleted row, stale-history rejection and disable cleanup."
+		"Extension debug check passed: starter packages, consent, retained deleted row, stale-history rejection and local remove."
 	);
 }
 

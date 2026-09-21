@@ -832,6 +832,7 @@ impl MessageDto {
 			channel: self.channel_id,
 			author,
 			content: self.content,
+			prior_contents: Default::default(),
 			author_nick: self.member.as_ref().and_then(|member| {
 				member
 					.nick

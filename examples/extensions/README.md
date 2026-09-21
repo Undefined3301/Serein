@@ -15,14 +15,15 @@ python pack.py emoji-sticker-images/manifest.json target/wasm32-unknown-unknown/
 ```
 
 Import the package in Settings > Extensions, review the capabilities, and enable it.
-Message delete protector is an example activation plugin. Its `activation` action returns
-`preserve_deleted_messages: true` after the user grants `deleted_messages`. The host
-keeps already-loaded messages in bounded session memory and displays deleted text in red
-by default. Hover and a local context menu can toggle that highlight or remove the
-retained row. They never call Discord. The host never sends message bodies to the plugin,
-saves deleted bodies to disk, restores messages deleted before loading, or gives deleted
-messages live service actions.
-Disabling, logout, permission revocation and timeline eviction release retained content.
+Message delete protector is an example activation plugin. Deleted loaded messages
+stay in bounded session memory without an extension. The host displays deleted text
+in red by default. Hover and a local context menu can toggle that highlight or
+remove the retained row. They never call Discord. The host never sends message
+bodies to the plugin, saves deleted bodies to disk, restores messages deleted
+before loading, or gives deleted messages live service actions. Logout, permission
+revocation and timeline eviction release retained content. The optional
+`preserve_deleted_messages` output field is accepted for compatibility and does
+not change retention.
 Emoji & Sticker Images requests `image_sharing` and returns `image_sharing: true`
 from activation. While enabled, custom emoji and sticker selections stage image attachments. Wasm receives no conversation text or image bytes and cannot fetch
 or send anything. Selecting artwork authorizes an immediate image send after validation; text drafts
@@ -43,8 +44,9 @@ Input fields are `action`, optional `selected_message`, optional `composer`, opt
 Only the explicitly selected action's context is included and only after capability consent.
 Output fields are optional `replacement`, optional `storage`, optional `appearance`, `panel` (array), and
 `preserve_deleted_messages` and `image_sharing` (booleans, default false).
-Only activation with `image_sharing` capability may enable image attachment mode. Only an `activation` action
-with the `deleted_messages` capability may request preservation. There is at most
+Only activation with `image_sharing` capability may enable image attachment mode.
+`preserve_deleted_messages` is accepted for compatibility and does not change host
+retention; deleted loaded messages stay without an extension. There is at most
 one activation action per plugin, invoked by the worker on enable/account load.
 Activation itself does not require deleted-message access: each returned effect
 requires its own capability. With `appearance`, return a [theme object](../../docs/theme-api.md)

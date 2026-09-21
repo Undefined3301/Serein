@@ -312,6 +312,9 @@ fn layout_key(message: &Message) -> u64 {
 	// Reaction counts are excluded so a +1/-1 does not drop measured heights.
 	let mut key = DefaultHasher::new();
 	message.content.hash(&mut key);
+	for prior in message.prior_contents.as_slice() {
+		prior.hash(&mut key);
+	}
 	for user in &message.mentions {
 		user.id.hash(&mut key);
 		user.name.hash(&mut key);
@@ -1369,12 +1372,17 @@ impl TimelineView {
 				.retain(|id, _| row_ids.binary_search(id).is_ok());
 			self.suppressed_deleted_highlight
 				.retain(|id| row_ids.binary_search(id).is_ok());
-			self.formatted.retain(|id| state.timeline.get(id).is_some());
+			self.formatted
+				.retain(|id| state.timeline.get_display(id).is_some());
 			self.toolbar = self
 				.toolbar
 				.filter(|(id, _)| state.timeline.get_display(*id).is_some());
-			self.revealed
-				.retain(|id, content| state.timeline.get(*id).is_some_and(|m| content.matches(m)));
+			self.revealed.retain(|id, content| {
+				state
+					.timeline
+					.get_display(*id)
+					.is_some_and(|m| content.matches(m))
+			});
 			let mut previous = None;
 			let mut lead_basis = 0.0;
 			self.rows = starter
@@ -1808,213 +1816,8 @@ impl TimelineView {
 				if index < anchor {
 					self.leading_rendered += 1;
 				}
-				if state.timeline.is_deleted(id) {
-					let colors = crate::design::palette(ui);
-					let body_color = if self.suppressed_deleted_highlight.contains(&id) {
-						colors.text
-					} else {
-						colors.danger
-					};
-					let response =
-						ui.scope_builder(egui::UiBuilder::new().scope_id(row_id), |ui| {
-							let background = ui.painter().add(egui::Shape::Noop);
-							let row = egui::Frame::NONE
-								.inner_margin(egui::Margin {
-									left: 16,
-									right: 16,
-									top: 14,
-									bottom: 1,
-								})
-								.show(ui, |ui| {
-									ui.set_min_width((width - 32.0).max(1.0));
-									ui.spacing_mut().item_spacing = egui::vec2(16.0, 4.0);
-									let mut surface =
-										crate::select::Surface::new(ui, "deleted-body");
-									ui.horizontal_top(|ui| {
-										avatars.show_plain(ui, &message.author, 40.0, state.demo);
-										ui.vertical(|ui| {
-											ui.set_width(ui.available_width());
-											ui.allocate_ui_with_layout(
-												egui::vec2(ui.available_width(), 22.0),
-												egui::Layout::left_to_right(egui::Align::Center),
-												|ui| {
-													ui.spacing_mut().item_spacing.x = 8.0;
-													crate::account_badge::name(
-														ui,
-														&message.author,
-														state.message_author_name(message),
-														15.5,
-														state.message_author_color(message).map_or(
-															colors.text_strong,
-															|rgb| {
-																crate::design::role_name_color(
-																	rgb,
-																	colors.chat,
-																	colors.text_strong,
-																)
-															},
-														),
-														egui::Sense::hover(),
-														48.0,
-													);
-													let time = timestamp(id);
-													ui.label(
-														RichText::new(format!(
-															"{:02}:{:02}",
-															time.hour(),
-															time.minute()
-														))
-														.size(12.0)
-														.color(colors.muted),
-													)
-													.on_hover_text_with(|| {
-														format!("Deleted message · {} UTC", time)
-													});
-												},
-											);
-											let (pos, galley, response) = egui::Label::new(
-												RichText::new(if message.content.is_empty() {
-													"[Deleted message had no text]"
-												} else {
-													&message.content
-												})
-												.size(16.0)
-												.color(body_color),
-											)
-											.wrap()
-											.selectable(false)
-											.layout_in_ui(ui);
-											response.widget_info(|| {
-												egui::WidgetInfo::labeled(
-													egui::Role::Label,
-													true,
-													format!(
-														"Deleted message by {}. {}",
-														state.message_author_name(message),
-														message.content
-													),
-												)
-											});
-											surface.run(ui, &response, pos, galley, Vec::new());
-										});
-										surface.cover(ui.min_rect());
-										surface.finish(ui);
-									});
-								});
-							let rect = row.response.rect;
-							let focus = ui.interact(
-								rect,
-								ui.scope_id().with("message-focus"),
-								egui::Sense::focusable_noninteractive(),
-							);
-							let retained = retained_toolbar.is_some_and(|(active, _)| active == id);
-							let toolbar_hover = self
-								.toolbar
-								.filter(|(active, toolbar)| {
-									*active == id && ui.rect_contains_pointer(*toolbar)
-								})
-								.is_some();
-							let other_toolbar_hover = self
-								.toolbar
-								.filter(|(active, toolbar)| {
-									*active != id && ui.rect_contains_pointer(*toolbar)
-								})
-								.is_some();
-							let hovered =
-								allow_hover
-									&& (ui.rect_contains_pointer(rect) || toolbar_hover)
-									&& !other_toolbar_hover && !egui::Popup::is_any_open(ui.ctx())
-									&& retained_toolbar.is_none_or(|(active, _)| active == id);
-							let context_menu = (ui.rect_contains_pointer(rect) || toolbar_hover)
-								&& !other_toolbar_hover && !egui::Popup::is_any_open(
-								ui.ctx(),
-							) && (ui.input(|i| i.pointer.secondary_clicked())
-								|| crate::select::open_menu(ui.ctx()));
-							if context_menu
-								|| hovered || focus.has_focus()
-								|| keyboard_focus.as_ref().is_some_and(|r| r.id == focus.id)
-								|| retained
-							{
-								ui.painter().set(
-									background,
-									egui::Shape::rect_filled(
-										rect,
-										0.0,
-										crate::design::row_highlight(ui, colors.hover, 0.7),
-									),
-								);
-								let toolbar_rect = egui::Rect::from_min_size(
-									egui::pos2(rect.right() - 46.0, rect.top() - 10.0),
-									egui::vec2(36.0, 28.0),
-								);
-								let mut toolbar = ui.new_child(
-									egui::UiBuilder::new()
-										.id_salt("hover-actions")
-										.max_rect(toolbar_rect)
-										.layout(egui::Layout::left_to_right(egui::Align::Center)),
-								);
-								toolbar.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
-								toolbar.spacing_mut().button_padding = egui::vec2(4.0, 2.0);
-								toolbar.spacing_mut().interact_size.y = 28.0;
-								toolbar
-									.painter()
-									.rect_filled(toolbar_rect, 6.0, colors.raised);
-								toolbar.painter().rect_stroke(
-									toolbar_rect,
-									6.0,
-									egui::Stroke::new(1.0, colors.border),
-									egui::StrokeKind::Inside,
-								);
-								let menu =
-									action_button(&mut toolbar, crate::icons::Icon::More, "More");
-								menu.widget_info(|| {
-									egui::WidgetInfo::labeled(
-										egui::Role::Button,
-										toolbar.is_enabled(),
-										format!(
-											"Deleted message actions for {}",
-											message.author.name
-										),
-									)
-								});
-								let mut popup = egui::Popup::menu(&menu);
-								if context_menu {
-									popup =
-										popup.open_memory(Some(egui::SetOpenCommand::Bool(true)));
-								}
-								if context_menu
-									|| (!menu.clicked()
-										&& egui::Popup::position_of_id(
-											toolbar.ctx(),
-											popup.get_id(),
-										)
-										.is_some())
-								{
-									popup = popup.at_pointer_fixed();
-								}
-								let mut action = None;
-								deleted_message_actions(popup, &mut action);
-								match action {
-									Some(DeletedLocalAction::ToggleHighlight) => {
-										if !self.suppressed_deleted_highlight.remove(&id) {
-											self.suppressed_deleted_highlight.insert(id);
-										}
-									}
-									Some(DeletedLocalAction::Remove) => {
-										self.remove_preserved = Some(id);
-									}
-									None => {}
-								}
-								self.toolbar = Some((id, toolbar_rect));
-							}
-						});
-					measurements.push((
-						id,
-						row_key(message, previous, self.unread_boundary, state) ^ 1,
-						response.response.rect.height(),
-					));
-					continue;
-				}
+				let deleted = state.timeline.is_deleted(id);
+
 				let compact = grouped(previous, message, self.unread_boundary);
 				let new_day =
 					previous.is_none_or(|p| timestamp(p.id).date() != timestamp(id).date());
@@ -2333,6 +2136,20 @@ impl TimelineView {
 												);
 												ui.add_space(4.0);
 											}
+											for prior in message.prior_contents.as_slice() {
+												ui.label(
+													RichText::new(prior)
+														.size(16.0)
+														.color(colors.muted),
+												);
+											}
+											let body_color = if deleted
+												&& !self.suppressed_deleted_highlight.contains(&id)
+											{
+												Some(colors.danger)
+											} else {
+												None
+											};
 											let formatted =
 												self.formatted.get(id, &message.content);
 											let reveal = self
@@ -2358,29 +2175,46 @@ impl TimelineView {
 														if jumbo {
 															crate::design::jumbo_emoji(ui);
 														}
-														let source =
-															crate::mentions::MentionSource {
-																state,
-																channel: message.channel,
-															};
-														formatted.show_references(
-															ui,
-															&mut self.opening,
-															&message.mentions,
-															Some(&source),
-															profile,
-															(
-																&state.channels,
-																&mut self.channel_reference,
-																&state.guilds,
-																crate::mentions::known_roles(
-																	state,
-																	message.channel,
+														if let Some(color) = body_color {
+															ui.visuals_mut().override_text_color =
+																Some(color);
+														}
+														if deleted && message.content.is_empty() {
+															ui.label(
+																RichText::new(
+																	"[Deleted message had no text]",
+																)
+																.size(16.0)
+																.color(
+																	body_color
+																		.unwrap_or(colors.text),
 																),
-															),
-															(avatars, state.demo, &mut text),
-															&mut surface,
-														);
+															);
+														} else {
+															let source =
+																crate::mentions::MentionSource {
+																	state,
+																	channel: message.channel,
+																};
+															formatted.show_references(
+																ui,
+																&mut self.opening,
+																&message.mentions,
+																Some(&source),
+																profile,
+																(
+																	&state.channels,
+																	&mut self.channel_reference,
+																	&state.guilds,
+																	crate::mentions::known_roles(
+																		state,
+																		message.channel,
+																	),
+																),
+																(avatars, state.demo, &mut text),
+																&mut surface,
+															);
+														}
 													})
 													.response
 													.rect;
@@ -2621,7 +2455,13 @@ impl TimelineView {
 											self.channel_reference = Some(thread.id);
 										}
 									}
-									if let Some(action) = crate::reactions::show(
+									if deleted {
+										crate::reactions::show_frozen(
+											ui,
+											state.reactions.display(message),
+											(avatars, state.demo),
+										);
+									} else if let Some(action) = crate::reactions::show(
 										ui,
 										state.reactions.display(message),
 										state.gateway_connected
@@ -2752,6 +2592,64 @@ impl TimelineView {
 							.user
 							.as_ref()
 							.is_some_and(|u| u.id == message.author.id);
+						if deleted {
+							let toolbar_rect = egui::Rect::from_min_size(
+								egui::pos2(rect.right() - 46.0, rect.top() - 10.0),
+								egui::vec2(36.0, 28.0),
+							);
+							let mut toolbar = ui.new_child(
+								egui::UiBuilder::new()
+									.id_salt("hover-actions")
+									.max_rect(toolbar_rect)
+									.layout(egui::Layout::left_to_right(egui::Align::Center)),
+							);
+							toolbar.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
+							toolbar.spacing_mut().button_padding = egui::vec2(4.0, 2.0);
+							toolbar.spacing_mut().interact_size.y = 28.0;
+							toolbar
+								.painter()
+								.rect_filled(toolbar_rect, 6.0, colors.raised);
+							toolbar.painter().rect_stroke(
+								toolbar_rect,
+								6.0,
+								egui::Stroke::new(1.0, colors.border),
+								egui::StrokeKind::Inside,
+							);
+							let menu =
+								action_button(&mut toolbar, crate::icons::Icon::More, "More");
+							menu.widget_info(|| {
+								egui::WidgetInfo::labeled(
+									egui::Role::Button,
+									toolbar.is_enabled(),
+									format!("Deleted message actions for {}", message.author.name),
+								)
+							});
+							let mut popup = egui::Popup::menu(&menu);
+							if context_menu {
+								popup = popup.open_memory(Some(egui::SetOpenCommand::Bool(true)));
+							}
+							if context_menu
+								|| (!menu.clicked()
+									&& egui::Popup::position_of_id(toolbar.ctx(), popup.get_id())
+										.is_some())
+							{
+								popup = popup.at_pointer_fixed();
+							}
+							let mut action = None;
+							deleted_message_actions(popup, &mut action);
+							match action {
+								Some(DeletedLocalAction::ToggleHighlight) => {
+									if !self.suppressed_deleted_highlight.remove(&id) {
+										self.suppressed_deleted_highlight.insert(id);
+									}
+								}
+								Some(DeletedLocalAction::Remove) => {
+									self.remove_preserved = Some(id);
+								}
+								None => {}
+							}
+							self.toolbar = Some((id, toolbar_rect));
+						} else {
 						let toolbar_rect = egui::Rect::from_min_size(
 							egui::pos2(
 								rect.right() - if own { 166.0 } else { 136.0 },
@@ -2898,6 +2796,7 @@ impl TimelineView {
 							);
 						}
 						self.toolbar = Some((id, toolbar_rect));
+						}
 					}
 					if selected_reply.or(state.reply_target()) == Some(id)
 						|| self.highlighted.is_some_and(|(target, _)| target == id)
@@ -3831,6 +3730,7 @@ mod tests {
 				primary_guild: None,
 			},
 			content: "Synthetic text with enough words to wrap in a narrow viewport.".into(),
+			prior_contents: Default::default(),
 			edited: false,
 			edited_at: None,
 			revision: 0,
@@ -6426,7 +6326,7 @@ mod tests {
 	}
 
 	#[test]
-	fn deleted_only_timeline_discards_content_and_has_no_message_actions() {
+	fn deleted_only_timeline_keeps_content_without_service_actions() {
 		fn texts(shape: &egui::Shape, out: &mut Vec<String>) {
 			match shape {
 				egui::Shape::Text(text) => out.push(text.galley.job.text.clone()),
@@ -6502,24 +6402,25 @@ mod tests {
 			let labels = render(&mut view, &mut state);
 			assert!(state.timeline.is_empty());
 			assert_eq!(state.timeline.row_count(), 1);
-			assert!(view.rows.is_empty());
-			assert!(!labels.iter().any(|text| text.contains("January 1, 2015")));
-			for text in [
-				"Deleted synthetic author",
-				"Deleted synthetic body",
-				"Reveal spoiler",
-				"Reply",
-				"Open in Discord",
-				"Message deleted",
-			] {
+			assert!(state.timeline.get_display(message.id).is_some());
+			assert!(!view.rows.is_empty());
+			assert!(
+				labels
+					.iter()
+					.any(|label| label.contains("Deleted synthetic author"))
+			);
+			assert!(
+				labels
+					.iter()
+					.any(|label| label.contains("Deleted synthetic body"))
+			);
+			for text in ["Reply", "Open in Discord"] {
 				assert!(
 					!labels.iter().any(|label| label.contains(text)),
-					"Deleted row exposed {text}"
+					"Deleted row exposed service action {text}"
 				);
 			}
-			assert!(view.revealed.is_empty() && view.viewing.is_none() && view.toolbar.is_none());
 			assert!(view.reaction.is_none());
-			// Only the channel's own latest ID may be acknowledged, never the deleted row.
 			let selected = state.channel(state.selected.unwrap()).unwrap();
 			assert_ne!(selected.last_message, Some(message.id));
 			assert_eq!(view.mark_read, selected.last_message);
@@ -6541,6 +6442,7 @@ mod tests {
 				primary_guild: None,
 			},
 			content: "<#4> ".repeat(12),
+			prior_contents: Default::default(),
 			author_nick: None,
 			author_roles: vec![],
 			mention_roles: vec![],
@@ -6699,6 +6601,7 @@ mod tests {
 				primary_guild: None,
 			},
 			content: "||old revealed content||".into(),
+			prior_contents: Default::default(),
 			edited: false,
 			edited_at: None,
 			revision: 0,
@@ -6795,6 +6698,7 @@ mod tests {
 				primary_guild: None,
 			},
 			content: "Ordinary text".into(),
+			prior_contents: Default::default(),
 			edited: false,
 			edited_at: None,
 			revision: 0,
