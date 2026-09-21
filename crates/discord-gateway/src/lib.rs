@@ -1144,7 +1144,9 @@ async fn run_inner(
 										let sessions=decode::<discord_protocol::notifications::Sessions>(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
 										emit(Event::NotificationPreferences(client_core::notifications::Event::Presence(sessions.dnd())))?;
 									}
-									"USER_SETTINGS_PROTO_UPDATE" => emit(Event::NotificationPreferences(client_core::notifications::Event::Invalidate))?,
+									// Status and appearance live here. Channel and guild mutes live on
+									// user guild settings, so this event must not clear them.
+									"USER_SETTINGS_PROTO_UPDATE" => {}
 									"INTERACTION_SUCCESS" | "INTERACTION_FAILURE" | "INTERACTION_MODAL_CREATE" => { if let Some(event) = interactions::event(packet.t.as_deref().unwrap_or_default(),packet.d.get().as_bytes())? { emit(event)?; } },
 									"MESSAGE_CREATE" => {
 										let message = decode::<MessageDto>(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?.into_model();
@@ -1315,6 +1317,7 @@ fn notification_preferences(
 				level: s.message_notifications,
 				suppress_everyone: s.suppress_everyone,
 				suppress_roles: s.suppress_roles,
+				hide_muted_channels: s.hide_muted_channels,
 				channel_mute_until: s.channel_overrides.as_ref().map_or_else(Vec::new, |c| {
 					c.0.iter()
 						.filter_map(|c| {

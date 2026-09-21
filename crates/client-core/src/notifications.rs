@@ -132,6 +132,7 @@ pub struct Setting {
 	pub level: Option<u8>,
 	pub suppress_everyone: Option<bool>,
 	pub suppress_roles: Option<bool>,
+	pub hide_muted_channels: Option<bool>,
 	pub channels: Vec<(Id, Option<bool>, Option<u8>)>,
 	pub channel_mute_until: Vec<(Id, i64)>,
 }
@@ -322,6 +323,34 @@ impl State {
 			setting.channels.push((channel, muted, level));
 		}
 		self.read_state.activity.clear_notifications();
+		self.check_notification_capacity()
+	}
+
+	pub fn hides_muted_channels(&self, guild: Id) -> Option<bool> {
+		self.notification_preferences
+			.settings
+			.get(&Some(guild))
+			.and_then(|setting| setting.hide_muted_channels)
+	}
+
+	pub(crate) fn confirm_guild_hides_muted(
+		&mut self,
+		guild: Id,
+		hide: bool,
+	) -> Result<(), &'static str> {
+		let preferences = &mut self.notification_preferences;
+		if !preferences.settings.contains_key(&Some(guild)) && preferences.settings.len() >= MAX_NAV
+		{
+			return Err("Notification settings exceed safe capacity");
+		}
+		let setting = preferences
+			.settings
+			.entry(Some(guild))
+			.or_insert_with(|| Setting {
+				guild: Some(guild),
+				..Setting::default()
+			});
+		setting.hide_muted_channels = Some(hide);
 		self.check_notification_capacity()
 	}
 
@@ -912,6 +941,7 @@ mod tests {
 					level: Some(0),
 					suppress_everyone: Some(false),
 					suppress_roles: Some(false),
+					hide_muted_channels: None,
 					channel_mute_until: vec![],
 					channels: vec![],
 				}],

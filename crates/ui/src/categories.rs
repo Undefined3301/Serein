@@ -457,11 +457,9 @@ fn kind_label(kind: u8) -> &'static str {
 
 impl MessagingUi {
 	pub(super) fn channel_list(&mut self, ui: &mut egui::Ui, state: &mut State) -> Option<Id> {
-		self.hidden_muted_guilds
-			.retain(|guild| state.guild(*guild).is_some());
 		let hide_muted = self
 			.guild
-			.is_some_and(|guild| self.hidden_muted_guilds.contains(&guild));
+			.is_some_and(|guild| state.hides_muted_channels(guild) == Some(true));
 		let scope = Scope::of(self.guild);
 		let shortcuts_available = self.shortcuts_available(state);
 		let key = CacheKey {
@@ -1173,10 +1171,16 @@ impl MessagingUi {
 				self.channel_menu
 					.sidebar_context(&response, state, guild, &mut next);
 				if next != hide_muted {
-					if next {
-						self.hidden_muted_guilds.insert(guild);
-					} else {
-						self.hidden_muted_guilds.remove(&guild);
+					if let Some(channel) = state
+						.channels
+						.iter()
+						.find(|channel| channel.guild == Some(guild) && state.can_view(channel.id))
+						.map(|channel| channel.id)
+					{
+						self.channel_move = Some((
+							channel,
+							client_core::channel_actions::Action::HideMuted(next),
+						));
 					}
 					self.channel_cache.invalidate();
 				}
@@ -1726,7 +1730,7 @@ mod tests {
 				],
 			);
 		}
-		assert!(view.hidden_muted_guilds.contains(&Id(10)));
+		assert_eq!(state.hides_muted_channels(Id(10)), Some(true));
 	}
 	#[test]
 	fn channel_rows_scroll_continuously_past_voice_participants() {
