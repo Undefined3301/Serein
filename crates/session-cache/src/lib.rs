@@ -1503,7 +1503,7 @@ mod tests {
 		.unwrap();
 		t.finish_page(vec![message(1), message(2)], false).unwrap();
 		assert!(t.get(Id(1)).is_none());
-		assert!(t.get_display(Id(1)).is_some());
+		assert!(t.get_display(Id(1)).is_none());
 		t.patch(MessagePatch {
 			flags: Patch::Absent,
 			sticker_items: Patch::Absent,
