@@ -5005,10 +5005,11 @@ impl eframe::App for Desktop {
 			raw_input.predicted_dt = period.as_secs_f32();
 		}
 		let track = self.messaging.tracking_pointer();
-		let middle = self
-			.pointer
-			.intercept(raw_input, &self.window, ctx.pixels_per_point(), track);
-		self.messaging.middle_button(middle);
+		let intercepted =
+			self.pointer
+				.intercept(raw_input, &self.window, ctx.pixels_per_point(), track);
+		self.messaging.middle_button(intercepted.middle);
+		self.messaging.side_buttons(intercepted.side);
 		if track
 			&& let Some(egui::Event::PointerMoved(pos)) = raw_input.events.last()
 			&& !ctx.content_rect().contains(*pos)

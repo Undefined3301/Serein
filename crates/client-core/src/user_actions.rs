@@ -1316,7 +1316,7 @@ impl State {
 						Action::CloseDm(channel) => {
 							self.remove_channels(&std::collections::BTreeSet::from([channel]));
 							if self.selected == Some(channel) {
-								self.selected = None;
+								self.arrived_home();
 							}
 						}
 						Action::Block { user, blocked } => {
