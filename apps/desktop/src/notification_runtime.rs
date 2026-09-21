@@ -124,7 +124,7 @@ impl Runtime {
 			sound = Some(preview);
 		}
 		if let Some(sound) = sound {
-			self.sounds.play(sound, options.discord_sounds, ctx);
+			self.sounds.play(sound, ctx);
 		}
 		if self
 			.badge_check

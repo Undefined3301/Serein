@@ -8,7 +8,6 @@ pub struct Device {
 	pub outgoing_ring: bool,
 	pub disable_sounds: bool,
 	pub unread_badge: bool,
-	pub discord_sounds: bool,
 	pub mute: bool,
 	pub unmute: bool,
 	pub deafen: bool,
@@ -27,7 +26,6 @@ impl Default for Device {
 			outgoing_ring: true,
 			disable_sounds: false,
 			unread_badge: true,
-			discord_sounds: false,
 			mute: true,
 			unmute: true,
 			deafen: true,
@@ -61,15 +59,15 @@ impl Device {
 				Sound::Message => self.new_message,
 				Sound::CurrentChannel => self.current_channel,
 				Sound::IncomingRing => self.incoming_ring,
-				Sound::OutgoingRing => self.discord_sounds && self.outgoing_ring,
-				Sound::Mute => self.discord_sounds && self.mute,
-				Sound::Unmute => self.discord_sounds && self.unmute,
-				Sound::Deafen => self.discord_sounds && self.deafen,
-				Sound::Undeafen => self.discord_sounds && self.undeafen,
-				Sound::CameraOn => self.discord_sounds && self.camera_on,
-				Sound::ScreenShareOn => self.discord_sounds && self.screen_share_on,
-				Sound::UserJoin => self.discord_sounds && self.user_join,
-				Sound::UserLeave => self.discord_sounds && self.user_leave,
+				Sound::OutgoingRing => self.outgoing_ring,
+				Sound::Mute => self.mute,
+				Sound::Unmute => self.unmute,
+				Sound::Deafen => self.deafen,
+				Sound::Undeafen => self.undeafen,
+				Sound::CameraOn => self.camera_on,
+				Sound::ScreenShareOn => self.screen_share_on,
+				Sound::UserJoin => self.user_join,
+				Sound::UserLeave => self.user_leave,
 			}
 	}
 }
@@ -81,16 +79,6 @@ mod tests {
 		let mut settings = Device::default();
 		assert!(settings.allows(Sound::Message));
 		assert!(!settings.allows(Sound::CurrentChannel));
-		assert!(!settings.allows(Sound::OutgoingRing));
-		assert!(!settings.allows(Sound::Mute));
-		assert!(!settings.allows(Sound::Unmute));
-		assert!(!settings.allows(Sound::Deafen));
-		assert!(!settings.allows(Sound::Undeafen));
-		assert!(!settings.allows(Sound::CameraOn));
-		assert!(!settings.allows(Sound::ScreenShareOn));
-		assert!(!settings.allows(Sound::UserJoin));
-		assert!(!settings.allows(Sound::UserLeave));
-		settings.discord_sounds = true;
 		assert!(settings.allows(Sound::OutgoingRing));
 		settings.outgoing_ring = false;
 		assert!(!settings.allows(Sound::OutgoingRing));

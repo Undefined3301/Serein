@@ -181,9 +181,8 @@ network endpoint, persistent metadata, background job, or storage migration is i
 Emoji information cards resolve names and source servers on demand from the loaded catalogs;
 unknown/deleted source metadata remains explicitly unknown.
 
-Notification sounds (September 21): three owner-supplied MP3 tracks (106,608 bytes)
-and the optional classic Discord pack are embedded, with no runtime files or downloads.
-The classic files total 583,331 bytes on disk, including a duplicate message cue;
+Notification sounds (September 21): the Discord sound pack is embedded, with no
+runtime files or downloads. The files total 583,331 bytes on disk;
 source attribution and redistribution limitations are in `assets/sounds/README.md`.
 The existing single lazy worker and one-slot fixed-size request queue decode one
 track at a time outside rendering/audio callbacks. Each asset is capped at

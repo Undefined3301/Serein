@@ -113,11 +113,11 @@ mod tests {
 		);
 		assert!(!settings.state.dirty);
 
-		settings.current.notification_options.discord_sounds = true;
+		settings.current.notification_options.current_channel = true;
 		settings.loaded = true;
 		settings.apply(&mut ui);
 		settings.observe(&ui);
-		assert!(ui.notification_options.discord_sounds);
+		assert!(ui.notification_options.current_channel);
 		assert!(!settings.state.touched);
 		assert!(!settings.state.dirty);
 	}

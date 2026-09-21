@@ -3466,7 +3466,6 @@ mod tests {
 		use model::notification_preferences::Sound;
 
 		let mut view = MessagingUi::default();
-		view.notification_options.discord_sounds = true;
 		for (deafen, active, expected) in [
 			(false, true, Sound::Mute),
 			(false, false, Sound::Unmute),
