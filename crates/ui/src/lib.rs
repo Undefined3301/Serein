@@ -401,7 +401,7 @@ fn mention_switch(ui: &mut egui::Ui, colors: &design::Palette, on: &mut bool) {
 		.galley(rect.center() - galley.size() / 2.0, galley, color);
 	response.widget_info(|| {
 		egui::WidgetInfo::selected(
-			egui::WidgetType::Checkbox,
+			egui::Role::CheckBox,
 			ui.is_enabled(),
 			*on,
 			"Ping the original author",
@@ -1126,7 +1126,7 @@ impl MessagingUi {
 							);
 							response.widget_info(|| {
 								egui::WidgetInfo::labeled(
-									egui::WidgetType::Button,
+									egui::Role::Button,
 									true,
 									format!(
 										"{name}, {}, {}",
@@ -1319,7 +1319,7 @@ impl MessagingUi {
 							.on_hover_text("Search loaded conversations (Ctrl/Cmd+K)");
 						find.widget_info(|| {
 							egui::WidgetInfo::labeled(
-								egui::WidgetType::Button,
+								egui::Role::Button,
 								ui.is_enabled(),
 								"Find conversation, Ctrl or Command K",
 							)
@@ -1353,12 +1353,7 @@ impl MessagingUi {
 							},
 						);
 						response.widget_info(|| {
-							egui::WidgetInfo::selected(
-								egui::WidgetType::Button,
-								true,
-								friends,
-								"Friends",
-							)
+							egui::WidgetInfo::selected(egui::Role::Button, true, friends, "Friends")
 						});
 						if response.on_hover_text("Friends").clicked() {
 							state.open_home();
@@ -1449,7 +1444,7 @@ impl MessagingUi {
 								let avatar = self.avatars.show(ui, user, 32.0, state.demo);
 								avatar.widget_info(|| {
 									egui::WidgetInfo::labeled(
-										egui::WidgetType::Button,
+										egui::Role::Button,
 										true,
 										"Profile and status",
 									)
@@ -1559,7 +1554,7 @@ impl MessagingUi {
 												.on_hover_text("Profile and status");
 											identity.widget_info(|| {
 												egui::WidgetInfo::labeled(
-													egui::WidgetType::Button,
+													egui::Role::Button,
 													true,
 													"Profile and status",
 												)
@@ -1731,11 +1726,7 @@ impl MessagingUi {
 								);
 								let enabled = state.can_search();
 								response.widget_info(|| {
-									egui::WidgetInfo::labeled(
-										egui::WidgetType::Button,
-										enabled,
-										"Search",
-									)
+									egui::WidgetInfo::labeled(egui::Role::Button, enabled, "Search")
 								});
 								ui.painter().rect_filled(pill, 6, colors.raised);
 								let pill_text = if enabled {

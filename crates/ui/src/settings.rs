@@ -531,9 +531,8 @@ impl MessagingUi {
 		let label = if demo { "Exit preview" } else { "Log out" };
 		let (rect, response) =
 			ui.allocate_exact_size(egui::vec2(ui.available_width(), 32.0), egui::Sense::click());
-		response.widget_info(|| {
-			egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
-		});
+		response
+			.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
 		if response.hovered() || response.has_focus() {
 			ui.painter().rect_filled(rect, 4, colors.hover);
 		}
@@ -1066,12 +1065,7 @@ pub(super) fn nav_item(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::
 	let (rect, response) =
 		ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::click());
 	response.widget_info(|| {
-		egui::WidgetInfo::selected(
-			egui::WidgetType::SelectableLabel,
-			ui.is_enabled(),
-			selected,
-			label,
-		)
+		egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), selected, label)
 	});
 	let hot = response.hovered() || response.has_focus();
 	if selected {
@@ -1117,11 +1111,7 @@ pub(super) fn close_control(ui: &mut egui::Ui) -> egui::Response {
 	let colors = design::palette(ui);
 	let (rect, response) = ui.allocate_exact_size(egui::vec2(40.0, 56.0), egui::Sense::click());
 	response.widget_info(|| {
-		egui::WidgetInfo::labeled(
-			egui::WidgetType::Button,
-			ui.is_enabled(),
-			"Close settings (Esc)",
-		)
+		egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Close settings (Esc)")
 	});
 	let hot = response.hovered() || response.has_focus();
 	let center = egui::pos2(rect.center().x, rect.top() + 18.0);
@@ -1165,9 +1155,8 @@ fn preset_swatch(
 ) -> egui::Response {
 	let colors = design::palette(ui);
 	let (rect, response) = ui.allocate_exact_size(egui::vec2(76.0, 70.0), egui::Sense::click());
-	response.widget_info(|| {
-		egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, selected, label)
-	});
+	response
+		.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, selected, label));
 	let painter = &ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
 	if response.hovered() || response.has_focus() {
 		painter.rect_filled(rect, 6, colors.hover);
@@ -1242,7 +1231,7 @@ fn theme_preference_cards(ui: &mut egui::Ui) {
 			let (rect, response) =
 				ui.allocate_exact_size(egui::vec2(width, 76.0), egui::Sense::click());
 			response.widget_info(|| {
-				egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, selected, label)
+				egui::WidgetInfo::selected(egui::Role::RadioButton, true, selected, label)
 			});
 			let painter = ui.painter();
 			painter.rect(

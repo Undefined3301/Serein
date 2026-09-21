@@ -786,7 +786,7 @@ fn row(
 	}
 	response.widget_info(|| {
 		egui::WidgetInfo::selected(
-			egui::WidgetType::Button,
+			egui::Role::Button,
 			true,
 			selected,
 			match candidate {

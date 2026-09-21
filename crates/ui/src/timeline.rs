@@ -213,9 +213,8 @@ fn loading_messages(ui: &mut egui::Ui) {
 		egui::vec2(ui.available_width(), height),
 		egui::Sense::hover(),
 	);
-	response.widget_info(|| {
-		egui::WidgetInfo::labeled(egui::WidgetType::Label, false, "Loading messages")
-	});
+	response
+		.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, false, "Loading messages"));
 	let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(rect));
 	let fill = colors.muted.gamma_multiply(0.22);
 	let text_width = (rect.width() - 88.0).clamp(0.0, 480.0);
@@ -566,9 +565,8 @@ fn divider(ui: &mut egui::Ui, label: String, unread: bool) {
 			egui::vec2((ui.available_width() - 16.0).max(0.0), 20.0),
 			crate::select::band_sense(),
 		);
-		response.widget_info(|| {
-			egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), &label)
-		});
+		response
+			.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, ui.is_enabled(), &label));
 		let pos = egui::pos2(
 			rect.center().x - text.size().x / 2.0,
 			rect.center().y - text.size().y / 2.0,
@@ -828,9 +826,7 @@ fn present_control(ui: &mut egui::Ui, rect: egui::Rect, unread: bool) -> bool {
 			egui::Stroke::new(1.0, colors.accent),
 		);
 	}
-	response.widget_info(|| {
-		egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Jump to present")
-	});
+	response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Jump to present"));
 	response
 		.on_hover_text(if unread {
 			"New messages below · jump to present"
@@ -1776,7 +1772,7 @@ impl TimelineView {
 											.layout_in_ui(ui);
 											response.widget_info(|| {
 												egui::WidgetInfo::labeled(
-													egui::WidgetType::Label,
+													egui::Role::Label,
 													true,
 													format!(
 														"Deleted message by {}. {}",
@@ -1859,7 +1855,7 @@ impl TimelineView {
 									action_button(&mut toolbar, crate::icons::Icon::More, "More");
 								menu.widget_info(|| {
 									egui::WidgetInfo::labeled(
-										egui::WidgetType::Button,
+										egui::Role::Button,
 										toolbar.is_enabled(),
 										format!(
 											"Deleted message actions for {}",
@@ -2239,10 +2235,11 @@ impl TimelineView {
 														if jumbo {
 															crate::design::jumbo_emoji(ui);
 														}
-														let source = crate::mentions::MentionSource {
-															state,
-															channel: message.channel,
-														};
+														let source =
+															crate::mentions::MentionSource {
+																state,
+																channel: message.channel,
+															};
 														formatted.show_references(
 															ui,
 															&mut self.opening,
@@ -2563,7 +2560,7 @@ impl TimelineView {
 					);
 					focus.widget_info(|| {
 						egui::WidgetInfo::labeled(
-							egui::WidgetType::Label,
+							egui::Role::Label,
 							true,
 							format!(
 								"Message by {}. {}Tab for actions.",
@@ -2717,7 +2714,7 @@ impl TimelineView {
 								action_button(&mut toolbar, crate::icons::Icon::More, "More");
 							menu.widget_info(|| {
 								egui::WidgetInfo::labeled(
-									egui::WidgetType::Button,
+									egui::Role::Button,
 									toolbar.is_enabled(),
 									format!("Message actions for {}", message.author.name),
 								)

@@ -406,14 +406,14 @@ impl MessagingUi {
 		}
 		row.widget_info(|| {
 			egui::WidgetInfo::labeled(
-				egui::WidgetType::Button,
+				egui::Role::Button,
 				true,
 				format!("Switch to {}", account.label()),
 			)
 		});
 		forget.widget_info(|| {
 			egui::WidgetInfo::labeled(
-				egui::WidgetType::Button,
+				egui::Role::Button,
 				true,
 				format!("Forget {}", account.label()),
 			)
@@ -569,7 +569,7 @@ impl MessagingUi {
 					.corner_radius(6),
 			);
 			response.widget_info(|| {
-				egui::WidgetInfo::labeled(egui::WidgetType::Button, true, status.label())
+				egui::WidgetInfo::labeled(egui::Role::Button, true, status.label())
 			});
 			let x = response.rect.left() + 34.0;
 			let y = response.rect.top() + if description.is_empty() { 11.0 } else { 10.0 };

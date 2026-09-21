@@ -80,7 +80,7 @@ The native attachment video adapter also uses **symphonia-codec-aac 0.6.1**
 the other Symphonia codecs, and ship through the same package copy step.
 
 The egui main experiment pins the egui/eframe ecosystem to upstream commit
-`25f0cf491e463a150907db7a17043f8fe9cc24fc` (version 0.36.2, MIT OR Apache-2.0).
+`99df44a801749aee958295ed96fccad8dfecb289` (version 0.36.2, MIT OR Apache-2.0).
 It adds unicode-properties 0.1.4 (MIT/Apache-2.0) and updates glifo to 0.3.0 and
 vello_common/vello_cpu to 0.2.0 (Apache-2.0 OR MIT). Epaint bundled fonts and
 their separate license obligations are unchanged. Native font fallback uses

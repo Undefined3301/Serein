@@ -450,7 +450,7 @@ impl MessagingUi {
 							let name = folder.name.as_deref().unwrap_or("Server folder");
 							response.widget_info(|| {
 								egui::WidgetInfo::labeled(
-									egui::WidgetType::Button,
+									egui::Role::Button,
 									true,
 									format!(
 										"{name}, {} servers, {}",

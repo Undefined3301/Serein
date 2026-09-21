@@ -794,9 +794,7 @@ fn toggle_row(ui: &mut egui::Ui, label: &str, value: &mut bool) -> egui::Respons
 		*value = !*value;
 		response.mark_changed();
 	}
-	response.widget_info(|| {
-		egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, *value, label)
-	});
+	response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, *value, label));
 	let colors = design::palette(ui);
 	let mark = egui::Rect::from_center_size(
 		egui::pos2(response.rect.right() - 16.0, response.rect.center().y),

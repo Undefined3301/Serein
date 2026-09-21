@@ -52,9 +52,8 @@ fn link(
 		egui::Sense::hover()
 	}));
 	if let Some(target) = target {
-		response.widget_info(|| {
-			egui::WidgetInfo::labeled(egui::WidgetType::Link, ui.is_enabled(), label)
-		});
+		response
+			.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Link, ui.is_enabled(), label));
 		if response.on_hover_text("Open link…").clicked() {
 			*opening = Some(target);
 		}
@@ -191,9 +190,9 @@ fn gallery(
 				response.widget_info(|| {
 					egui::WidgetInfo::labeled(
 						if target.is_some() {
-							egui::WidgetType::Button
+							egui::Role::Button
 						} else {
-							egui::WidgetType::Image
+							egui::Role::Image
 						},
 						ui.is_enabled(),
 						format!("Open embed image {} of {}", index + 1, embeds.len()),
@@ -279,7 +278,7 @@ fn image_preview(
 	let painted = images.show_embed(ui, image, size, demo);
 	let response = ui.interact(painted.rect, painted.id.with("media"), egui::Sense::click());
 	response.widget_info(|| {
-		egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Image actions")
+		egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Image actions")
 	});
 	embed_context_menu(&response, image, download, demo);
 }
@@ -325,11 +324,7 @@ pub fn show(
 				let response =
 					ui.interact(painted.rect, painted.id.with("media"), egui::Sense::click());
 				response.widget_info(|| {
-					egui::WidgetInfo::labeled(
-						egui::WidgetType::Button,
-						ui.is_enabled(),
-						"Open image",
-					)
+					egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Open image")
 				});
 				embed_context_menu(&response, image, download, demo);
 				let star = gif.map(|gif| {
@@ -369,7 +364,7 @@ pub fn show(
 					}
 					star.widget_info(|| {
 						egui::WidgetInfo::selected(
-							egui::WidgetType::Checkbox,
+							egui::Role::CheckBox,
 							ui.is_enabled(),
 							favorite,
 							"Favorite GIF",

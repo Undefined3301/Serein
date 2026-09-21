@@ -196,7 +196,7 @@ pub(super) fn overlay(
 	painter.galley(text_pos, galley, colors.muted);
 	response.widget_info(|| {
 		let text: String = segments.iter().map(|(text, _)| text.as_str()).collect();
-		egui::WidgetInfo::labeled(egui::WidgetType::Label, true, text)
+		egui::WidgetInfo::labeled(egui::Role::Label, true, text)
 	});
 	if let Some(deadline) = state.typing_deadline(now) {
 		// Keep the dots moving until the earliest deadline, then go idle without repaints.

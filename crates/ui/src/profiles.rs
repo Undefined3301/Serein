@@ -219,7 +219,7 @@ fn header_circle(ui: &mut egui::Ui, icon: Icon, label: &str, enabled: bool) -> e
 			Color32::from_white_alpha(120)
 		},
 	);
-	response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+	response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
 	response.on_hover_text(label)
 }
 /// Add-friend circle; hidden for blocked users, whose relationship lives in the overflow menu.
@@ -790,9 +790,8 @@ fn role_chips(
 				galley,
 				theme.text,
 			);
-			response.widget_info(|| {
-				egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label.clone())
-			});
+			response
+				.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label.clone()));
 			if response.on_hover_text("Show remaining roles").clicked() {
 				ui.data_mut(|data| data.insert_temp(expanded_id, true));
 			}
@@ -930,11 +929,7 @@ pub fn show(
 					avatars.show(ui, user, AVATAR, state.demo)
 				};
 				response.widget_info(|| {
-					egui::WidgetInfo::labeled(
-						egui::WidgetType::Button,
-						true,
-						"View profile picture",
-					)
+					egui::WidgetInfo::labeled(egui::Role::Button, true, "View profile picture")
 				});
 				if response
 					.on_hover_cursor(egui::CursorIcon::ZoomIn)

@@ -285,7 +285,7 @@ impl VideoUi {
 		);
 		action.widget_info(|| {
 			egui::WidgetInfo::labeled(
-				egui::WidgetType::Button,
+				egui::Role::Button,
 				ui.is_enabled(),
 				format!("{label} video {}", attachment.filename),
 			)
@@ -536,7 +536,7 @@ impl VideoUi {
 							};
 							button.widget_info(|| {
 								egui::WidgetInfo::labeled(
-									egui::WidgetType::Button,
+									egui::Role::Button,
 									ui.is_enabled(),
 									label,
 								)

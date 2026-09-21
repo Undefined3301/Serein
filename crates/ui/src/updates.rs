@@ -105,9 +105,8 @@ impl MessagingUi {
 		ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 			dismiss = icons::button(ui, icons::Icon::Close, 18.0, "Dismiss update").clicked();
 		});
-		response.widget_info(|| {
-			egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
-		});
+		response
+			.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
 		let open = !dismiss && response.on_hover_text(status).clicked();
 		if dismiss {
 			self.updates.banner_dismissed = Some(ready);

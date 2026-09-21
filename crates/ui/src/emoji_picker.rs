@@ -329,7 +329,7 @@ impl Picker {
 		}
 		.on_hover_text("Choose emoji");
 		button.widget_info(|| {
-			egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Choose emoji")
+			egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Choose emoji")
 		});
 		if button.clicked() {
 			self.query.clear();
@@ -516,7 +516,7 @@ impl Picker {
 		// popout covers the message row. Keep a node for the id focus is returned to, or
 		// AccessKit's tree validation panics on a focused id missing from the node list.
 		trigger.widget_info(|| {
-			egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Add reaction")
+			egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Add reaction")
 		});
 		if let Some(Pick::React(message, emoji)) =
 			self.popup(ui, state, channel, avatars, commands, &trigger, None)
@@ -825,7 +825,7 @@ impl Picker {
 									}
 									response.widget_info(|| {
 										egui::WidgetInfo::selected(
-											egui::WidgetType::Button,
+											egui::Role::Button,
 											true,
 											active,
 											label,
@@ -911,13 +911,7 @@ impl Picker {
 													.hint_text(hint)
 													.desired_width(ui.available_width()),
 											);
-											search.widget_info(|| {
-												egui::WidgetInfo::labeled(
-													egui::WidgetType::TextEdit,
-													true,
-													label,
-												)
-											});
+											let search = search.accessible_name(label);
 											if self.focus {
 												search.request_focus();
 												self.focus = false;
@@ -1045,7 +1039,7 @@ impl Picker {
 														}
 														response.widget_info(|| {
 															egui::WidgetInfo::selected(
-																egui::WidgetType::Button,
+																egui::Role::Button,
 																true,
 																active,
 																&guild.name,
@@ -1709,7 +1703,7 @@ fn tile(
 			egui::Color32::WHITE,
 		);
 	}
-	response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+	response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
 	response
 }
 
@@ -1900,12 +1894,7 @@ fn gif_grid(
 					};
 					crate::icons::paint(ui.painter(), icon, star_rect.shrink(5.0), color);
 					star.widget_info(|| {
-						egui::WidgetInfo::selected(
-							egui::WidgetType::Checkbox,
-							true,
-							favorite,
-							"Favorite",
-						)
+						egui::WidgetInfo::selected(egui::Role::CheckBox, true, favorite, "Favorite")
 					});
 				}
 				let label = if gif.title.is_empty() {
@@ -1913,9 +1902,8 @@ fn gif_grid(
 				} else {
 					format!("Send GIF: {}", gif.title)
 				};
-				response.widget_info(|| {
-					egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label)
-				});
+				response
+					.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
 				if star.as_ref().is_some_and(|star| star.clicked()) {
 					action = Some(GifAction::Toggle(gif.clone()));
 				} else if response.clicked() && !star.as_ref().is_some_and(|s| s.hovered()) {
@@ -2014,7 +2002,7 @@ fn cell(
 			}
 		}
 	}
-	response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, name));
+	response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, name));
 	response
 }
 

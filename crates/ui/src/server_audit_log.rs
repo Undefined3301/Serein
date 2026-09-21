@@ -266,7 +266,7 @@ impl AuditLogUi {
 					let summary = summary(entry, page, state);
 					response.widget_info(|| {
 						egui::WidgetInfo::selected(
-							egui::WidgetType::CollapsingHeader,
+							egui::Role::Button,
 							ui.is_enabled(),
 							expanded,
 							&summary,

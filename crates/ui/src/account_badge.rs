@@ -45,7 +45,7 @@ pub(super) fn name(
 			Some("APP") => "Application-generated message",
 			_ => "Webhook author",
 		};
-		badge.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, description));
+		badge.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, description));
 		badge.on_hover_text(description);
 	}
 	response

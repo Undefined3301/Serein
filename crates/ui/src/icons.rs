@@ -425,9 +425,7 @@ pub fn button(ui: &mut egui::Ui, icon: Icon, size: f32, label: &str) -> Response
 		colors.muted
 	};
 	paint(ui.painter(), icon, rect.shrink(size * 0.2), color);
-	response.widget_info(|| {
-		egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
-	});
+	response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
 	response.on_hover_text(label)
 }
 
@@ -445,7 +443,7 @@ pub fn toggle(ui: &mut egui::Ui, icon: Icon, size: f32, active: bool, label: &st
 	};
 	paint(ui.painter(), icon, rect.shrink(size * 0.2), color);
 	response.widget_info(|| {
-		egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), active, label)
+		egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), active, label)
 	});
 	response.on_hover_text(label)
 }

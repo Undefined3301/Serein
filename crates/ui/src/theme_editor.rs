@@ -1259,9 +1259,8 @@ fn section_diagram(
 				egui::Sense::click(),
 			)
 			.on_hover_text(region.label());
-		response.widget_info(|| {
-			egui::WidgetInfo::labeled(egui::WidgetType::Button, true, region.label())
-		});
+		response
+			.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, region.label()));
 		if response.clicked()
 			|| response.has_focus()
 				&& ui.input(|input| {

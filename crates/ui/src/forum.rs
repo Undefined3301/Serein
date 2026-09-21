@@ -278,13 +278,8 @@ impl ForumUi {
 									.font(egui::TextStyle::Body)
 									.desired_width(ui.available_width().max(60.0)),
 							);
-							input.widget_info(|| {
-								egui::WidgetInfo::labeled(
-									egui::WidgetType::TextEdit,
-									true,
-									"Search loaded posts or start a new one",
-								)
-							});
+							let input =
+								input.accessible_name("Search loaded posts or start a new one");
 							if input.lost_focus()
 								&& ui.input(|i| i.key_pressed(egui::Key::Enter))
 								&& !self.query.trim().is_empty()
@@ -398,13 +393,7 @@ impl ForumUi {
 										)
 										.desired_width(f32::INFINITY),
 								);
-								title.widget_info(|| {
-									egui::WidgetInfo::labeled(
-										egui::WidgetType::TextEdit,
-										true,
-										"Post title",
-									)
-								});
+								let title = title.accessible_name("Post title");
 								if draft.focus {
 									title.request_focus();
 									draft.focus = false;
@@ -421,13 +410,7 @@ impl ForumUi {
 										.desired_rows(3)
 										.desired_width(f32::INFINITY),
 								);
-								body.widget_info(|| {
-									egui::WidgetInfo::labeled(
-										egui::WidgetType::TextEdit,
-										true,
-										"First message of this post",
-									)
-								});
+								body.accessible_name("First message of this post");
 							});
 							// Discord parks the image control beside the fields, not under them.
 							ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
@@ -472,7 +455,7 @@ impl ForumUi {
 								);
 								response.widget_info(|| {
 									egui::WidgetInfo::labeled(
-										egui::WidgetType::Button,
+										egui::Role::Button,
 										enabled,
 										"Add images to this post",
 									)
@@ -722,7 +705,7 @@ fn card(
 		.response;
 	response.widget_info(|| {
 		egui::WidgetInfo::labeled(
-			egui::WidgetType::Button,
+			egui::Role::Button,
 			true,
 			format!(
 				"{}{}{}; {} replies",

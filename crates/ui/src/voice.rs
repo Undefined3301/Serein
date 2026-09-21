@@ -283,7 +283,7 @@ impl MessagingUi {
 		}
 		response.widget_info(|| {
 			egui::WidgetInfo::selected(
-				egui::WidgetType::SelectableLabel,
+				egui::Role::Button,
 				viewable,
 				selected,
 				format!(
@@ -338,7 +338,7 @@ impl MessagingUi {
 					egui::vec2(ui.available_width(), 34.0),
 					egui::Sense::click(),
 				);
-				row.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name));
+				row.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
 				let hovered = row.contains_pointer() || row.has_focus();
 				if hovered {
 					ui.painter().rect_filled(
@@ -745,8 +745,7 @@ impl MessagingUi {
 			} else {
 				"Click to enlarge"
 			};
-			response
-				.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+			response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
 			let hover = if hint.is_empty() {
 				label.to_owned()
 			} else {
@@ -2101,7 +2100,7 @@ impl MessagingUi {
 				if active { colors.danger } else { colors.muted },
 			);
 			response.widget_info(|| {
-				egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, label)
+				egui::WidgetInfo::selected(egui::Role::Button, true, active, label)
 			});
 			if response.clicked() {
 				if deafen {
@@ -2150,7 +2149,7 @@ impl MessagingUi {
 				};
 				crate::icons::paint(ui.painter(), icon, rect.shrink(size * 0.2), color);
 				response.widget_info(|| {
-					egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, active, label)
+					egui::WidgetInfo::selected(egui::Role::Button, enabled, active, label)
 				});
 				response
 			})
@@ -2352,9 +2351,8 @@ impl MessagingUi {
 				} else {
 					"Disconnect"
 				};
-				response.widget_info(|| {
-					egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label)
-				});
+				response
+					.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
 				response.on_hover_text(if enabled {
 					label
 				} else {
@@ -2910,9 +2908,7 @@ fn card_action(
 		egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(20.0)),
 		color,
 	);
-	response.widget_info(|| {
-		egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, active, label)
-	});
+	response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, active, label));
 	response.on_hover_text(hint)
 }
 
@@ -3086,7 +3082,7 @@ fn tile_button(
 		galley,
 		egui::Color32::WHITE,
 	);
-	response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+	response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
 	response.on_hover_text(hint)
 }
 
@@ -3098,7 +3094,7 @@ fn speaking_avatar(ui: &egui::Ui, avatar: &egui::Response, name: &str) {
 		egui::Stroke::new(2.0, colors.positive),
 	);
 	let label = format!("{name} · Speaking");
-	avatar.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Image, true, &label));
+	avatar.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, &label));
 	avatar.clone().on_hover_text(label);
 }
 
@@ -3195,7 +3191,7 @@ fn control(
 			STAGE_MUTED.gamma_multiply(0.45)
 		},
 	);
-	response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+	response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
 	response.on_hover_text(hint)
 }
 
@@ -3229,7 +3225,7 @@ fn round_action(
 		egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(20.0)),
 		egui::Color32::WHITE,
 	);
-	response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+	response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
 	response.on_hover_text(label)
 }
 
@@ -3387,7 +3383,7 @@ fn elapsed_label(call: &client_core::voice::Call) -> Option<String> {
 fn status_icon(ui: &mut egui::Ui, icon: crate::icons::Icon, color: egui::Color32, label: &str) {
 	let (rect, response) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
 	crate::icons::paint(ui.painter(), icon, rect.shrink(1.0), color);
-	response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, label));
+	response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, label));
 	response.on_hover_text(label);
 }
 
@@ -3403,7 +3399,7 @@ fn live_badge(ui: &mut egui::Ui) {
 		egui::FontId::new(9.0, design::medium_family(ui.ctx())),
 		egui::Color32::WHITE,
 	);
-	response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, "Live"));
+	response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, "Live"));
 	response.on_hover_text("Streaming");
 }
 

@@ -1135,8 +1135,7 @@ pub fn window_controls(ui: &mut egui::Ui) {
 		|ui: &mut egui::Ui, label: &str, danger: bool| -> (egui::Response, egui::Rect, Color32) {
 			let (rect, response) =
 				ui.allocate_exact_size(egui::vec2(46.0, height), egui::Sense::click());
-			response
-				.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+			response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
 			let hovered = response.hovered() || response.has_focus();
 			if hovered {
 				ui.painter()
@@ -1264,9 +1263,7 @@ fn wide_button(
 	let p = palette(ui);
 	let (rect, response) =
 		ui.allocate_exact_size(egui::vec2(ui.available_width(), 44.0), egui::Sense::click());
-	response.widget_info(|| {
-		egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
-	});
+	response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
 	let enabled = ui.is_enabled();
 	let fill = if !enabled {
 		fill.gamma_multiply(0.5)
@@ -1434,11 +1431,7 @@ pub fn account_row_with_remove(
 		}
 	}
 	response.widget_info(|| {
-		egui::WidgetInfo::labeled(
-			egui::WidgetType::Button,
-			enabled,
-			format!("{name} {handle}"),
-		)
+		egui::WidgetInfo::labeled(egui::Role::Button, enabled, format!("{name} {handle}"))
 	});
 	let remove = removable.then(|| {
 		let bin = egui::Rect::from_center_size(
@@ -1460,7 +1453,7 @@ pub fn account_row_with_remove(
 			);
 		}
 		remove.widget_info(|| {
-			egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, format!("Forget {name}"))
+			egui::WidgetInfo::labeled(egui::Role::Button, enabled, format!("Forget {name}"))
 		});
 		remove.on_hover_text("Forget this account on this device")
 	});
@@ -1502,7 +1495,7 @@ pub fn disclosure(ui: &mut egui::Ui, label: &str, open: bool) -> egui::Response 
 			},
 		);
 	}
-	response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+	response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
 	response
 }
 
@@ -1953,7 +1946,7 @@ pub fn switch(
 		response.mark_changed();
 	}
 	response.widget_info(|| {
-		egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), *enabled, label)
+		egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), *enabled, label)
 	});
 	let painter = ui.painter();
 	let mut y = rect.top() + 8.0;
@@ -2038,9 +2031,7 @@ pub fn button(ui: &mut egui::Ui, label: &str, kind: ButtonKind) -> egui::Respons
 	});
 	let (rect, response) =
 		ui.allocate_exact_size(egui::vec2(width, BUTTON_HEIGHT), egui::Sense::click());
-	response.widget_info(|| {
-		egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
-	});
+	response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
 	let enabled = ui.is_enabled();
 	let hot = response.hovered() || response.has_focus();
 	let fill = if !enabled {
@@ -2271,7 +2262,7 @@ pub fn segmented(ui: &mut egui::Ui, labels: &[&str], selected: usize) -> Option<
 		);
 		let label = labels[index].to_owned();
 		response.widget_info(|| {
-			egui::WidgetInfo::selected(egui::WidgetType::RadioButton, enabled, active, &label)
+			egui::WidgetInfo::selected(egui::Role::RadioButton, enabled, active, &label)
 		});
 		if response.clicked() && !active {
 			clicked = Some(index);
@@ -2323,9 +2314,7 @@ pub fn text_action(ui: &mut egui::Ui, label: &str) -> egui::Response {
 	);
 	let (rect, response) =
 		ui.allocate_exact_size(galley.size() + egui::vec2(12.0, 12.0), egui::Sense::click());
-	response.widget_info(|| {
-		egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
-	});
+	response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
 	let enabled = ui.is_enabled();
 	let hot = enabled && (response.hovered() || response.has_focus());
 	let color = if !enabled {
@@ -2384,12 +2373,7 @@ pub fn radio_row(
 		egui::Sense::click(),
 	);
 	response.widget_info(|| {
-		egui::WidgetInfo::selected(
-			egui::WidgetType::RadioButton,
-			ui.is_enabled(),
-			selected,
-			label,
-		)
+		egui::WidgetInfo::selected(egui::Role::RadioButton, ui.is_enabled(), selected, label)
 	});
 	let enabled = ui.is_enabled();
 	let hot = enabled && (response.hovered() || response.has_focus());

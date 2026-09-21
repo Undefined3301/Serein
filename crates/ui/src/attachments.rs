@@ -328,7 +328,7 @@ pub(crate) fn show_subset(
 									ui.interact(image.rect, image.id.with("media"), Sense::click());
 								response.widget_info(|| {
 									egui::WidgetInfo::labeled(
-										egui::WidgetType::Button,
+										egui::Role::Button,
 										ui.is_enabled(),
 										format!("View image {}", attachment.filename),
 									)

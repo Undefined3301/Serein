@@ -215,12 +215,7 @@ impl MessagingUi {
 				}
 				let label = home_request_label(friends, messages);
 				response.widget_info(|| {
-					egui::WidgetInfo::selected(
-						egui::WidgetType::SelectableLabel,
-						true,
-						home,
-						label.clone(),
-					)
+					egui::WidgetInfo::selected(egui::Role::Button, true, home, label.clone())
 				});
 				design::rail_name(&response, &label);
 				if response.clicked() {
@@ -277,7 +272,7 @@ impl MessagingUi {
 							}
 							response.widget_info(|| {
 								egui::WidgetInfo::labeled(
-									egui::WidgetType::Button,
+									egui::Role::Button,
 									true,
 									format!(
 										"Open {}{}, {} notifications",
@@ -330,11 +325,7 @@ impl MessagingUi {
 							},
 						);
 						response.widget_info(|| {
-							egui::WidgetInfo::labeled(
-								egui::WidgetType::Button,
-								true,
-								"Join a Server",
-							)
+							egui::WidgetInfo::labeled(egui::Role::Button, true, "Join a Server")
 						});
 						design::rail_name(&response, "Join a Server");
 						if response.clicked() {

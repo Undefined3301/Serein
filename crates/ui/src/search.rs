@@ -165,14 +165,10 @@ impl SearchUi {
 						.hint_text("Search")
 						.desired_width((ui.available_width() - 28.0).max(30.0))
 						.show(ui);
-					let input = output.response;
-					input.widget_info(|| {
-						egui::WidgetInfo::labeled(
-							egui::WidgetType::TextEdit,
-							true,
-							"Search messages in this conversation",
-						)
-					});
+					let input = output
+						.response
+						.response
+						.accessible_name("Search messages in this conversation");
 					if self.focus {
 						input.request_focus();
 						self.focus = false;
@@ -984,7 +980,7 @@ impl SearchUi {
 		if let Some(response) = &background {
 			response.widget_info(|| {
 				egui::WidgetInfo::labeled(
-					egui::WidgetType::Button,
+					egui::Role::Button,
 					jumpable,
 					format!("Jump to message from {}", hit.author.name),
 				)
@@ -1224,8 +1220,7 @@ fn chip(ui: &mut egui::Ui, chip: Chip<'_>) -> egui::Response {
 	let (rect, response) =
 		ui.allocate_exact_size(egui::vec2(width, chip.height), egui::Sense::click());
 	let enabled = ui.is_enabled();
-	response
-		.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, chip.tooltip));
+	response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, chip.tooltip));
 	let hot = response.hovered() || response.has_focus();
 	let fill = if !enabled {
 		colors.raised.gamma_multiply(0.5)

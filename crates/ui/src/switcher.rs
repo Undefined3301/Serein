@@ -255,12 +255,7 @@ fn result_row(
 		},
 	);
 	response.widget_info(|| {
-		egui::WidgetInfo::selected(
-			egui::WidgetType::SelectableLabel,
-			enabled,
-			selected,
-			choice.label(),
-		)
+		egui::WidgetInfo::selected(egui::Role::Button, enabled, selected, choice.label())
 	});
 	if !ui.is_rect_visible(rect) {
 		return response;
@@ -506,13 +501,7 @@ impl Switcher {
 								.char_limit(QUERY_CHARS)
 								.desired_width(ui.available_width().max(60.0)),
 						);
-						input.widget_info(|| {
-							egui::WidgetInfo::labeled(
-								egui::WidgetType::TextEdit,
-								true,
-								"Find conversation",
-							)
-						});
+						let input = input.accessible_name("Find conversation");
 						if self.focus {
 							input.request_focus();
 							self.focus = false;

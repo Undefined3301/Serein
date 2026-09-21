@@ -1233,7 +1233,7 @@ impl Formatted {
 							render.surface.keep(&response);
 							response.widget_info(|| {
 								egui::WidgetInfo::labeled(
-									egui::WidgetType::Link,
+									egui::Role::Link,
 									ui.is_enabled(),
 									format!("{label}, open channel"),
 								)
@@ -1254,7 +1254,7 @@ impl Formatted {
 							render.surface.keep(&response);
 							response.widget_info(|| {
 								egui::WidgetInfo::labeled(
-									egui::WidgetType::Link,
+									egui::Role::Link,
 									ui.is_enabled(),
 									"Unknown channel, load channel",
 								)
@@ -1293,7 +1293,7 @@ impl Formatted {
 						render.surface.keep(&response);
 						response.widget_info(|| {
 							egui::WidgetInfo::labeled(
-								egui::WidgetType::Link,
+								egui::Role::Link,
 								ui.is_enabled(),
 								format!("{label}, user profile"),
 							)
@@ -1412,11 +1412,7 @@ impl Formatted {
 						)
 						.on_hover_text(url);
 						response.widget_info(|| {
-							egui::WidgetInfo::labeled(
-								egui::WidgetType::Link,
-								ui.is_enabled(),
-								&label,
-							)
+							egui::WidgetInfo::labeled(egui::Role::Link, ui.is_enabled(), &label)
 						});
 						if response.clicked() {
 							*render.opening = Some(url.clone());
@@ -1527,7 +1523,7 @@ impl Formatted {
 					surface.embed(&response, galley_pos, galley);
 					response.widget_info(|| {
 						egui::WidgetInfo::labeled(
-							egui::WidgetType::Label,
+							egui::Role::Label,
 							ui.is_enabled(),
 							format!(
 								"Code block{}: {}",
@@ -1716,9 +1712,8 @@ impl Formatted {
 			})
 			.selectable(false);
 		let (pos, mut galley, mut response) = label.layout_in_ui(ui);
-		response.widget_info(|| {
-			egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), &source)
-		});
+		response
+			.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, ui.is_enabled(), &source));
 		let mut slots: Vec<(usize, egui::Rect)> = Vec::new();
 		if !inlines.is_empty() {
 			let wrap = galley.job.wrap.max_width;
@@ -1815,7 +1810,7 @@ impl Formatted {
 						.on_hover_text(&inline.text);
 					hit.widget_info(|| {
 						egui::WidgetInfo::labeled(
-							egui::WidgetType::Button,
+							egui::Role::Button,
 							ui.is_enabled(),
 							format!("Show emoji details: {}", inline.text),
 						)

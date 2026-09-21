@@ -534,7 +534,7 @@ impl ExtensionUi {
 			);
 			response.widget_info(|| {
 				egui::WidgetInfo::labeled(
-					egui::WidgetType::Button,
+					egui::Role::Button,
 					true,
 					format!("Preview {}", entry.manifest.name),
 				)
@@ -615,7 +615,7 @@ impl ExtensionUi {
 				);
 				response.widget_info(|| {
 					egui::WidgetInfo::labeled(
-						egui::WidgetType::Button,
+						egui::Role::Button,
 						true,
 						format!("Preview {}", entry.manifest.name),
 					)
@@ -2240,9 +2240,7 @@ fn card_button(
 	text: egui::Color32,
 ) -> egui::Response {
 	let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-	response.widget_info(|| {
-		egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
-	});
+	response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
 	let enabled = ui.is_enabled();
 	let fill = if !enabled {
 		fill.gamma_multiply(0.5)

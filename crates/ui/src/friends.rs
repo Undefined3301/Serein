@@ -501,11 +501,7 @@ impl MessagingUi {
 									);
 								}
 								response.widget_info(|| {
-									egui::WidgetInfo::labeled(
-										egui::WidgetType::Button,
-										true,
-										&user.name,
-									)
+									egui::WidgetInfo::labeled(egui::Role::Button, true, &user.name)
 								});
 								user_menu::show(
 									&response,

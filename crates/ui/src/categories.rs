@@ -382,7 +382,7 @@ fn category_header(
 	});
 	response.widget_info(|| {
 		egui::WidgetInfo::labeled(
-			egui::WidgetType::Button,
+			egui::Role::Button,
 			true,
 			format!(
 				"{name} category, {}, {count} channels",
@@ -1047,7 +1047,7 @@ impl MessagingUi {
 							});
 							response.widget_info(|| {
 								egui::WidgetInfo::labeled(
-									egui::WidgetType::Button,
+									egui::Role::Button,
 									enabled,
 									format!(
 										"{}{}{}; {} notifications",

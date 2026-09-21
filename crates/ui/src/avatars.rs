@@ -250,7 +250,7 @@ impl Avatars {
 	) -> egui::Response {
 		let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
 		response.widget_info(|| {
-			egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &sticker.name)
+			egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &sticker.name)
 		});
 		if !ui.is_rect_visible(rect) {
 			return response;
@@ -447,9 +447,8 @@ impl Avatars {
 				);
 			}
 		}
-		response.widget_info(|| {
-			egui::WidgetInfo::labeled(egui::WidgetType::Image, ui.is_enabled(), label)
-		});
+		response
+			.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, ui.is_enabled(), label));
 		response
 	}
 	pub fn show_profile_avatar(
@@ -486,11 +485,7 @@ impl Avatars {
 			}
 		}
 		response.widget_info(|| {
-			egui::WidgetInfo::labeled(
-				egui::WidgetType::Image,
-				ui.is_enabled(),
-				"Server profile picture",
-			)
+			egui::WidgetInfo::labeled(egui::Role::Image, ui.is_enabled(), "Server profile picture")
 		});
 		response
 	}
@@ -674,7 +669,7 @@ impl Avatars {
 		}
 		response.widget_info(|| {
 			egui::WidgetInfo::labeled(
-				egui::WidgetType::Button,
+				egui::Role::Button,
 				ui.is_enabled(),
 				format!("Group {}", channel.name),
 			)
@@ -729,7 +724,7 @@ impl Avatars {
 		self.paint_guild_face(ui, guild, rect, demo, highlight, (size * 0.29) as u8);
 		response.widget_info(|| {
 			egui::WidgetInfo::selected(
-				egui::WidgetType::SelectableLabel,
+				egui::Role::Button,
 				ui.is_enabled(),
 				selected,
 				format!("Server {}", guild.name),
@@ -1038,7 +1033,7 @@ impl Avatars {
 			}
 		}
 		response.widget_info(|| {
-			egui::WidgetInfo::labeled(egui::WidgetType::Image, ui.is_enabled(), "Embedded image")
+			egui::WidgetInfo::labeled(egui::Role::Image, ui.is_enabled(), "Embedded image")
 		});
 		response
 	}
@@ -1178,12 +1173,12 @@ impl Avatars {
 		response.widget_info(|| {
 			if opens_profile {
 				egui::WidgetInfo::labeled(
-					egui::WidgetType::Button,
+					egui::Role::Button,
 					ui.is_enabled(),
 					format!("View profile for {}", user.name),
 				)
 			} else {
-				egui::WidgetInfo::labeled(egui::WidgetType::Image, ui.is_enabled(), &user.name)
+				egui::WidgetInfo::labeled(egui::Role::Image, ui.is_enabled(), &user.name)
 			}
 		});
 		response

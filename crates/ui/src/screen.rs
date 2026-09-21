@@ -356,12 +356,7 @@ impl ScreenUi {
 				);
 			}
 			response.widget_info(|| {
-				egui::WidgetInfo::selected(
-					egui::WidgetType::RadioButton,
-					true,
-					selected,
-					&source.name,
-				)
+				egui::WidgetInfo::selected(egui::Role::RadioButton, true, selected, &source.name)
 			});
 			if response.clicked() {
 				self.selected = Some(source.id);
@@ -404,9 +399,8 @@ fn segment(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
 		galley,
 		color,
 	);
-	response.widget_info(|| {
-		egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, selected, label)
-	});
+	response
+		.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, selected, label));
 	response
 }
 
