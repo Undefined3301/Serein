@@ -194,6 +194,12 @@ failure and checks that subsequent cleanup/progress events retain its original r
 
 Set `SEREIN_VOICE_DIAGNOSTICS=1` before launching Serein to get aggregate voice
 timings on stderr every five seconds and a best-effort final summary on teardown.
+`StreamSend` reports the active screen encoder; `Transport` reports camera encoding
+and call video decoding; `StreamReceive` reports its own video decoding. Values are
+`hardware`, `software`, `mixed` for simultaneously active backends, or `unknown`
+when no backend is active. A fallback replaces the hardware indication with software.
+On macOS, live VideoToolbox sessions require hardware acceleration; failures use
+the software fallback after keyframe recovery.
 For example, launch an already-built macOS app from a terminal:
 
 ```sh
@@ -526,9 +532,9 @@ lines from different scopes can be ordered. `Transport` (call camera video) and
 remote video counter is non-zero. Each counter names one place a picture can be lost
 between the UDP socket and the display, so a frozen viewer is diagnosed from one line:
 
-- `packets` / `rtx`: video RTP packets (payload 101) accepted by the transport cipher,
-  and retransmission packets (payload 102), which Serein does not yet use. Many `rtx`
-  packets mean the media server sees loss on the path.
+- `packets` / `rtx`: accepted video RTP packets (including restored retransmissions),
+  and received retransmission packets (payload 102). Announced RTX sources can repair
+  gaps in the current picture; Serein does not yet send NACK requests.
 - `open_failed`: packets of any payload rejected by the transport AEAD.
 - `not_ready`: video packets received before the DAVE session was ready or from a
   user outside the group; expected briefly after joining or an epoch change.
@@ -538,6 +544,9 @@ between the UDP socket and the display, so a frozen viewer is diagnosed from one
 - `decrypt_failed`: access units that failed DAVE decryption.
 - `gated`: predicted pictures rejected because a keyframe is still owed after loss.
 - `queue_full`: frames dropped because the decoder thread was behind.
+- `decode_queue_ms` / `stale_frames`: maximum decoder queue wait and pictures discarded
+  after waiting over 150 ms. Discarding requests a fresh keyframe instead of replaying
+  stale video. The native macOS pipeline drains every three submissions.
 - `keyframes` / `keyframes_without_params`: keyframes handed to the decoder, and how
   many lacked inline SPS/PPS. A rebuilt decoder cannot start from those.
 - `pli_sent`: Picture Loss Indications sent (at most one per owed sender per 500 ms).
