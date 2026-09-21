@@ -110,6 +110,7 @@ fn discord_origin(value: &str) -> bool {
 			&& url.password().is_none()
 	})
 }
+#[cfg(any(not(target_os = "linux"), test))]
 fn login_navigation(value: &str) -> bool {
 	discord_origin(value) || captcha::hcaptcha_origin(value)
 }
