@@ -2707,14 +2707,12 @@ impl State {
 					&& self.timeline.get(p.id).is_some_and(
 						|old| !matches!(p.edited, Patch::Value(at) if old.edited_at.is_some_and(|old| at < old)),
 					);
-				// Capture the pre-edit wording before the echo is marked observed.
-				// Optimistic text is already stored, so a later Observed write would see no change.
 				let own_previous = fresh_content
-					.then(|| self.message_actions.unobserved_previous(p.channel, p.id))
+					.then(|| {
+						self.message_actions
+							.take_unobserved_previous(p.channel, p.id)
+					})
 					.flatten();
-				if fresh_content {
-					self.message_actions.observe_content(p.channel, p.id);
-				}
 				if self.selected == Some(p.channel)
 					&& self.reactions.invalidated(p.id)
 					&& !matches!(p.reactions, Patch::Absent)

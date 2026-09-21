@@ -209,7 +209,7 @@ impl State {
 					.iter_mut()
 					.find(|w| w.identity.id == channel)
 			{
-				window.timeline.retain_deleted_messages();
+				window.timeline.drop_live_history();
 				if window.timeline.display_iter().next().is_some() {
 					return;
 				}

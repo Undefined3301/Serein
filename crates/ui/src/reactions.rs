@@ -173,7 +173,6 @@ pub fn show(
 	action
 }
 
-/// Paint reaction pills for a deleted row. Never emits `Action::Toggle`.
 pub fn show_frozen(
 	ui: &mut egui::Ui,
 	reactions: Option<&[Reaction]>,

@@ -47,13 +47,15 @@ impl MessageActions {
 		}
 	}
 
-	/// Wording from before an in-flight own edit, if the service has not echoed it yet.
-	pub fn unobserved_previous(&self, channel: Id, message: Id) -> Option<String> {
-		let edit = self.edits.get(&(channel, message))?;
-		if edit.observed || edit.before == edit.after {
+	/// Returns the pre-edit wording and marks that edit observed.
+	pub fn take_unobserved_previous(&mut self, channel: Id, message: Id) -> Option<String> {
+		let edit = self.edits.get_mut(&(channel, message))?;
+		if edit.observed {
 			return None;
 		}
-		Some(edit.before.clone())
+		let previous = (edit.before != edit.after).then(|| edit.before.clone());
+		edit.observed = true;
+		previous
 	}
 }
 impl State {

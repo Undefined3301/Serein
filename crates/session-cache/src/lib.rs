@@ -6,7 +6,6 @@ pub const MAX_MESSAGES: usize = 500;
 pub const MAX_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_MUTATIONS: usize = 1024;
 
-/// How a content write relates to prior-wording history.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ContentSource {
 	/// Local optimistic body change; never records a prior.
@@ -19,7 +18,6 @@ pub enum ContentSource {
 	Rollback,
 }
 
-/// Content write that may update `Message::prior_contents`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ContentRevision {
 	pub content: String,
@@ -146,8 +144,7 @@ impl Timeline {
 		}
 		any
 	}
-	/// Drop live history while keeping tombstoned payloads in this window.
-	pub fn retain_deleted_messages(&mut self) {
+	pub fn drop_live_history(&mut self) {
 		self.cancel_page();
 		self.messages.retain(|id, message| {
 			let keep = self.deleted.contains(id);
@@ -449,14 +446,11 @@ impl Timeline {
 				) {
 					return Ok(());
 				}
-				// Forwarded bodies stay frozen. System text still updates, without a prior line.
 				if message.forwarded {
 					return Ok(());
 				}
 				let previous = message.content.clone();
-				if records_prior(message) {
-					record_observed_prior(message, &previous, &revision.content);
-				}
+				record_observed_prior(message, &previous, &revision.content);
 				message.content.clone_from(&revision.content);
 				apply_edited_at(message, revision.edited_at);
 			}
