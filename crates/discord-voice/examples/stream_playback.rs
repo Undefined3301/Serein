@@ -8,6 +8,21 @@ mod video_receive;
 type Frame = [f32; 960];
 
 fn main() {
+	for fps in [15, 30, 60] {
+		let settings = client_core::screen::Settings {
+			source: client_core::screen::SourceId::Display(1),
+			width: 854,
+			height: 480,
+			fps,
+			cursor: true,
+			audio: false,
+		};
+		assert!(settings.valid());
+		assert_eq!(
+			settings.bit_rate(),
+			if fps == 60 { 4_000_000 } else { 2_000_000 }
+		);
+	}
 	let (send, receive) = std::sync::mpsc::sync_channel(8);
 	let mut audio = stream_playout::Playout::default();
 	for n in 1..=8 {
@@ -52,7 +67,7 @@ fn main() {
 		let pictures = Arc::new(AtomicUsize::new(0));
 		let sink = pictures.clone();
 		let mut decoder = platform::video::live::H264Decoder::new(Box::new(move |frame| {
-			assert_eq!((frame.width, frame.height), (320, 240));
+			assert_eq!((frame.width, frame.height), (854, 480));
 			sink.fetch_add(1, Ordering::Relaxed);
 		}))
 		.unwrap();
@@ -61,7 +76,7 @@ fn main() {
 			openh264::encoder::EncoderConfig::new(),
 		)
 		.unwrap();
-		let image = openh264::formats::YUVBuffer::new(320, 240);
+		let image = openh264::formats::YUVBuffer::new(854, 480);
 		for _ in 0..9 {
 			let frame = encoder.encode(&image).unwrap().to_vec();
 			decoder
