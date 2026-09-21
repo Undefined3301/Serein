@@ -294,13 +294,8 @@ fn layout_key(message: &Message) -> u64 {
 	message.embeds_suppressed.hash(&mut key);
 	key.finish()
 }
-/// Height of one message line, in points. Compact rows reserve it with the timestamp gutter.
 pub(crate) const MESSAGE_LINE: f32 = 22.0;
 
-/// Pad a text-only burst header up to [`MESSAGE_LINE`].
-///
-/// The gutter is taller than the text galley, so continuation lines already have
-/// that slack under the line. The header has no gutter.
 pub(crate) fn fill_header_line(ui: &mut egui::Ui, compact: bool, text_line: egui::Rect) {
 	let slack = MESSAGE_LINE - text_line.height();
 	if !compact && slack > 0.0 && ui.min_rect().bottom() - text_line.bottom() < 1.0 {
