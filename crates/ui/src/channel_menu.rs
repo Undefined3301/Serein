@@ -705,6 +705,7 @@ impl Dialog {
 			dialog::label(ui, "Slowmode");
 			ui.add(
 				egui::DragValue::new(&mut self.draft.slowmode)
+					.clip_text(true)
 					.range(0..=21600)
 					.suffix(" seconds"),
 			);

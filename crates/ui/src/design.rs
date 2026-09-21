@@ -176,6 +176,7 @@ pub fn color_edit(ui: &mut egui::Ui, color: &mut [u8; 3]) -> egui::Response {
 	let hex = ui
 		.add(
 			egui::DragValue::new(&mut value)
+				.clip_text(true)
 				.range(0..=0xFFFFFF)
 				.hexadecimal(6, false, true)
 				.prefix("#")
@@ -2524,6 +2525,7 @@ pub fn slider<T: egui::emath::Numeric>(
 	let editor = ui.put(
 		pill,
 		egui::DragValue::new(value)
+			.clip_text(true)
 			.range(range)
 			.speed(if T::INTEGRAL { 1.0 } else { span / 100.0 })
 			.fixed_decimals(if T::INTEGRAL { 0 } else { 1 })
