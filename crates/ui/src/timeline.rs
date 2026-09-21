@@ -104,7 +104,7 @@ pub struct TimelineView {
 	// A fingerprint of the revealed content prevents a reload that resets model revisions from
 	// revealing edits, without cloning payloads. Pruned with the active window: at most 500 records.
 	revealed: BTreeMap<Id, Revealed>,
-	prior_revealed: BTreeMap<(Id, u16), u32>,
+	prior_revealed: BTreeMap<(Id, u16), (u64, u32)>,
 	pub(super) viewing: Option<(Id, Id)>,
 	/// Fixture-only: viewer to open once its message has arrived in the timeline.
 	pending_viewer: Option<(Id, Id)>,
@@ -2144,10 +2144,14 @@ impl TimelineView {
 											{
 												let part =
 													u16::try_from(index + 1).unwrap_or(u16::MAX);
+												let mut fingerprint = DefaultHasher::new();
+												prior.hash(&mut fingerprint);
+												let fingerprint = fingerprint.finish();
 												let mut revealed = self
 													.prior_revealed
 													.get(&(id, part))
-													.copied()
+													.filter(|(stored, _)| *stored == fingerprint)
+													.map(|(_, bits)| *bits)
 													.unwrap_or(0);
 												let before = revealed;
 												{
@@ -2186,13 +2190,15 @@ impl TimelineView {
 														surface.finish(ui);
 													});
 												}
+												if revealed == 0 {
+													self.prior_revealed.remove(&(id, part));
+												} else {
+													self.prior_revealed.insert(
+														(id, part),
+														(fingerprint, revealed),
+													);
+												}
 												if revealed != before {
-													if revealed == 0 {
-														self.prior_revealed.remove(&(id, part));
-													} else {
-														self.prior_revealed
-															.insert((id, part), revealed);
-													}
 													self.heights.remove(&id);
 													ui.ctx().request_repaint();
 												}
