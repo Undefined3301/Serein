@@ -139,10 +139,13 @@ exit behavior. Start/restart the host and toggle the tray off/on to retry regist
 The existing on-by-default tray preference is reused; demo changes are session-only.
 
 **Hyprland / native Wayland:** winit cannot hide, unhide, focus or unminimize a native
-Wayland window. Close requests minimization and keeps Serein running; the compositor
-may ignore this request. Show requests restoration, but native Wayland users may need
-the compositor's own window controls. A still-visible window is no longer marked hidden
-inside Serein. Native Wayland remains the default on Wayland sessions, with no
+Wayland window. On Hyprland, Close and tray Minimize instead park Serein on
+`special:serein-tray` through the compositor socket; Show moves it to the active
+workspace. This uses `hl.dsp.window.move` with `follow = false`, accepting the new
+workspace `address` or legacy numeric `id`. Older dispatchers fall back to
+`movetoworkspacesilent`. Workspace names are bounded and escaped before Lua dispatch.
+Other Wayland compositors receive minimize/restore requests and may require their
+own window controls; the KDE tray restoration report remains unresolved. Native Wayland remains the default on Wayland sessions, with no
 application-level XWayland fallback or backend override.
 Quit remains explicit and runs the existing unsaved-work/download/extension checks;
 cancelling Quit restores close-to-tray behavior.

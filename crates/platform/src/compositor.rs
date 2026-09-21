@@ -49,31 +49,24 @@ impl Hider {
 
 	/// Moves this process's windows out of sight without focusing the hidden workspace.
 	pub fn hide(&self) {
-		self.run(move |socket| {
-			request(
-				socket,
-				&format!(
-					"dispatch movetoworkspacesilent {WORKSPACE},pid:{}",
-					std::process::id()
-				),
-			)
-			.map(drop)
-		});
+		self.run(move |socket| move_window(socket, WORKSPACE, Some(WORKSPACE)));
 	}
 
 	/// Brings this process's windows back to the workspace the user is looking at.
 	pub fn show(&self) {
 		self.run(move |socket| {
 			let active = request(socket, "j/activeworkspace")?;
-			let id = serde_json::from_slice::<serde_json::Value>(&active)
-				.ok()
-				.and_then(|value| value.get("id")?.as_i64())
-				.ok_or("active workspace has no id")?;
-			request(
-				socket,
-				&format!("dispatch movetoworkspace {id},pid:{}", std::process::id()),
-			)
-			.map(drop)
+			let active: serde_json::Value = serde_json::from_slice(&active)?;
+			let id = active
+				.get("id")
+				.and_then(|value| value.as_i64())
+				.map(|id| id.to_string());
+			let workspace = active
+				.get("address")
+				.and_then(|value| value.as_str())
+				.or(id.as_deref())
+				.ok_or("active workspace has no address or id")?;
+			move_window(socket, workspace, id.as_deref())
 		});
 	}
 
@@ -94,6 +87,38 @@ impl Hider {
 }
 
 #[cfg(target_os = "linux")]
+fn move_window(
+	socket: &std::path::Path,
+	workspace: &str,
+	legacy_workspace: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+	if workspace.is_empty() || workspace.len() > 1024 || workspace.chars().any(char::is_control) {
+		return Err("invalid workspace address".into());
+	}
+	// Workspace names are data, never Lua source. Control characters are rejected above.
+	let quoted = workspace.replace('\\', "\\\\").replace('"', "\\\"");
+	let pid = std::process::id();
+	let command = format!(
+		"dispatch hl.dsp.window.move({{ window = \"pid:{pid}\", workspace = \"{quoted}\", follow = false }})"
+	);
+	// Transport failures are not retried: only a compositor rejection allows the old syntax.
+	let reply = request(socket, &command)?;
+	if reply.trim_ascii() == b"ok" {
+		return Ok(());
+	}
+	if let Some(workspace) = legacy_workspace {
+		let reply = request(
+			socket,
+			&format!("dispatch movetoworkspacesilent {workspace},pid:{pid}"),
+		)?;
+		if reply.trim_ascii() == b"ok" {
+			return Ok(());
+		}
+	}
+	Err("Hyprland rejected window move".into())
+}
+
+#[cfg(target_os = "linux")]
 fn request(socket: &std::path::Path, command: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 	use std::io::{Read, Write};
 	let mut stream = std::os::unix::net::UnixStream::connect(socket)?;
@@ -103,8 +128,5 @@ fn request(socket: &std::path::Path, command: &str) -> Result<Vec<u8>, Box<dyn s
 	stream.flush()?;
 	let mut reply = Vec::with_capacity(256);
 	stream.take(64 * 1024).read_to_end(&mut reply)?;
-	if command.starts_with("dispatch ") && reply.trim_ascii() != b"ok" {
-		return Err(format!("{command}: {}", String::from_utf8_lossy(&reply).trim()).into());
-	}
 	Ok(reply)
 }
