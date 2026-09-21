@@ -4190,10 +4190,31 @@ mod tests {
 					.any(|(text, _)| text.contains("new secret") || text.contains("hidden card"))
 			);
 			assert!(view.revealed.is_empty());
-			for events in click("Reveal spoiler", &labels) {
-				render(&mut view, &mut state, events);
+			let current = labels
+				.iter()
+				.rfind(|(text, _)| text == "Reveal spoiler")
+				.unwrap()
+				.1
+				.center();
+			for pressed in [true, false] {
+				render(
+					&mut view,
+					&mut state,
+					vec![
+						egui::Event::PointerMoved(current),
+						egui::Event::PointerButton {
+							pos: current,
+							button: egui::PointerButton::Primary,
+							pressed,
+							modifiers: egui::Modifiers::NONE,
+						},
+					],
+				);
 			}
-			assert!(!view.revealed.is_empty());
+			let labels = render(&mut view, &mut state, vec![]);
+			let visible: String = labels.iter().map(|(text, _)| text.as_str()).collect();
+			assert!(visible.contains("new secret"));
+			assert_eq!(view.revealed[&message.id].text, 1);
 			state.selected = Some(Id(30));
 			render(&mut view, &mut state, vec![]);
 			assert!(view.revealed.is_empty());
