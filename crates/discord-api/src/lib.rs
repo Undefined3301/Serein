@@ -697,8 +697,9 @@ impl DiscordApi {
 				message,
 				request,
 				manual,
+				mention_count,
 			} => {
-				let result = self.mark_read(channel, message, manual).await;
+				let result = self.mark_read(channel, message, manual, mention_count).await;
 				Event::ReadState(client_core::read_state::Event::Result {
 					channel,
 					message,
@@ -998,6 +999,7 @@ impl DiscordApi {
 		channel: model::Id,
 		message: model::Id,
 		manual: bool,
+		mention_count: Option<u32>,
 	) -> Result<(), Failure> {
 		#[derive(serde::Deserialize)]
 		struct Reply {
@@ -1008,7 +1010,11 @@ impl DiscordApi {
 		// Manual mark-unread omits the token, matching the unofficial normal-user ack body.
 		let mut token = self.ack_token.lock().await;
 		let body = if manual {
-			serde_json::json!({"manual": true})
+			let mut body = serde_json::json!({"manual": true});
+			if let Some(count) = mention_count {
+				body["mention_count"] = count.into();
+			}
+			body
 		} else {
 			serde_json::json!({"token":token.as_deref(),"manual":false})
 		};
@@ -1784,6 +1790,7 @@ mod tests {
 					message: Id(2),
 					request,
 					manual: false,
+					mention_count: None,
 				})
 				.await
 				else {

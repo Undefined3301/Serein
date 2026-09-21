@@ -166,6 +166,8 @@ pub enum Command {
 		message: Id,
 		request: u64,
 		manual: bool,
+		/// Private mark-unread badge. `None` omits the field. Discord does not calculate it.
+		mention_count: Option<u32>,
 	},
 	MarkGuildRead {
 		guild: Id,
