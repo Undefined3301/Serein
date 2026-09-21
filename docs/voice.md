@@ -296,7 +296,7 @@ lifecycle gates hide ineligible activity, including while alone.
 
 ## Input profiles and noise suppression
 
-Voice & Audio settings offers three saved profiles:
+Voice & Video settings offers three saved profiles:
 
 - **Voice Isolation:** RNNoise suppression, AEC3 echo cancellation, digital automatic gain
   control (maximum 20 dB), and −55 dBFS input sensitivity.
@@ -468,14 +468,14 @@ bitrate or RTP retransmission. Physical
 permission/device behavior, delivery to the official client and network-loss performance
 require the owner-controlled live gate; an offline launch does not establish those results.
 
-Windows, macOS and Linux expose a camera picker in Voice & Audio settings and beside both call
+Windows, macOS and Linux expose a camera picker in Voice & Video settings and beside both call
 camera controls. Discovery runs on a worker without starting capture. macOS uses AVFoundation device discovery; Linux queries up to 64 V4L2 nodes without configuring or streaming them. Up to
 32 device IDs (4 KiB each) and names (256 bytes each) are retained. The selected
 ID is session-local. Refresh discovers added/removed devices; a missing selected
 device is reported rather than silently opening another camera. Changing selection
 stops active capture and requires another camera-on click.
 
-Voice & Audio also offers an explicit **Preview camera / Stop preview** control outside
+Voice & Video also offers an explicit **Preview camera / Stop preview** control outside
 calls. It reuses the bounded camera worker and latest-frame texture; frames have no
 network sender and are never recorded. Closing the voice settings page, changing
 camera, joining a call, logout, or an error stops the preview. During a camera-enabled
@@ -680,7 +680,7 @@ Keep these local logs out of commits.
 
 ## Local microphone preview
 
-Voice & Audio settings has an explicit Start testing / Stop testing control, a live RMS
+Voice & Video settings has an explicit Start testing / Stop testing control, a live RMS
 input meter and local playback through the selected speaker. Use headphones to avoid feedback.
 The preview shares native device selection, microphone gain, speaker volume and the
 selected processing profile with calls. It opens no Discord transport and records nothing. Opening settings

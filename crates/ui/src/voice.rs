@@ -1738,39 +1738,53 @@ impl MessagingUi {
 			);
 		}
 		if self.voice_settings_open() {
-			ui.add_space(8.0);
-			let label = if self.camera_test_requested {
-				"Stop preview"
-			} else {
-				"Preview camera"
-			};
-			if ui
-				.add_enabled(
-					!demo && self.camera_test_available,
-					egui::Button::new(label),
-				)
-				.clicked()
-			{
-				self.camera_test_requested = !self.camera_test_requested;
-				self.camera_test_status = "";
-			}
-			design::hint(
-				ui,
-				"Preview stays on this device. Stop your call before testing a different camera.",
+			design::card_divider(ui);
+			let width = ui.available_width();
+			let (rect, _) = ui.allocate_exact_size(
+				egui::vec2(width, (width * 9.0 / 16.0).clamp(160.0, 300.0)),
+				egui::Sense::hover(),
 			);
-			if let Some(texture) = self
+			ui.painter().rect_filled(rect, 12, colors.base);
+			let texture = self
 				.camera_test_texture
 				.as_ref()
-				.or(self.voice_camera_preview.as_ref())
-			{
-				ui.add(
-					egui::Image::new(texture)
-						.max_width(ui.available_width().min(320.0))
-						.uv(egui::Rect::from_min_max(
-							egui::pos2(1.0, 0.0),
-							egui::pos2(0.0, 1.0),
-						)),
-				);
+				.or(self.voice_camera_preview.as_ref());
+			let has_picture = texture.is_some();
+			if let Some(texture) = texture {
+				let size = texture.size_vec2();
+				let scale = (rect.width() / size.x).min(rect.height() / size.y);
+				egui::Image::new(texture)
+					.uv(egui::Rect::from_min_max(
+						egui::pos2(1.0, 0.0),
+						egui::pos2(0.0, 1.0),
+					))
+					.corner_radius(12)
+					.paint_at(
+						ui,
+						egui::Rect::from_center_size(rect.center(), size * scale),
+					);
+			}
+			if !has_picture || self.camera_test_requested {
+				let center = if has_picture {
+					egui::pos2(rect.center().x, rect.bottom() - 34.0)
+				} else {
+					rect.center()
+				};
+				let button_rect =
+					egui::Rect::from_center_size(center, egui::vec2(184.0_f32.min(width), 44.0));
+				ui.scope_builder(egui::UiBuilder::new().max_rect(button_rect), |ui| {
+					ui.add_enabled_ui(!demo && self.camera_test_available, |ui| {
+						let (icon, label) = if self.camera_test_requested {
+							(crate::icons::Icon::VideoSlash, "Stop preview")
+						} else {
+							(crate::icons::Icon::Video, "Preview camera")
+						};
+						if design::primary_icon_button(ui, icon, label).clicked() {
+							self.camera_test_requested = !self.camera_test_requested;
+							self.camera_test_status = "";
+						}
+					});
+				});
 			}
 			if !self.camera_test_status.is_empty() {
 				design::hint(ui, self.camera_test_status);
