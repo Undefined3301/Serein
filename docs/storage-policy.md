@@ -796,12 +796,15 @@ raw presence payloads. Connection teardown clears these reports and workers.
 
 ### Account menu presence (September 12, 2026)
 
-Presence and custom status are session-only. The editor retains one draft capped at
-128 Unicode characters (512 UTF-8 bytes), and the host publishes one replaceable
-watch value. The gateway keeps the desired and last-attempted bounded values;
-there is no status history, disk write, or additional queue. A new login resets
-the choice and account generation changes clear the editor draft. Demo changes
-never publish, persist or initialize account transports.
+The account status and custom status are Discord settings (`settings-proto/1`,
+status field). Serein reads them before gateway identify, so a launch does not
+force Online, and writes that field again when the owner changes them. The
+gateway still publishes one replaceable watch value. One local row per account
+(`account_presence`: status, custom text at most 512 bytes, optional expiry) is
+the fallback when that read fails, and logout removes it with the account.
+Schema 22 adds the table. Older clients cannot open it. The
+editor retains one draft capped at 128 Unicode characters (512 UTF-8 bytes).
+There is no status history. Demo changes never publish, persist, or call Discord.
 
 ### Inline attachment video
 

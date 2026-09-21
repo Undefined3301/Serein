@@ -742,6 +742,11 @@ struct Desktop {
 	/// Written under the account's own entry on every READY, including a launch restore, so
 	/// the switcher can always get back to an account it lists.
 	pending_account_save: Option<Arc<SessionSecret>>,
+	account_presences: std::collections::BTreeMap<model::Id, model::OwnPresence>,
+	presence_load_pending: bool,
+	deferred_connect: Option<(SessionSecret, bool)>,
+	presence_authoritative: bool,
+	presence_saved: Option<(model::Id, model::OwnPresence)>,
 	/// Saved account awaiting the owner's confirmation before it is forgotten.
 	confirming_forget: Option<model::Id>,
 	credential_status: &'static str,
@@ -1243,6 +1248,14 @@ impl Desktop {
 			) {
 			cache_pending += 1;
 		}
+		let presence_load_pending = cache.as_ref().is_some_and(|cache| {
+			cache.queue(
+				state.generation,
+				model::Id(0),
+				cache::Operation::LoadAccountPresences,
+			)
+		});
+		cache_pending += usize::from(presence_load_pending);
 		let mut app_settings = app_settings::Settings::default();
 		if cache.as_ref().is_some_and(|cache| {
 			cache.queue(
@@ -1831,6 +1844,11 @@ impl Desktop {
 			variant_changed: false,
 			pending_save: None,
 			pending_account_save: None,
+			account_presences: std::collections::BTreeMap::new(),
+			presence_load_pending,
+			deferred_connect: None,
+			presence_authoritative: false,
+			presence_saved: None,
 			confirming_forget: sign_in_forget,
 			credential_status: if demo {
 				"Fixture mode never opens the credential store or network"
@@ -1859,6 +1877,11 @@ impl Desktop {
 		})
 	}
 	fn connect(&mut self, secret: SessionSecret, save: bool, ctx: &egui::Context) {
+		if self.presence_load_pending {
+			self.deferred_connect = Some((secret, save));
+			self.credential_status = "Connecting to Discord…";
+			return;
+		}
 		self.role_icon.cancel();
 		self.role_icon_scope = None;
 		self.group_icon.cancel();
@@ -1894,7 +1917,19 @@ impl Desktop {
 		self.messaging.channel_preferences_reload = false;
 		self.messaging.channel_preferences_save_pending = false;
 		self.messaging.channel_preferences_status = "";
-		self.messaging.own_presence = model::OwnPresence::default();
+		self.presence_authoritative = false;
+		self.presence_saved = None;
+		let cached = self
+			.state
+			.user
+			.as_ref()
+			.and_then(|user| self.account_presences.get(&user.id).cloned());
+		if let Some(cached) = cached {
+			self.messaging.adopt_account_presence(cached);
+		} else {
+			self.messaging.own_presence = model::OwnPresence::default();
+			self.messaging.own_presence_expires = None;
+		}
 		self.messaging.own_presence_changed = false;
 		self.messaging.draft_restore_pending = false;
 		self.state.auth = AuthState::Authenticating;
@@ -1907,6 +1942,7 @@ impl Desktop {
 			secret,
 			self.state.generation,
 			self.state.user.as_ref().map(|u| u.id),
+			self.account_presences.clone(),
 			ctx.clone(),
 		));
 	}
@@ -2257,31 +2293,84 @@ impl Desktop {
 			self.tray.is_some()
 		}
 	}
+	fn presence_snapshot(&self) -> model::OwnPresence {
+		model::OwnPresence {
+			expires_at_ms: self.messaging.own_presence_expires,
+			..self.messaging.own_presence.clone()
+		}
+	}
+	fn adopt_remote_presence(&mut self, apply: bool) {
+		let Some(connection) = &mut self.connection else {
+			return;
+		};
+		if !connection.account_presence.has_changed().unwrap_or(false) {
+			return;
+		}
+		let remote = connection.account_presence.borrow_and_update().clone();
+		let Some(remote) = remote else {
+			return;
+		};
+		if !apply {
+			return;
+		}
+		self.messaging.adopt_account_presence(remote);
+		self.presence_authoritative = true;
+	}
+	fn persist_account_presence(&mut self) {
+		if !self.presence_authoritative || self.state.demo || self.fixture_only {
+			return;
+		}
+		let Some(account) = self.state.user.as_ref().map(|user| user.id) else {
+			return;
+		};
+		let snapshot = self.presence_snapshot();
+		if !snapshot.valid() || self.presence_saved.as_ref() == Some(&(account, snapshot.clone())) {
+			return;
+		}
+		if self.queue_cache(cache::Operation::SaveAccountPresence(snapshot.clone())) {
+			self.account_presences.insert(account, snapshot.clone());
+			self.presence_saved = Some((account, snapshot));
+		}
+	}
+	fn flush_deferred_connect(&mut self, ctx: &egui::Context) {
+		if self.presence_load_pending {
+			return;
+		}
+		if let Some((secret, save)) = self.deferred_connect.take() {
+			self.connect(secret, save, ctx);
+		}
+	}
 	fn sync_own_presence(&mut self, ctx: &egui::Context) {
 		self.expire_own_status(ctx);
 		let changed = std::mem::take(&mut self.messaging.own_presence_changed);
+		self.adopt_remote_presence(!changed);
+		if changed {
+			self.presence_authoritative = true;
+		}
+		let published = self.presence_snapshot();
 		let previous_status = self.messaging.own_presence_status;
-		self.messaging.own_presence_status = if !self.messaging.own_presence.valid() {
+		self.messaging.own_presence_status = if !published.valid() {
 			"Status must be at most 128 characters without line breaks or surrounding spaces."
 		} else if self.state.demo || self.fixture_only {
 			"Offline preview: not shared or saved."
 		} else if let Some(connection) = &self.connection {
-			if connection.own_presence.is_closed()
-				|| (changed
-					&& connection
-						.own_presence
-						.send(self.messaging.own_presence.clone())
-						.is_err())
-			{
+			let save_error = *connection.presence_error.borrow();
+			let rejected = connection.own_presence.is_closed()
+				|| (changed && connection.own_presence.send(published.clone()).is_err());
+			if changed && !rejected {
+				connection.presence_edits.send_replace(Some(published));
+			}
+			if rejected {
 				"Could not update status: connection unavailable."
 			} else if !self.state.gateway_connected {
 				"Waiting for connection."
 			} else {
-				""
+				save_error.unwrap_or("")
 			}
 		} else {
 			"Not connected; status is not shared."
 		};
+		self.persist_account_presence();
 		if changed || previous_status != self.messaging.own_presence_status {
 			ctx.request_repaint();
 		}
@@ -2308,6 +2397,7 @@ impl Desktop {
 			return;
 		}
 		self.messaging.own_presence_expires = None;
+		self.messaging.own_presence.expires_at_ms = None;
 		self.messaging.own_presence.custom_status.clear();
 		self.messaging.own_presence_changed = true;
 		self.messaging
@@ -4285,6 +4375,7 @@ impl Desktop {
 	}
 	fn poll(&mut self, ctx: &egui::Context) {
 		let mut cached = Vec::new();
+		let mut presence_cache_stopped = false;
 		if let Some(cache) = &self.cache {
 			for _ in 0..16 {
 				match cache.receive.try_recv() {
@@ -4297,11 +4388,16 @@ impl Desktop {
 							self.messaging.channel_preferences_load_pending = false;
 							self.messaging.channel_preferences_status = "Local storage worker stopped; restart Serein to restore channel preferences.";
 						}
+						presence_cache_stopped = self.presence_load_pending;
 						break;
 					}
 					Err(std::sync::mpsc::TryRecvError::Empty) => break,
 				}
 			}
+		}
+		if presence_cache_stopped {
+			self.presence_load_pending = false;
+			self.flush_deferred_connect(ctx);
 		}
 		for (generation, outcome, _reservation) in cached {
 			self.cache_pending = self.cache_pending.saturating_sub(1);
@@ -4423,6 +4519,20 @@ impl Desktop {
 					}
 					continue;
 				}
+				cache::Outcome::AccountPresences(result) => {
+					self.presence_load_pending = false;
+					if let Ok(rows) = result {
+						self.account_presences.clone_from(rows);
+					}
+					self.flush_deferred_connect(ctx);
+					continue;
+				}
+				cache::Outcome::AccountPresenceSaved(result) => {
+					if result.is_err() {
+						self.presence_saved = None;
+					}
+					continue;
+				}
 				cache::Outcome::HistoryCleared => {
 					if let Some(cache) = &self.cache
 						&& self.cache_clears.acknowledge(&cache.history)
@@ -4506,7 +4616,9 @@ impl Desktop {
 				| cache::Outcome::ReadingPreferencesSaved(_)
 				| cache::Outcome::Accounts { .. }
 				| cache::Outcome::HistoryCleared
-				| cache::Outcome::Failed { .. } => unreachable!(),
+				| cache::Outcome::Failed { .. }
+				| cache::Outcome::AccountPresences(_)
+				| cache::Outcome::AccountPresenceSaved(_) => unreachable!(),
 			}
 		}
 		self.retry_history_clears();

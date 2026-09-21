@@ -68,6 +68,8 @@ pub enum Operation {
 	SaveGifFavorites(Vec<model::Gif>),
 	LoadChannelPreferences,
 	SaveChannelPreferences(model::ChannelPreferences),
+	LoadAccountPresences,
+	SaveAccountPresence(model::OwnPresence),
 	LoadAccounts,
 	SaveAccount(model::SavedAccount),
 	SetAccountToken {
@@ -114,6 +116,8 @@ pub enum Outcome {
 	GifFavorites(Vec<model::Gif>),
 	ChannelPreferences(Result<model::ChannelPreferences, StoreError>),
 	ChannelPreferencesSaved(Result<(), StoreError>),
+	AccountPresences(Result<std::collections::BTreeMap<model::Id, model::OwnPresence>, StoreError>),
+	AccountPresenceSaved(Result<(), StoreError>),
 	/// The whole switcher roster, plus any accounts pruned to keep it bounded. Pruning is
 	/// already committed when this is produced, so the IDs travel outside the roster result:
 	/// a failed re-read must not strand their saved secrets and cached data.
@@ -375,6 +379,18 @@ fn execute(
 				Err(error) => Err(*error),
 			});
 		}
+		Operation::LoadAccountPresences => {
+			return Outcome::AccountPresences(match store {
+				Ok(store) => store.account_presences(),
+				Err(error) => Err(*error),
+			});
+		}
+		Operation::SaveAccountPresence(presence) => {
+			return Outcome::AccountPresenceSaved(match store {
+				Ok(store) => store.save_account_presence(account, presence),
+				Err(error) => Err(*error),
+			});
+		}
 		Operation::LoadAccounts => {
 			return Outcome::Accounts {
 				roster: match store {
@@ -512,7 +528,9 @@ fn execute(
 		| Operation::LoadGameActivity
 		| Operation::SaveGameActivity(_)
 		| Operation::LoadMinimizeToTray
-		| Operation::SaveMinimizeToTray(_) => unreachable!(),
+		| Operation::SaveMinimizeToTray(_)
+		| Operation::LoadAccountPresences
+		| Operation::SaveAccountPresence(_) => unreachable!(),
 	};
 	let result = match store {
 		Ok(store) => match operation {
@@ -528,7 +546,9 @@ fn execute(
 			| Operation::LoadGameActivity
 			| Operation::SaveGameActivity(_)
 			| Operation::LoadMinimizeToTray
-			| Operation::SaveMinimizeToTray(_) => {
+			| Operation::SaveMinimizeToTray(_)
+			| Operation::LoadAccountPresences
+			| Operation::SaveAccountPresence(_) => {
 				unreachable!()
 			}
 			Operation::LoadAppearance => store

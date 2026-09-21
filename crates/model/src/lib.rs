@@ -473,13 +473,24 @@ impl PresenceStatus {
 			Self::Invisible => "Invisible",
 		}
 	}
+	pub fn parse(wire: &str) -> Option<Self> {
+		match wire {
+			"online" => Some(Self::Online),
+			"idle" => Some(Self::Idle),
+			"dnd" => Some(Self::DoNotDisturb),
+			"invisible" => Some(Self::Invisible),
+			_ => None,
+		}
+	}
 }
 
-/// Desired presence for this login session, not a confirmed public status or saved preference.
+/// This account's chosen status. Discord settings are authoritative. A local row is only the fallback when that read fails.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OwnPresence {
 	pub status: PresenceStatus,
 	pub custom_status: String,
+	/// Custom-status clear deadline, unix milliseconds. The gateway presence opcode does not carry it.
+	pub expires_at_ms: Option<u64>,
 }
 impl OwnPresence {
 	pub fn valid(&self) -> bool {

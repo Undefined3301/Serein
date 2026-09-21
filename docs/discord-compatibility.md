@@ -1205,9 +1205,11 @@ unavailable in the current agent environment.
 ### Session presence publication
 
 Click the footer avatar or account name to preview the global profile, select Online,
-Idle, Do Not Disturb or Invisible, and apply/clear a custom status. Presence choices
-last for this login session; they do not write Discord account settings or local storage.
-Profile loading reuses the existing bounded global-profile adapter.
+Idle, Do Not Disturb or Invisible, and apply/clear a custom status. Serein reads
+the account's Discord status from unofficial `settings-proto/1` before identify
+and writes that field when the owner changes it. A local `account_presence` row
+is only the fallback when that read fails. Profile loading reuses the existing
+bounded global-profile adapter.
 
 The existing Gateway opcode 3 publisher coalesces both game and custom activity into
 one update, with at least five seconds between attempts and publication after
