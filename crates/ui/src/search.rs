@@ -1076,10 +1076,15 @@ impl SearchUi {
 						let id = ui.scope_id().with(("search-spoilers", &hit.excerpt));
 						let mut revealed = ui.data(|data| data.get_temp::<u32>(id).unwrap_or(0));
 						let mut surface = crate::select::Surface::new(ui, "search-result");
+						let source = crate::mentions::MentionSource {
+							state,
+							channel: hit.channel,
+						};
 						self.formats.get(hit.id, &hit.excerpt).show_search(
 							ui,
 							&mut self.opening,
 							&crate::mentions::known_users(state, hit.channel),
+							Some(&source),
 							&mut self.profile,
 							(
 								&state.channels,

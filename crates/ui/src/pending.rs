@@ -125,10 +125,15 @@ pub fn show(
 								if jumbo {
 									crate::design::jumbo_emoji(ui);
 								}
+								let source = crate::mentions::MentionSource {
+									state,
+									channel: pending.channel,
+								};
 								formatted.show_references(
 									ui,
 									opening,
 									&crate::mentions::known_users(state, pending.channel),
+									Some(&source),
 									profile,
 									(
 										&state.channels,

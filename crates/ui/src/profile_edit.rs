@@ -633,6 +633,7 @@ fn preview(
 									ui,
 									opening,
 									&[],
+									None,
 									&mut None,
 									(avatars, demo, guilds),
 								);
