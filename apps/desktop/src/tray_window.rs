@@ -33,7 +33,7 @@ impl State {
 	}
 	/// Tray "minimize": hides through the compositor where minimization is ignored, otherwise
 	/// restores the window first so the minimize request lands on a mapped surface.
-	#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+	#[allow(dead_code)]
 	pub fn minimize(&mut self, ctx: &egui::Context) {
 		if let Some(compositor) = &self.compositor {
 			self.hidden = true;

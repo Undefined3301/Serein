@@ -98,7 +98,7 @@ pub fn sources() -> Result<Vec<Source>, &'static str> {
 				name: "Entire X11 desktop · all monitors · no portal".into(),
 			});
 		}
-		return Ok(sources);
+		Ok(sources)
 	}
 	#[cfg(not(target_os = "linux"))]
 	capture::sources()
