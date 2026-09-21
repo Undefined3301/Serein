@@ -116,6 +116,20 @@ impl AccountMenu {
 }
 
 impl MessagingUi {
+	pub fn adopt_account_presence(&mut self, presence: model::OwnPresence) {
+		if !presence.custom_status.is_empty() && !presence.valid() {
+			return;
+		}
+		if self.account_menu.draft == self.own_presence.custom_status {
+			self.account_menu.draft.clone_from(&presence.custom_status);
+			self.account_menu.clear_after = ClearAfter::nearest(presence.expires_at_ms);
+		}
+		self.own_presence_expires = presence.expires_at_ms;
+		self.own_presence.expires_at_ms = presence.expires_at_ms;
+		self.own_presence.status = presence.status;
+		self.own_presence.custom_status = presence.custom_status;
+	}
+
 	pub(super) fn account_menu(
 		&mut self,
 		anchor: &egui::Response,
@@ -766,6 +780,7 @@ impl MessagingUi {
 		let valid = model::OwnPresence {
 			status: self.own_presence.status,
 			custom_status: draft.clone(),
+			expires_at_ms: None,
 		}
 		.valid();
 		let changed = draft != self.own_presence.custom_status
@@ -845,6 +860,7 @@ impl MessagingUi {
 					self.account_menu.draft.clear();
 					self.account_menu.clear_after = ClearAfter::Never;
 					self.own_presence_expires = None;
+					self.own_presence.expires_at_ms = None;
 					if !self.own_presence.custom_status.is_empty() {
 						self.own_presence.custom_status.clear();
 						self.own_presence_changed = true;
@@ -865,6 +881,7 @@ impl MessagingUi {
 					self.own_presence_expires = (!draft.is_empty())
 						.then(|| self.account_menu.clear_after.deadline())
 						.flatten();
+					self.own_presence.expires_at_ms = self.own_presence_expires;
 					self.own_presence_changed = true;
 				}
 			});

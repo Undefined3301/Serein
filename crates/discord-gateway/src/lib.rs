@@ -1491,7 +1491,7 @@ mod tests {
             let game = |name: &str| discord_protocol::rpc::ActivityFields::default().into_activity(Id(42), name.into()).unwrap();
             let (activity, receiver) = watch::channel(Some(game("osu!")));
 			let (own_presence, presence_receiver) = watch::channel(model::OwnPresence {
-				status: model::PresenceStatus::DoNotDisturb, custom_status: "Synthetic focus".into(),
+				status: model::PresenceStatus::DoNotDisturb, custom_status: "Synthetic focus".into(), expires_at_ms: None,
 			});
             let (observations, mut observed) = watch::channel(ActivityObservation::Unconfirmed);
             let (finished, done) = tokio::sync::oneshot::channel();
@@ -1551,7 +1551,7 @@ mod tests {
                                     observed.wait_for(|value| *value == expected).await.unwrap();
                                 }
                                 activity.send(Some(game("Skipped intermediate"))).unwrap();
-								own_presence.send_replace(model::OwnPresence {status:model::PresenceStatus::DoNotDisturb,custom_status:"On a break".into()});
+								own_presence.send_replace(model::OwnPresence {status:model::PresenceStatus::DoNotDisturb,custom_status:"On a break".into(),expires_at_ms:None});
                                 activity.send(Some(game("Minecraft"))).unwrap();
                                 observed.wait_for(|value| *value == ActivityObservation::Unconfirmed).await.unwrap();
                             }
