@@ -407,8 +407,7 @@ fn demo_check_updates() {
 /// One offline debug path through the shipped Wasm, reducer, and egui rows.
 #[cfg(feature = "demo")]
 fn demo_check_extensions() {
-	let _ =
-		extensions::demo_check_examples().expect("starter packages activate with consent");
+	let _ = extensions::demo_check_examples().expect("starter packages activate with consent");
 	let mut state = test_support::demo_state();
 	let channel = state.selected.expect("demo conversation");
 	state.timeline.clear();
