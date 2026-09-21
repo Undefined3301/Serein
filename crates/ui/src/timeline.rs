@@ -530,12 +530,7 @@ fn mentions_viewer(message: &Message, viewer: Option<Id>) -> bool {
 	message.mention_everyone
 		|| viewer.is_some_and(|viewer| message.mentions.iter().any(|mention| mention.id == viewer))
 }
-fn row_key(
-	message: &Message,
-	previous: Option<&Message>,
-	boundary: Option<Id>,
-	state: &State,
-) -> u64 {
+fn row_key(message: &Message, previous: Option<&Message>, boundary: Option<Id>, names: u64) -> u64 {
 	let mut key = DefaultHasher::new();
 	layout_key(message).hash(&mut key);
 	grouped(previous, message, boundary).hash(&mut key);
@@ -543,7 +538,7 @@ fn row_key(
 		.is_none_or(|p| timestamp(p.id).date() != timestamp(message.id).date())
 		.hash(&mut key);
 	(boundary == Some(message.id)).hash(&mut key);
-	crate::mentions::directory_fingerprint(state, message.channel).hash(&mut key);
+	names.hash(&mut key);
 	key.finish()
 }
 fn divider(ui: &mut egui::Ui, label: String, unread: bool) {
@@ -1202,6 +1197,10 @@ impl TimelineView {
 		}
 		let mut offset = None;
 		let mut lead_rows = None;
+		let mention_names = state
+			.selected
+			.map(|channel| crate::mentions::directory_fingerprint(state, channel))
+			.unwrap_or(0);
 		if changed {
 			if content_dimensions_changed {
 				self.heights.clear();
@@ -1232,7 +1231,7 @@ impl TimelineView {
 				.into_iter()
 				.chain(state.timeline.display_iter())
 				.map(|m| {
-					let key = row_key(m, previous, self.unread_boundary, state)
+					let key = row_key(m, previous, self.unread_boundary, mention_names)
 						^ u64::from(state.timeline.is_deleted(m.id));
 					previous = (!state.timeline.is_deleted(m.id)).then_some(m);
 					let estimate = (if m.embeds_suppressed {
@@ -1554,7 +1553,12 @@ impl TimelineView {
 						.response;
 					measurements.push((
 						id,
-						row_key(starter, None, self.unread_boundary, state),
+						row_key(
+							starter,
+							None,
+							self.unread_boundary,
+							crate::mentions::directory_fingerprint(state, starter.channel),
+						),
 						response.rect.height(),
 					));
 					continue;
@@ -1592,7 +1596,7 @@ impl TimelineView {
 						.is_some_and(<[_]>::is_empty)
 					&& state.interactions.pending.is_none()
 					&& let Some(&(key, height)) = self.heights.get(&id)
-					&& key == row_key(message, previous, self.unread_boundary, state)
+					&& key == row_key(message, previous, self.unread_boundary, mention_names)
 				{
 					ui.add_space(height);
 					// Keep one result per row: visible height updates below zip by index.
@@ -1805,7 +1809,7 @@ impl TimelineView {
 						});
 					measurements.push((
 						id,
-						row_key(message, previous, self.unread_boundary, state) ^ 1,
+						row_key(message, previous, self.unread_boundary, mention_names) ^ 1,
 						response.response.rect.height(),
 					));
 					continue;
@@ -2685,7 +2689,7 @@ impl TimelineView {
 				});
 				measurements.push((
 					id,
-					row_key(message, previous, self.unread_boundary, state),
+					row_key(message, previous, self.unread_boundary, mention_names),
 					response.response.rect.height(),
 				));
 			}
@@ -4193,9 +4197,10 @@ mod tests {
 		next.edited = false;
 		assert!(!grouped(Some(&first), &next, Some(next.id)));
 		let idle = State::default();
+		let names = crate::mentions::directory_fingerprint(&idle, next.channel);
 		assert_ne!(
-			row_key(&next, Some(&first), None, &idle),
-			row_key(&next, None, None, &idle)
+			row_key(&next, Some(&first), None, names),
+			row_key(&next, None, None, names)
 		);
 		next.reply_to = Some(first.id);
 		assert!(!grouped(Some(&first), &next, None));
@@ -5279,11 +5284,12 @@ mod tests {
 
 		// Force a severe underestimate without invalidating the row key, as can
 		// happen when content geometry changes independently of its message data.
+		let message = state.timeline.get(Id(1)).unwrap();
 		let key = row_key(
-			state.timeline.get(Id(1)).unwrap(),
+			message,
 			None,
 			view.unread_boundary,
-			&state,
+			crate::mentions::directory_fingerprint(&state, message.channel),
 		);
 		view.heights.insert(Id(1), (key, 76.0));
 		view.following = false;
@@ -6329,7 +6335,15 @@ mod tests {
 		assert!(view.revealed.is_empty());
 		assert_eq!(
 			view.heights[&Id(1)].0,
-			row_key(state.timeline.get(Id(1)).unwrap(), None, None, &state)
+			row_key(
+				state.timeline.get(Id(1)).unwrap(),
+				None,
+				None,
+				crate::mentions::directory_fingerprint(
+					&state,
+					state.timeline.get(Id(1)).unwrap().channel,
+				),
+			)
 		);
 		assert!(
 			view.heights[&Id(1)].1 < 210.0,

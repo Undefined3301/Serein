@@ -1280,7 +1280,6 @@ impl Formatted {
 					if let Some(id) = spans[start].1.mention {
 						reserve(ui);
 						let colors = crate::design::palette(ui);
-						let user = crate::mentions::find_user(id, render.users, render.source);
 						let label = crate::mentions::mention_label(id, render.users, render.source);
 						let response = ui
 							.add(egui::Link::new(
@@ -1299,6 +1298,7 @@ impl Formatted {
 							)
 						});
 						if response.clicked() {
+							let user = crate::mentions::find_user(id, render.users, render.source);
 							*render.profile = Some(user.cloned().unwrap_or(model::User {
 								id,
 								name: format!("User {id}"),
