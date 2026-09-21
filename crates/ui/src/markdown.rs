@@ -1206,6 +1206,7 @@ impl Formatted {
 					}
 					if let Some(id) = spans[start].1.channel {
 						reserve(ui);
+						let colors = crate::design::palette(ui);
 						if let Some(target) = render.channels.iter().find(|target| {
 							target.id == id
 								&& target.guild.is_some()
@@ -1213,7 +1214,12 @@ impl Formatted {
 						}) {
 							let label = format!("#{}", target.name);
 							let response = ui
-								.add(egui::Link::new(egui::RichText::new(&label).strong()))
+								.add(egui::Link::new(
+									egui::RichText::new(&label)
+										.strong()
+										.color(colors.mention_text)
+										.background_color(colors.mention_bg),
+								))
 								.on_hover_text("Open channel");
 							render.surface.keep(&response);
 							response.widget_info(|| {
@@ -1229,7 +1235,12 @@ impl Formatted {
 						} else if render.channels.iter().all(|target| target.id != id) {
 							let label = "#unknown-channel";
 							let response = ui
-								.add(egui::Link::new(egui::RichText::new(label).strong()))
+								.add(egui::Link::new(
+									egui::RichText::new(label)
+										.strong()
+										.color(colors.mention_text)
+										.background_color(colors.mention_bg),
+								))
 								.on_hover_text("Load channel");
 							render.surface.keep(&response);
 							response.widget_info(|| {
