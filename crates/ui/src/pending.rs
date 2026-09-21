@@ -64,7 +64,10 @@ pub fn show(
 			ui.spacing_mut().item_spacing = egui::vec2(16.0, 4.0);
 			ui.horizontal_top(|ui| {
 				if compact {
-					ui.allocate_exact_size(egui::vec2(40.0, 22.0), egui::Sense::hover());
+					ui.allocate_exact_size(
+						egui::vec2(40.0, crate::timeline::MESSAGE_LINE),
+						egui::Sense::hover(),
+					);
 				} else {
 					ui.scope(|ui| {
 						ui.set_opacity(0.55);
@@ -77,6 +80,7 @@ pub fn show(
 				}
 				ui.vertical(|ui| {
 					ui.set_width(ui.available_width());
+					let mut text_line = egui::Rect::NOTHING;
 					if !compact
 						|| matches!(pending.delivery, Delivery::Rejected | Delivery::Ambiguous)
 					{
@@ -121,30 +125,33 @@ pub fn show(
 								ui.data_mut(|data| data.get_temp::<u32>(id).unwrap_or(0));
 							let mut surface = crate::select::Surface::new(ui, "pending-body");
 							let jumbo = formatted.jumbo();
-							ui.scope(|ui| {
-								if jumbo {
-									crate::design::jumbo_emoji(ui);
-								}
-								let source = crate::mentions::MentionSource {
-									state,
-									channel: pending.channel,
-								};
-								formatted.show_references(
-									ui,
-									opening,
-									&crate::mentions::known_users(state, pending.channel),
-									Some(&source),
-									profile,
-									(
-										&state.channels,
-										channel,
-										&state.guilds,
-										crate::mentions::known_roles(state, pending.channel),
-									),
-									(avatars, state.demo, &mut revealed),
-									&mut surface,
-								);
-							});
+							text_line = ui
+								.scope(|ui| {
+									if jumbo {
+										crate::design::jumbo_emoji(ui);
+									}
+									let source = crate::mentions::MentionSource {
+										state,
+										channel: pending.channel,
+									};
+									formatted.show_references(
+										ui,
+										opening,
+										&crate::mentions::known_users(state, pending.channel),
+										Some(&source),
+										profile,
+										(
+											&state.channels,
+											channel,
+											&state.guilds,
+											crate::mentions::known_roles(state, pending.channel),
+										),
+										(avatars, state.demo, &mut revealed),
+										&mut surface,
+									);
+								})
+								.response
+								.rect;
 							surface.finish(ui);
 							if revealed != 0 {
 								ui.data_mut(|data| data.insert_temp(id, revealed));
@@ -195,6 +202,7 @@ pub fn show(
 							*restore = Some(pending.nonce.clone());
 						}
 					}
+					crate::timeline::fill_header_line(ui, compact, text_line);
 				});
 			});
 		});
