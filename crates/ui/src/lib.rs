@@ -176,6 +176,7 @@ pub struct MessagingUi {
 	edit_closed_channel: Option<Id>,
 	avatars: avatars::Avatars,
 	profile: Option<model::User>,
+	profile_image: Option<(u64, model::Attachment)>,
 	user_action: Option<user_menu::Action>,
 	pending_mention: Option<Id>,
 	contact_editor: contact_editor::ContactEditor,
@@ -3983,6 +3984,26 @@ impl MessagingUi {
 				self.reading_preferences.confirm_external_links,
 				anchor,
 			) {
+				Some(profiles::Action::Avatar(media)) => {
+					self.profile_image = Some((
+						state.generation,
+						model::Attachment {
+							id: Id(0),
+							filename: "avatar.png".into(),
+							description: Some(format!("{}’s profile picture", user.name)),
+							content_type: Some("image/png".into()),
+							size: 0,
+							media,
+							spoiler: false,
+							duration_ms: None,
+							waveform: Vec::new(),
+						},
+					));
+					self.profile = None;
+					self.profile_link = None;
+					self.profile_anchor = None;
+					commands.push(state.clear_profile());
+				}
 				Some(profiles::Action::AddFriend(id)) => {
 					if let Some(command) = state.add_profile_friend(id) {
 						commands.push(command);
@@ -4049,6 +4070,22 @@ impl MessagingUi {
 			}
 		} else {
 			self.profile_anchor = None;
+		}
+
+		if let Some((generation, image)) = &self.profile_image
+			&& (*generation != state.generation
+				|| attachments::viewer(
+					ui,
+					std::slice::from_ref(image),
+					image.id,
+					&mut self.avatars,
+					&mut self.timeline.download,
+					&mut self.timeline.opening,
+					state.demo,
+				)
+				.is_none())
+		{
+			self.profile_image = None;
 		}
 
 		self.reconcile_edit(state);

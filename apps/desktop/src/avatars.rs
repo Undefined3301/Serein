@@ -318,6 +318,9 @@ pub(crate) fn embed_url(source: &str, edge: u32) -> Option<String> {
 		let parts: Vec<_> = path.trim_start_matches('/').split('/').collect();
 		matches!(parts.as_slice(), ["avatars" | "icons" | "banners", id, hash]
             if id.parse::<Id>().is_ok() && hash.rsplit_once('.').is_some_and(|(hash, _)| model::valid_avatar_hash(hash)))
+			|| matches!(parts.as_slice(), ["guilds", guild, "users", user, "avatars", hash]
+                if guild.parse::<Id>().is_ok() && user.parse::<Id>().is_ok()
+                    && hash.strip_suffix(".png").is_some_and(model::valid_avatar_hash))
 			|| matches!(parts.as_slice(), ["embed", "avatars", index]
                 if matches!(*index, "0.png" | "1.png" | "2.png" | "3.png" | "4.png" | "5.png"))
 	};
@@ -1191,6 +1194,17 @@ mod tests {
 				"Unsafe or unsupported test URL was accepted"
 			);
 		}
+		assert!(embed_url(
+			"https://cdn.discordapp.com/guilds/1/users/2/avatars/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png?size=2048",
+			ui::LARGE_EDGE,
+		).is_some());
+		assert!(
+			embed_url(
+				"https://cdn.discordapp.com/guilds/1/users/2/avatars/invalid.png",
+				ui::LARGE_EDGE,
+			)
+			.is_none()
+		);
 		let embed_key = "embed:https://cdn.discordapp.com/attachments/1/2/image.png?ex=abc&is=def&hm=synthetic&format=webp&width=4096&height=1024&fit=cover";
 		let transformed = cdn_url(embed_key).unwrap();
 		assert!(transformed.starts_with("https://media.discordapp.net/attachments/1/2/image.png?"));

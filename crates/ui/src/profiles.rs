@@ -52,6 +52,7 @@ pub enum Action {
 	RemoveFriend,
 	AcceptFriend(Id),
 	Profile(User),
+	Avatar(model::EmbedMedia),
 	/// Shared user action picked from the card's overflow menu.
 	Menu(crate::user_menu::Action),
 }
@@ -923,10 +924,42 @@ pub fn show(
 			ui.painter()
 				.circle_filled(avatar_rect.center(), AVATAR * 0.5 + 6.0, theme.card);
 			ui.scope_builder(UiBuilder::new().max_rect(avatar_rect), |ui| {
-				if let Some(data) = data {
-					avatars.show_profile_avatar(ui, data, AVATAR, state.demo);
+				let response = if let Some(data) = data {
+					avatars.show_profile_avatar(ui, data, AVATAR, state.demo)
 				} else {
-					avatars.show(ui, user, AVATAR, state.demo);
+					avatars.show(ui, user, AVATAR, state.demo)
+				};
+				response.widget_info(|| {
+					egui::WidgetInfo::labeled(
+						egui::WidgetType::Button,
+						true,
+						"View profile picture",
+					)
+				});
+				if response
+					.on_hover_cursor(egui::CursorIcon::ZoomIn)
+					.on_hover_text("View profile picture")
+					.clicked()
+				{
+					let mut url = data.map_or(user, |data| &data.user).avatar_url();
+					if let Some(data) = data
+						&& let Some(member) = data.guild.as_ref()
+						&& let Some(hash) = member
+							.avatar
+							.as_deref()
+							.filter(|hash| model::valid_avatar_hash(hash))
+					{
+						url = format!(
+							"https://cdn.discordapp.com/guilds/{}/users/{}/avatars/{hash}.png?size=128",
+							member.guild, data.user.id
+						);
+					}
+					action = Some(Action::Avatar(model::EmbedMedia {
+						url: Some(url.replace("size=128", "size=2048")),
+						width: 2048,
+						height: 2048,
+						..Default::default()
+					}));
 				}
 			});
 			if let Some(status) = status {

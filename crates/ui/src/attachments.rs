@@ -741,7 +741,12 @@ pub fn viewer(
 					zoom = 1.0;
 					pan = egui::Vec2::ZERO;
 				}
-				media_context_menu(&response, attachment, download, opening, demo);
+				// Zero-ID images are local viewer metadata, not service attachments.
+				if attachment.id == Id(0) {
+					embed_context_menu(&response, &attachment.media, download, demo);
+				} else {
+					media_context_menu(&response, attachment, download, opening, demo);
+				}
 			}
 			// Top bar: position counter on the left, actions on the right.
 			let bar = Rect::from_min_size(full.min, egui::vec2(full.width(), TOP));
@@ -780,7 +785,11 @@ pub fn viewer(
 						})
 						.clicked()
 					{
-						download.request = Some(attachment.clone());
+						if attachment.id == Id(0) {
+							download.embed_request = Some((attachment.media.clone(), false));
+						} else {
+							download.request = Some(attachment.clone());
+						}
 					}
 				},
 			);
