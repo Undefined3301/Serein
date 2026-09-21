@@ -699,7 +699,9 @@ impl DiscordApi {
 				manual,
 				mention_count,
 			} => {
-				let result = self.mark_read(channel, message, manual, mention_count).await;
+				let result = self
+					.mark_read(channel, message, manual, mention_count)
+					.await;
 				Event::ReadState(client_core::read_state::Event::Result {
 					channel,
 					message,

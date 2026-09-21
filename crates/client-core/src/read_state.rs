@@ -338,7 +338,11 @@ impl State {
 		after: Option<Id>,
 		echoed: Option<u32>,
 	) -> Option<u32> {
-		if echoed.is_some() || self.channel(channel).is_none_or(|known| known.guild.is_some()) {
+		if echoed.is_some()
+			|| self
+				.channel(channel)
+				.is_none_or(|known| known.guild.is_some())
+		{
 			return echoed;
 		}
 		if let Some(Pending::Channel {
