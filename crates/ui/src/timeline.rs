@@ -852,6 +852,69 @@ fn bar_button(
 	ui.spacing_mut().item_spacing.x = 12.0;
 	response
 }
+
+fn banner_rect(area: egui::Rect) -> egui::Rect {
+	egui::Rect::from_min_size(
+		egui::pos2(area.left() + 16.0, area.top()),
+		egui::vec2((area.width() - 32.0).max(120.0), 28.0),
+	)
+}
+
+fn history_banner(ui: &mut egui::Ui, rect: egui::Rect, unread: bool, newer: bool) -> (bool, bool) {
+	let colors = crate::design::palette(ui);
+	let mut jump_unread = false;
+	let mut load_newer = false;
+	overlay_bar(
+		ui,
+		rect,
+		colors.accent,
+		egui::CornerRadius {
+			nw: 0,
+			ne: 0,
+			sw: 8,
+			se: 8,
+		},
+		|ui| {
+			ui.label(
+				crate::design::medium(
+					ui,
+					if unread {
+						"Unread messages"
+					} else {
+						"More messages"
+					},
+					13.0,
+				)
+				.color(colors.accent_text),
+			);
+			ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+				if unread
+					&& bar_button(
+						ui,
+						"Jump to unread",
+						crate::icons::Icon::ArrowUp,
+						colors.accent_text,
+					)
+					.clicked()
+				{
+					jump_unread = true;
+				}
+				if newer
+					&& bar_button(
+						ui,
+						"Next messages",
+						crate::icons::Icon::ArrowDown,
+						colors.accent_text,
+					)
+					.clicked()
+				{
+					load_newer = true;
+				}
+			});
+		},
+	);
+	(jump_unread, load_newer)
+}
 /// Discord-style system row: muted sentence, strong clickable names, inline timestamp.
 #[allow(clippy::too_many_arguments)]
 fn show_system(
@@ -1296,6 +1359,13 @@ impl TimelineView {
 			let area = ui.available_rect_before_wrap().intersect(ui.clip_rect());
 			loading_messages(ui);
 			session.bind(ui, ui.scope_id().with(("timeline", state.selected)), area);
+			if state.can_jump_unread() {
+				let (jump_unread, _) = history_banner(ui, banner_rect(area), true, false);
+				if jump_unread {
+					self.unread_jump = true;
+					self.browse_away();
+				}
+			}
 			return;
 		} else if empty && history_available && !welcome {
 			ui.label(match state.freshness {
@@ -2931,70 +3001,23 @@ impl TimelineView {
 		let browsing_history = state.history_targeted
 			|| state.history_before.is_some()
 			|| state.history_after.is_some();
-		let can_jump_unread = state.can_jump_unread()
-			&& state.timeline.iter().next().is_some()
-			&& !(self.following
-				&& self.at_current_latest
-				&& !browsing_history
-				&& ui.input(|input| input.focused));
+		let jump_ready = state.can_jump_unread();
+		let opening_unread =
+			jump_ready && state.freshness == model::Freshness::Loading && state.history_pending;
+		let can_jump_unread = jump_ready
+			&& (state.timeline.iter().next().is_some() || opening_unread)
+			&& (opening_unread
+				|| !(self.following
+					&& self.at_current_latest
+					&& !browsing_history
+					&& ui.input(|input| input.focused)));
 		// Latest-message metadata can outlive a deleted message. A complete, visible
 		// latest page has nowhere useful to jump; targeted pages still need navigation.
-		if (can_jump_unread || can_load_newer) && (!whole_conversation_visible || browsing_history)
+		if (can_jump_unread || can_load_newer)
+			&& (!whole_conversation_visible || browsing_history || opening_unread)
 		{
-			let mut jump_unread = false;
-			let mut load_newer = false;
-			overlay_bar(
-				ui,
-				egui::Rect::from_min_size(
-					egui::pos2(area.left() + 16.0, area.top()),
-					egui::vec2((area.width() - 32.0).max(120.0), 28.0),
-				),
-				colors.accent,
-				egui::CornerRadius {
-					nw: 0,
-					ne: 0,
-					sw: 8,
-					se: 8,
-				},
-				|ui| {
-					ui.label(
-						crate::design::medium(
-							ui,
-							if can_jump_unread {
-								"Unread messages"
-							} else {
-								"More messages"
-							},
-							13.0,
-						)
-						.color(colors.accent_text),
-					);
-					ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-						if can_jump_unread
-							&& bar_button(
-								ui,
-								"Jump to unread",
-								crate::icons::Icon::ArrowUp,
-								colors.accent_text,
-							)
-							.clicked()
-						{
-							jump_unread = true;
-						}
-						if can_load_newer
-							&& bar_button(
-								ui,
-								"Next messages",
-								crate::icons::Icon::ArrowDown,
-								colors.accent_text,
-							)
-							.clicked()
-						{
-							load_newer = true;
-						}
-					});
-				},
-			);
+			let (jump_unread, load_newer) =
+				history_banner(ui, banner_rect(area), can_jump_unread, can_load_newer);
 			if jump_unread {
 				self.unread_jump = true;
 				self.browse_away();
@@ -3192,6 +3215,74 @@ mod tests {
 		}
 		output.drop_without_applying_deltas();
 		labels
+	}
+
+	fn loading_unread_channel(cached_reply: bool) -> State {
+		let mut state = State {
+			auth: client_core::auth::AuthState::Authenticated,
+			gateway_connected: true,
+			freshness: model::Freshness::Loading,
+			history_pending: true,
+			history_targeted: false,
+			history_before: None,
+			history_after: None,
+			older_exhausted: false,
+			selected: Some(Id(20)),
+			channels: vec![model::Channel {
+				id: Id(20),
+				guild: None,
+				parent_id: None,
+				position: 0,
+				name: "Synthetic unread conversation".into(),
+				kind: 1,
+				recipients: vec![],
+				member_list_id: None,
+				message_count: None,
+				icon: None,
+				last_message: Some(Id(20)),
+			}],
+			..Default::default()
+		};
+		state
+			.apply_read_state(client_core::read_state::Event::Snapshot {
+				entries: Some(vec![(Id(20), Some(Id(10)), 0)]),
+				version: Some(1),
+				partial: false,
+			})
+			.unwrap();
+		if cached_reply {
+			let mut message = text_message(20);
+			message.reply_to = Some(Id(9));
+			message.reactions = Some(vec![model::Reaction {
+				emoji: model::ReactionEmoji {
+					id: None,
+					name: Some("wave".into()),
+				},
+				count: 1,
+				me: false,
+				me_burst: false,
+			}]);
+			state.timeline.insert(message, false, false).unwrap();
+		}
+		state
+	}
+
+	#[test]
+	fn unread_banner_is_visible_as_soon_as_an_unread_channel_is_joined() {
+		let ctx = egui::Context::default();
+		for cached_reply in [true, false] {
+			let mut state = loading_unread_channel(cached_reply);
+			let mut view = TimelineView::default();
+			let labels = banner_frame(&ctx, &mut view, &mut state, vec![], false);
+			assert!(
+				labels.iter().any(|(text, _)| text == "Unread messages"),
+				"cached reply {cached_reply} while history is still loading showed {labels:?}"
+			);
+			assert!(
+				view.mark_read.is_none(),
+				"the loading frame must not acknowledge the channel"
+			);
+		}
 	}
 
 	#[test]
