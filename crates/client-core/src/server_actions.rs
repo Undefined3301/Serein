@@ -446,7 +446,7 @@ impl State {
 			.collect();
 		self.remove_channels(&removed);
 		if self.selected.is_some_and(|id| removed.contains(&id)) {
-			self.selected = None;
+			self.arrived_home();
 		}
 		self.guilds.retain(|g| g.id != guild);
 		self.permissions.guilds.remove(&guild);

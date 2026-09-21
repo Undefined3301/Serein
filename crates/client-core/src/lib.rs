@@ -37,6 +37,9 @@ pub mod server_roles;
 pub mod server_settings;
 mod thread_starter;
 mod threads;
+mod trail;
+#[doc(hidden)]
+pub use trail::Trail;
 pub mod typing;
 pub mod user_actions;
 mod verification;
@@ -44,6 +47,7 @@ pub mod voice;
 use model::*;
 use session_cache::Timeline;
 use std::collections::{BTreeMap, BTreeSet};
+use trail::Place;
 
 pub const MAX_DRAFT_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_CONTENT: usize = 2000;
@@ -645,7 +649,21 @@ pub struct State {
 	pub gateway_connected: bool,
 	pub revision: u64,
 	pub demo: bool,
+	#[doc(hidden)]
+	pub trail: Trail,
 }
+
+/// Result of a back/forward step that landed. `command` is the optional history fetch.
+pub struct NavStep {
+	pub command: Option<Command>,
+}
+
+enum Apply {
+	Opened(Option<Command>),
+	AlreadyHere,
+	Rejected(&'static str),
+}
+
 impl Default for State {
 	fn default() -> Self {
 		Self {
@@ -724,6 +742,7 @@ impl Default for State {
 			gateway_connected: false,
 			revision: 0,
 			demo: false,
+			trail: Trail::default(),
 		}
 	}
 }
@@ -883,13 +902,35 @@ impl State {
 		if self.selected == Some(channel) && self.freshness != Freshness::Unavailable {
 			return None;
 		}
+		match self.apply_channel(channel) {
+			Apply::Opened(command) => {
+				self.record(Place::Channel(channel));
+				command
+			}
+			Apply::AlreadyHere => None,
+			Apply::Rejected(status) => {
+				self.status = status;
+				None
+			}
+		}
+	}
+
+	fn record(&mut self, place: Place) {
+		if self.trail.is_empty() && !matches!(place, Place::Home) {
+			self.trail.visit(Place::Home);
+		}
+		self.trail.visit(place);
+	}
+
+	fn apply_channel(&mut self, channel: Id) -> Apply {
+		if self.selected == Some(channel) && self.freshness != Freshness::Unavailable {
+			return Apply::AlreadyHere;
+		}
 		if !self.channel(channel).is_some_and(navigable) {
-			self.status = "This channel kind is unsupported";
-			return None;
+			return Apply::Rejected("This channel kind is unsupported");
 		}
 		if !self.can_view(channel) {
-			self.status = "Channel permissions are unavailable or access was revoked";
-			return None;
+			return Apply::Rejected("Channel permissions are unavailable or access was revoked");
 		}
 		if let Some(previous) = self.selected {
 			self.remember_channel(previous);
@@ -921,11 +962,84 @@ impl State {
 		if self.channel(channel).is_some_and(|c| !c.supports_text()) {
 			self.cancel_history();
 			self.freshness = Freshness::Fresh;
-			return None;
+			return Apply::Opened(None);
 		}
-		let command = self.history(None);
-		Some(command)
+		Apply::Opened(Some(self.history(None)))
 	}
+
+	/// Open Friends / Home. Does not clear the timeline or emit a command.
+	pub fn open_home(&mut self) {
+		self.selected = None;
+		self.record(Place::Home);
+	}
+
+	/// Land on Home because the open channel is gone.
+	pub fn arrived_home(&mut self) {
+		if let Some(Place::Channel(id)) = self.trail.current()
+			&& self.selected == Some(id)
+		{
+			self.trail.drop_current();
+		}
+		self.selected = None;
+		self.record(Place::Home);
+	}
+
+	pub fn navigate_back(&mut self) -> Option<NavStep> {
+		self.navigate(true)
+	}
+
+	pub fn navigate_forward(&mut self) -> Option<NavStep> {
+		self.navigate(false)
+	}
+
+	fn navigate(&mut self, back: bool) -> Option<NavStep> {
+		let mut blocked = None;
+		loop {
+			let Some(place) = (if back {
+				self.trail.peek_back()
+			} else {
+				self.trail.peek_forward()
+			}) else {
+				if let Some(status) = blocked {
+					self.status = status;
+				}
+				return None;
+			};
+			let apply = match place {
+				Place::Home => {
+					self.selected = None;
+					Apply::Opened(None)
+				}
+				Place::Channel(channel) => self.apply_channel(channel),
+			};
+			match apply {
+				Apply::Opened(command) => {
+					self.commit_nav(back);
+					return Some(NavStep { command });
+				}
+				Apply::AlreadyHere => {
+					self.commit_nav(back);
+					return Some(NavStep { command: None });
+				}
+				Apply::Rejected(status) => {
+					blocked = Some(status);
+					if back {
+						self.trail.drop_back();
+					} else {
+						self.trail.drop_forward();
+					}
+				}
+			}
+		}
+	}
+	fn commit_nav(&mut self, back: bool) {
+		if back {
+			self.trail.commit_back();
+		} else {
+			self.trail.commit_forward();
+		}
+	}
+
 	pub fn request_members(&mut self) -> Option<Command> {
 		let index = self.channel_index(self.selected?)?;
 		let channel = &self.channels[index];
@@ -1015,7 +1129,7 @@ impl State {
 				.iter()
 				.any(|channel| channel.id == *id && channel.supports_text())
 		}) else {
-			self.selected = None;
+			self.arrived_home();
 			self.search_target = None;
 			self.reply = None;
 			self.invalidate_members();
@@ -2145,7 +2259,7 @@ impl State {
 					if self.selected == Some(self.channels[index].id)
 						&& !navigable(&self.channels[index])
 					{
-						self.selected = None;
+						self.arrived_home();
 						self.invalidate_members();
 						self.timeline.clear();
 						self.cancel_history();
@@ -2321,7 +2435,7 @@ impl State {
 				self.remove_channels(&removed);
 				self.cancel_history();
 				if unavailable {
-					self.selected = None;
+					self.arrived_home();
 					self.freshness = Freshness::Unavailable;
 				} else {
 					self.freshness = Freshness::Stale;

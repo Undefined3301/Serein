@@ -257,7 +257,7 @@ impl State {
 			Ok(None) => {
 				self.remove_channels(&std::collections::BTreeSet::from([channel]));
 				if self.selected == Some(channel) {
-					self.selected = None;
+					self.arrived_home();
 				}
 				"Left group"
 			}

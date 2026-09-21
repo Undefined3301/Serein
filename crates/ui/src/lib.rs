@@ -87,7 +87,7 @@ pub mod updates;
 mod user_menu;
 mod verification;
 mod voice;
-use client_core::{Command, MAX_CONTENT, MAX_DRAFT_BYTES, State};
+use client_core::{Command, MAX_CONTENT, MAX_DRAFT_BYTES, NavStep, State};
 use egui::{RichText, TextEdit};
 use model::{Freshness, Id};
 pub use verification::VerificationUi;
@@ -169,6 +169,7 @@ pub struct MessagingUi {
 	thread_create: thread_create::ThreadCreateUi,
 	forum: forum::ForumUi,
 	scroll: scroll::Session,
+	side_press: scroll::SidePress,
 	timeline: timeline::TimelineView,
 	edit_modified: Option<(Id, Id, bool)>,
 	edit_undo_cleared: bool,
@@ -419,6 +420,18 @@ impl MessagingUi {
 	/// Feed the frame's middle button before `show`. Never fed means never pressed.
 	pub fn middle_button(&mut self, middle: scroll::Middle) {
 		self.scroll.middle(middle);
+	}
+
+	/// Feed mouse 4 / mouse 5 edge presses before `show`. Flags OR so a second feed cannot clear a press.
+	pub fn side_buttons(&mut self, side: scroll::SidePress) {
+		self.side_press.back |= side.back;
+		self.side_press.forward |= side.forward;
+	}
+
+	fn drain_side_press(&mut self) -> scroll::SidePress {
+		let press = self.side_press;
+		self.side_press = scroll::SidePress::default();
+		press
 	}
 
 	/// True while a drive needs the cursor position, including outside the window.
@@ -1342,7 +1355,8 @@ impl MessagingUi {
 							)
 						});
 						if response.on_hover_text("Friends").clicked() {
-							state.selected = None;
+							state.open_home();
+							self.guild = None;
 							self.search.open = false;
 						}
 					});
@@ -2808,14 +2822,38 @@ impl MessagingUi {
 		}
 		self.timeline.audio.seen = false;
 		self.timeline.video.seen = false;
+		let side = self.drain_side_press();
+		let mut commands = Vec::new();
+		if (side.back || side.forward) && !self.timeline.video.is_fullscreen() {
+			if self.settings.open {
+				if side.back {
+					self.settings.open = false;
+				}
+			} else if self.server_settings.is_open() {
+				if side.back {
+					let _ = self.server_settings.navigate_away(state);
+				}
+			} else {
+				let step = if side.back {
+					state.navigate_back()
+				} else {
+					state.navigate_forward()
+				};
+				if let Some(NavStep {
+					command: Some(command),
+				}) = step
+				{
+					commands.push(command);
+				}
+			}
+		}
 		// Fullscreen playback owns the whole client surface, including during native resizing.
 		if self.timeline.show_fullscreen_video(ui.ctx(), state) {
 			ui.painter()
 				.rect_filled(ui.max_rect(), 0, egui::Color32::BLACK);
-			return Vec::new();
+			return commands;
 		}
 		self.profile_trigger = None;
-		let mut commands = Vec::new();
 		let ctx = ui.ctx().clone();
 		self.extensions.reset_theme_shortcut(&ctx);
 		if self.extensions.has_result() {

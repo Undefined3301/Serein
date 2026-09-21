@@ -225,7 +225,7 @@ impl MessagingUi {
 				design::rail_name(&response, &label);
 				if response.clicked() {
 					self.guild = None;
-					state.selected = None;
+					state.open_home();
 					self.search.open = false;
 				}
 				self.scroll
