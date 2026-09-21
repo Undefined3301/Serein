@@ -1482,7 +1482,7 @@ impl TimelineView {
 			(total + end_padding + pending_rows.iter().map(|(_, height)| height).sum::<f32>()
 				- ui.available_height())
 			.max(0.0);
-		if std::mem::take(&mut self.jump) {
+		if std::mem::take(&mut self.jump) && self.following {
 			self.reveal_scroll = None;
 			self.present_scroll = None;
 			offset = Some(live_edge_offset);
@@ -1558,8 +1558,11 @@ impl TimelineView {
 			};
 			ui.add_space(lead);
 			// Initial bottom alignment can expose more rows after estimates shrink.
+			// Grouped rows measure much shorter than the estimate. On the first
+			// pass at the live edge, look far enough above the window that the
+			// corrected offset does not uncover a new band on the next paint.
 			let overscan = if channel_changed && self.following {
-				viewport.height().max(100.0)
+				viewport.height() * 2.0
 			} else {
 				100.0
 			};
@@ -1577,7 +1580,21 @@ impl TimelineView {
 			let clip = ui.clip_rect();
 			// Measure leading overscan without changing the visible rows or parent bounds.
 			// Its new heights take effect together with anchor restoration next pass.
-			let mut leading = ui.new_child(egui::UiBuilder::new().id_salt("leading-measurements"));
+			// The scroll content's box is only one viewport tall. A child that starts
+			// there and then skips to `top` lays those rows past the box, so they
+			// collapse and the live edge snaps when the real height comes back.
+			let origin = ui.cursor().min;
+			let mut leading = ui.new_child(
+				egui::UiBuilder::new()
+					.id_salt("leading-measurements")
+					.max_rect(egui::Rect::from_min_size(
+						origin,
+						egui::vec2(
+							ui.available_width(),
+							(top + viewport.height() + overscan).max(ui.available_height()),
+						),
+					)),
+			);
 			leading.set_clip_rect(clip.with_max_y(clip.min.y));
 			leading.add_space(top);
 			ui.add_space(anchor_top);
@@ -5553,7 +5570,8 @@ mod tests {
 			assert!(view.following);
 			assert!(
 				view.heights.len() < 60,
-				"Only visible rows and overscan are measured"
+				"Only visible rows and overscan are measured, got {}",
+				view.heights.len()
 			);
 			state
 				.timeline
@@ -6624,5 +6642,142 @@ mod tests {
 		assert!(view.viewing.is_none() && view.revealed.is_empty());
 		assert!(!hidden_again.contains("SPOILER_hidden.png"));
 		assert!(images.take_requests().is_empty());
+	}
+
+	fn label_ys(output: &egui::FullOutput) -> BTreeMap<String, f32> {
+		fn walk(shape: &egui::Shape, out: &mut BTreeMap<String, f32>) {
+			match shape {
+				egui::Shape::Text(text) => {
+					out.insert(text.galley.job.text.clone(), text.pos.y);
+				}
+				egui::Shape::Vec(shapes) => {
+					for shape in shapes {
+						walk(shape, out);
+					}
+				}
+				_ => {}
+			}
+		}
+		let mut labels = BTreeMap::new();
+		for shape in &output.shapes {
+			if shape.clip_rect.is_positive() {
+				walk(&shape.shape, &mut labels);
+			}
+		}
+		labels
+	}
+
+	/// Idle frames at the live edge. A moving label is a bounce the reader can see.
+	#[test]
+	fn idle_bottom_message_positions_stay_put() {
+		for (label, count) in [("long", 80_u64), ("short", 4)] {
+			let mut state = State {
+				selected: Some(Id(20)),
+				revision: 1,
+				demo: true,
+				older_exhausted: true,
+				freshness: model::Freshness::Fresh,
+				..Default::default()
+			};
+			for id in 1..=count {
+				let mut message = text_message(id);
+				message.content = format!(
+					"Row {id}: https://example.com/{id} synthetic idle bottom {}",
+					"extra wrapping text ".repeat(if id % 3 == 0 { 10 } else { 0 })
+				);
+				state.timeline.insert(message, false, false).unwrap();
+			}
+			let ctx = egui::Context::default();
+			crate::design::apply(&ctx);
+			let mut view = TimelineView::default();
+			let mut avatars = crate::avatars::Avatars::default();
+			let mut prev: Option<BTreeMap<String, f32>> = None;
+			let mut moves = Vec::new();
+			for frame in 0..24 {
+				if frame == 16 {
+					state.revision += 1;
+				}
+				let pointer = if frame >= 20 {
+					vec![egui::Event::PointerMoved(egui::pos2(180.0, 520.0))]
+				} else {
+					vec![]
+				};
+				let output = ctx.run_ui(
+					egui::RawInput {
+						screen_rect: Some(egui::Rect::from_min_size(
+							egui::Pos2::ZERO,
+							egui::vec2(900.0, 600.0),
+						)),
+						time: Some(f64::from(frame) / 60.0),
+						focused: true,
+						events: pointer,
+						..Default::default()
+					},
+					|ui| {
+						view.show(
+							ui,
+							&mut state,
+							&mut None,
+							&mut None,
+							(&mut avatars, &mut None),
+							None,
+						);
+					},
+				);
+				let labels = label_ys(&output);
+				let delay = output
+					.viewport_output
+					.values()
+					.next()
+					.map(|viewport| viewport.repaint_delay.as_secs_f32());
+				if let Some(prev) = &prev {
+					let mut worst = 0.0_f32;
+					let mut sample = String::new();
+					for (text, y) in &labels {
+						if !text.starts_with("Row ") || !(80.0..560.0).contains(y) {
+							continue;
+						}
+						if let Some(before) = prev.get(text) {
+							let delta = (y - before).abs();
+							if delta > worst {
+								worst = delta;
+								sample = format!("{text} {before:.2}->{y:.2}");
+							}
+						}
+					}
+					if worst > 0.5 {
+						moves.push(format!(
+							"f{frame} {worst:.2}px {sample} off={:.2} follow={} jump={} reflow={} consec={} repaint={delay:?}",
+							view.scroll_offset,
+							view.following,
+							view.jump,
+							view.reflow_frames,
+							view.consecutive_reflows,
+						));
+					}
+				}
+				prev = Some(labels);
+				output.drop_without_applying_deltas();
+			}
+			println!("{label} moves={}", moves.len());
+			for line in &moves {
+				println!("  {line}");
+			}
+			let late: Vec<_> = moves
+				.iter()
+				.filter(|line| {
+					let frame: i32 = line
+						.trim_start_matches('f')
+						.split_whitespace()
+						.next()
+						.unwrap_or("0")
+						.parse()
+						.unwrap_or(0);
+					frame >= 1
+				})
+				.cloned()
+				.collect();
+			assert!(late.is_empty(), "{label} moved after settle: {late:?}");
+		}
 	}
 }
