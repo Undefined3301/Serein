@@ -946,7 +946,7 @@ fn show_system(
 						.color(colors.muted),
 				)
 				.on_hover_text_with(|| format!("{time} UTC"));
-			surface.keep(&stamp);
+			surface.exclude(stamp.rect);
 		});
 	}
 }
@@ -2063,7 +2063,7 @@ impl TimelineView {
 														.color(colors.muted),
 													)
 													.on_hover_text_with(|| format!("{} UTC", time));
-												surface.keep(&time);
+												surface.exclude(time.rect);
 											},
 										);
 									}
