@@ -119,9 +119,56 @@ pub struct AttachmentPaste {
 	pub image: Option<std::sync::Arc<egui::ColorImage>>,
 }
 
+fn thread_section(
+	state: &State,
+	list: &model::MemberList,
+	member: &model::Member,
+	offline: bool,
+	parent_groups: &[String],
+) -> String {
+	if offline {
+		return "offline".into();
+	}
+	let Some(guild) = list.guild else {
+		return "online".into();
+	};
+	if !parent_groups.is_empty() {
+		return listed_role_section(state, guild, member, parent_groups)
+			.unwrap_or_else(|| "online".into());
+	}
+	state
+		.member_roles(guild, member)
+		.0
+		.map_or_else(|| "online".into(), |role| role.id.to_string())
+}
+
+fn listed_role_section(
+	state: &State,
+	guild: Id,
+	member: &model::Member,
+	parent_groups: &[String],
+) -> Option<String> {
+	let roles = state.guild_roles(guild)?;
+	let mut best: Option<(usize, String)> = None;
+	for role in roles {
+		if role.id == guild || !member.roles.contains(&role.id) {
+			continue;
+		}
+		let id = role.id.to_string();
+		let Some(index) = parent_groups.iter().position(|group| group == &id) else {
+			continue;
+		};
+		if best.as_ref().is_none_or(|(at, _)| index < *at) {
+			best = Some((index, id));
+		}
+	}
+	best.map(|(_, id)| id)
+}
+
 fn thread_member_rows<'a>(
 	state: &'a State,
 	list: &'a model::MemberList,
+	parent_groups: &[String],
 ) -> Vec<(std::borrow::Cow<'a, model::MemberSlot>, Option<u64>)> {
 	use std::borrow::Cow;
 	let mut members: Vec<_> = list
@@ -135,32 +182,38 @@ fn thread_member_rows<'a>(
 			let offline = !profiles::member_presence(state, member, list.guild)
 				.0
 				.is_some_and(|status| matches!(status, "online" | "idle" | "dnd"));
-			let role = list
-				.guild
-				.and_then(|guild| state.member_roles(guild, member).0)
-				.filter(|_| !offline);
-			Some((slot, offline, role))
+			let role = if offline {
+				None
+			} else {
+				list.guild
+					.and_then(|guild| state.member_roles(guild, member).0)
+			};
+			let section = thread_section(state, list, member, offline, parent_groups);
+			Some((slot, offline, role, section))
 		})
 		.collect();
-	members.sort_by(|a, b| {
-		a.1.cmp(&b.1).then_with(|| match (a.2, b.2) {
-			(Some(a), Some(b)) => b.cmp_hierarchy(a),
-			(Some(_), None) => std::cmp::Ordering::Less,
-			(None, Some(_)) => std::cmp::Ordering::Greater,
-			_ => std::cmp::Ordering::Equal,
-		})
-	});
-	let mut rows = Vec::with_capacity(members.len() * 2);
-	for group in members.chunk_by(|a, b| a.1 == b.1 && a.2.map(|r| r.id) == b.2.map(|r| r.id)) {
-		let id = if group[0].1 {
-			"offline".into()
-		} else {
-			group[0]
-				.2
-				.map_or_else(|| "online".into(), |role| role.id.to_string())
+	if parent_groups.is_empty() {
+		members.sort_by(|a, b| {
+			a.1.cmp(&b.1).then_with(|| match (a.2, b.2) {
+				(Some(a), Some(b)) => b.cmp_hierarchy(a),
+				(Some(_), None) => std::cmp::Ordering::Less,
+				(None, Some(_)) => std::cmp::Ordering::Greater,
+				_ => std::cmp::Ordering::Equal,
+			})
+		});
+	} else {
+		let rank = |section: &str| {
+			parent_groups
+				.iter()
+				.position(|id| id == section)
+				.unwrap_or(parent_groups.len() + usize::from(section == "offline"))
 		};
+		members.sort_by_key(|row| rank(&row.3));
+	}
+	let mut rows = Vec::with_capacity(members.len() * 2);
+	for group in members.chunk_by(|a, b| a.3 == b.3) {
 		rows.push((
-			Cow::Owned(model::MemberSlot::Group(id)),
+			Cow::Owned(model::MemberSlot::Group(group[0].3.clone())),
 			Some(group.len() as u64),
 		));
 		rows.extend(group.iter().map(|row| (Cow::Borrowed(row.0), None)));
@@ -268,6 +321,7 @@ pub struct MessagingUi {
 	members_narrow_open: bool,
 	/// Only the open member request's revealed prefix; member data stays in the bounded core cache.
 	member_extent: Option<((u64, Id, u64), usize)>,
+	parent_member_groups: Option<(Id, Vec<String>)>,
 	guild: Option<Id>,
 	navigation_channel: Option<Id>,
 	pub logout_requested: bool,
@@ -1054,12 +1108,28 @@ impl MessagingUi {
 				);
 			}
 		}
-		// Thread snapshots contain people only; paged channel lists supply their own headers.
-		let thread_rows = (!list.lazy
+		// A channel list's group ids are the role headers. A thread snapshot has
+		// neither group rows nor counts, so a thread reuses its parent's ids.
+		let thread = !list.lazy
 			&& state
 				.channel(list.channel)
-				.is_some_and(|channel| matches!(channel.kind, 10..=12)))
-		.then(|| thread_member_rows(state, list));
+				.is_some_and(|channel| matches!(channel.kind, 10..=12));
+		if !thread && !list.groups.is_empty() {
+			self.parent_member_groups = Some((
+				list.channel,
+				list.groups.iter().map(|(id, _)| id.clone()).collect(),
+			));
+		}
+		let parent = state
+			.channel(list.channel)
+			.and_then(|channel| channel.parent_id);
+		let parent_groups = self
+			.parent_member_groups
+			.as_ref()
+			.filter(|(channel, _)| thread && Some(*channel) == parent)
+			.map(|(_, groups)| groups.as_slice())
+			.unwrap_or(&[]);
+		let thread_rows = thread.then(|| thread_member_rows(state, list, parent_groups));
 		let channel = list.channel;
 		let lazy = list.lazy;
 		let start = list.start;
