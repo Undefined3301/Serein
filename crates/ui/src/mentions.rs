@@ -1312,6 +1312,7 @@ pub fn debug_role_mentions_check(state: &mut State) {
 			channel,
 			author,
 			content: format!("<@{}>", user.id),
+			prior_contents: Default::default(),
 			edited: false,
 			edited_at: None,
 			revision: 0,

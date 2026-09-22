@@ -2710,152 +2710,165 @@ impl TimelineView {
 							}
 							self.toolbar = Some((id, toolbar_rect));
 						} else {
-						let toolbar_rect = egui::Rect::from_min_size(
-							egui::pos2(
-								rect.right() - if own { 166.0 } else { 136.0 },
-								rect.top() - 10.0,
-							),
-							egui::vec2(if own { 150.0 } else { 120.0 }, 28.0),
-						);
-						// A child overlay keeps hover from changing wrapping or cached row heights.
-						let mut toolbar = ui.new_child(
-							egui::UiBuilder::new()
-								.id_salt("hover-actions")
-								.max_rect(toolbar_rect)
-								.layout(egui::Layout::left_to_right(egui::Align::Center)),
-						);
-						toolbar.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
-						toolbar.spacing_mut().button_padding = egui::vec2(4.0, 2.0);
-						toolbar.spacing_mut().interact_size.y = 28.0;
-						toolbar
-							.painter()
-							.rect_filled(toolbar_rect, 6.0, colors.raised);
-						toolbar.painter().rect_stroke(
-							toolbar_rect,
-							6.0,
-							egui::Stroke::new(1.0, colors.border),
-							egui::StrokeKind::Inside,
-						);
-						let react = state.can_react(id, None, true)
-							|| message.reactions.as_ref().is_some_and(|items| {
-								items
-									.iter()
-									.any(|r| state.can_react(id, Some(&r.emoji), true))
-							});
-						if let Some((anchor, trigger)) = crate::reactions::add_button(
-							&mut toolbar,
-							react,
-							state.reactions.busy(),
-						) {
-							self.reaction_picker = Some((id, anchor, trigger));
-						}
-						let can_reply = state.can_send(message.channel);
-						let can_edit = !message.unsupported && state.can_edit(message.channel, id);
-						let can_delete = state.can_delete(message.channel, id);
-						if toolbar
-							.add_enabled_ui(can_reply, |ui| {
-								action_button(ui, crate::icons::Icon::Reply, "Reply")
-							})
-							.inner
-							.clicked()
-						{
-							selected_reply = Some(id);
-						}
-						if toolbar
-							.add_enabled_ui(state.can_forward(id), |ui| {
-								action_button(ui, crate::icons::Icon::Forward, "Forward message")
-							})
-							.inner
-							.clicked()
-						{
-							self.forward_request = Some(id);
-						}
-						if own
-							&& toolbar
-								.add_enabled_ui(can_edit, |ui| {
-									action_button(ui, crate::icons::Icon::Pencil, "Edit message")
+							let toolbar_rect = egui::Rect::from_min_size(
+								egui::pos2(
+									rect.right() - if own { 166.0 } else { 136.0 },
+									rect.top() - 10.0,
+								),
+								egui::vec2(if own { 150.0 } else { 120.0 }, 28.0),
+							);
+							// A child overlay keeps hover from changing wrapping or cached row heights.
+							let mut toolbar = ui.new_child(
+								egui::UiBuilder::new()
+									.id_salt("hover-actions")
+									.max_rect(toolbar_rect)
+									.layout(egui::Layout::left_to_right(egui::Align::Center)),
+							);
+							toolbar.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
+							toolbar.spacing_mut().button_padding = egui::vec2(4.0, 2.0);
+							toolbar.spacing_mut().interact_size.y = 28.0;
+							toolbar
+								.painter()
+								.rect_filled(toolbar_rect, 6.0, colors.raised);
+							toolbar.painter().rect_stroke(
+								toolbar_rect,
+								6.0,
+								egui::Stroke::new(1.0, colors.border),
+								egui::StrokeKind::Inside,
+							);
+							let react = state.can_react(id, None, true)
+								|| message.reactions.as_ref().is_some_and(|items| {
+									items
+										.iter()
+										.any(|r| state.can_react(id, Some(&r.emoji), true))
+								});
+							if let Some((anchor, trigger)) = crate::reactions::add_button(
+								&mut toolbar,
+								react,
+								state.reactions.busy(),
+							) {
+								self.reaction_picker = Some((id, anchor, trigger));
+							}
+							let can_reply = state.can_send(message.channel);
+							let can_edit =
+								!message.unsupported && state.can_edit(message.channel, id);
+							let can_delete = state.can_delete(message.channel, id);
+							if toolbar
+								.add_enabled_ui(can_reply, |ui| {
+									action_button(ui, crate::icons::Icon::Reply, "Reply")
 								})
 								.inner
 								.clicked()
-						{
-							*editing = Some((message.channel, id, message.content.clone()));
-							self.edit_started = true;
-						}
-						if can_delete
-							&& !context_menu && toolbar.input(|input| input.modifiers.shift)
-							&& !egui::Popup::is_any_open(toolbar.ctx())
-						{
+							{
+								selected_reply = Some(id);
+							}
 							if toolbar
-								.push_id("quick-delete", |ui| {
+								.add_enabled_ui(state.can_forward(id), |ui| {
 									action_button(
 										ui,
-										crate::icons::Icon::Trash,
-										"Delete message immediately",
+										crate::icons::Icon::Forward,
+										"Forward message",
 									)
 								})
 								.inner
 								.clicked()
 							{
-								self.quick_delete = Some((message.channel, id));
+								self.forward_request = Some(id);
 							}
-						} else {
-							let menu =
-								action_button(&mut toolbar, crate::icons::Icon::More, "More");
-							menu.widget_info(|| {
-								egui::WidgetInfo::labeled(
-									egui::Role::Button,
-									toolbar.is_enabled(),
-									format!("Message actions for {}", message.author.name),
-								)
-							});
-							let mut popup = egui::Popup::menu(&menu);
-							if context_menu {
-								popup = popup.open_memory(Some(egui::SetOpenCommand::Bool(true)));
-							}
-							if context_menu
-								|| (!menu.clicked()
-									&& egui::Popup::position_of_id(toolbar.ctx(), popup.get_id())
-										.is_some())
+							if own
+								&& toolbar
+									.add_enabled_ui(can_edit, |ui| {
+										action_button(
+											ui,
+											crate::icons::Icon::Pencil,
+											"Edit message",
+										)
+									})
+									.inner
+									.clicked()
 							{
-								popup = popup.at_pointer_fixed();
+								*editing = Some((message.channel, id, message.content.clone()));
+								self.edit_started = true;
 							}
-							message_actions(
-								popup,
-								(
-									message,
-									&self.extension_actions,
-									&mut self.extension_request,
-								),
-								(own, can_reply, can_edit, can_delete),
-								(
-									can_mark_read.then_some(&mut self.mark_read),
-									can_mark_unread.then_some(&mut self.mark_unread),
-									&mut selected_reply,
-								),
-								(editing, &mut self.edit_started),
-								deleting,
-								(
-									state.can_pin(message.channel, id),
-									state.is_pinned(message.channel, id),
-									&mut self.pin_request,
-								),
-								(
-									state.can_create_thread(message.channel)
-										&& state.thread_of(message).is_none(),
-									&mut self.thread_request,
-								),
-								(state.can_forward(id), &mut self.forward_request),
-								message
-									.reactions
-									.as_ref()
-									.filter(|_| state.can_read_history(message.channel))
-									.and_then(|items| items.first())
-									.map(|reaction| {
-										(reaction.emoji.clone(), &mut self.reaction_users)
-									}),
-							);
-						}
-						self.toolbar = Some((id, toolbar_rect));
+							if can_delete
+								&& !context_menu && toolbar.input(|input| input.modifiers.shift)
+								&& !egui::Popup::is_any_open(toolbar.ctx())
+							{
+								if toolbar
+									.push_id("quick-delete", |ui| {
+										action_button(
+											ui,
+											crate::icons::Icon::Trash,
+											"Delete message immediately",
+										)
+									})
+									.inner
+									.clicked()
+								{
+									self.quick_delete = Some((message.channel, id));
+								}
+							} else {
+								let menu =
+									action_button(&mut toolbar, crate::icons::Icon::More, "More");
+								menu.widget_info(|| {
+									egui::WidgetInfo::labeled(
+										egui::Role::Button,
+										toolbar.is_enabled(),
+										format!("Message actions for {}", message.author.name),
+									)
+								});
+								let mut popup = egui::Popup::menu(&menu);
+								if context_menu {
+									popup =
+										popup.open_memory(Some(egui::SetOpenCommand::Bool(true)));
+								}
+								if context_menu
+									|| (!menu.clicked()
+										&& egui::Popup::position_of_id(
+											toolbar.ctx(),
+											popup.get_id(),
+										)
+										.is_some())
+								{
+									popup = popup.at_pointer_fixed();
+								}
+								message_actions(
+									popup,
+									(
+										message,
+										&self.extension_actions,
+										&mut self.extension_request,
+									),
+									(own, can_reply, can_edit, can_delete),
+									(
+										can_mark_read.then_some(&mut self.mark_read),
+										can_mark_unread.then_some(&mut self.mark_unread),
+										&mut selected_reply,
+									),
+									(editing, &mut self.edit_started),
+									deleting,
+									(
+										state.can_pin(message.channel, id),
+										state.is_pinned(message.channel, id),
+										&mut self.pin_request,
+									),
+									(
+										state.can_create_thread(message.channel)
+											&& state.thread_of(message).is_none(),
+										&mut self.thread_request,
+									),
+									(state.can_forward(id), &mut self.forward_request),
+									message
+										.reactions
+										.as_ref()
+										.filter(|_| state.can_read_history(message.channel))
+										.and_then(|items| items.first())
+										.map(|reaction| {
+											(reaction.emoji.clone(), &mut self.reaction_users)
+										}),
+								);
+							}
+							self.toolbar = Some((id, toolbar_rect));
 						}
 					}
 					if selected_reply.or(state.reply_target()) == Some(id)
