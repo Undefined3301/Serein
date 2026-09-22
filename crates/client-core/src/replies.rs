@@ -218,7 +218,6 @@ mod tests {
 				discriminator: 0,
 			},
 			content: "Synthetic reply".into(),
-			prior_contents: Default::default(),
 			reactions: Some(vec![]),
 			author_nick: None,
 			author_roles: vec![],

@@ -178,7 +178,6 @@ mod tests {
 				discriminator: 0,
 			}],
 			content: "general".into(),
-			prior_contents: Default::default(),
 			reactions: None,
 			id: Id(1),
 			channel: Id(2),

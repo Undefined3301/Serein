@@ -299,35 +299,6 @@ pub struct ChannelPatch {
 	pub kind: Patch<u8>,
 	pub message_count: Patch<u32>,
 }
-/// Session-only older wording, oldest first. Empty on wire parse and SQLite load.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct PriorContents {
-	lines: Vec<String>,
-}
-
-impl PriorContents {
-	pub const MAX: usize = 8;
-
-	pub fn as_slice(&self) -> &[String] {
-		&self.lines
-	}
-
-	pub fn bytes(&self) -> usize {
-		self.lines.iter().map(String::capacity).sum::<usize>()
-			+ self.lines.capacity() * size_of::<String>()
-	}
-
-	pub fn push_line(&mut self, line: String) {
-		if self.lines.last().is_some_and(|last| *last == line) {
-			return;
-		}
-		self.lines.push(line);
-		while self.lines.len() > Self::MAX {
-			self.lines.remove(0);
-		}
-	}
-}
-
 /// The command invocation that produced an application response message.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Interaction {
@@ -359,8 +330,6 @@ pub struct Message {
 	/// Guild nickname supplied with this message.
 	pub author_nick: Option<String>,
 	pub content: String,
-	/// Session-only prior wording; never serialized to Discord or SQLite.
-	pub prior_contents: PriorContents,
 	pub mentions: Vec<User>,
 	/// Session-only service notification metadata; never inferred from message text.
 	pub mention_roles: Vec<Id>,
@@ -416,7 +385,6 @@ impl Message {
 			+ self.reactions.as_ref().map_or(0, |r| {
 				reaction_bytes(r) + r.capacity().saturating_sub(r.len()) * size_of::<Reaction>()
 			}) + self.content.capacity()
-			+ self.prior_contents.bytes()
 			+ self.author.heap_bytes()
 			+ self.interaction.as_ref().map_or(0, |i| i.heap_bytes())
 			+ self.author_nick.as_ref().map_or(0, String::capacity)

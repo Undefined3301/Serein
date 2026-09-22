@@ -3064,16 +3064,12 @@ impl State {
 				}
 			}
 			Event::Patch(mut p) => {
-				let fresh_content = !matches!(p.content, Patch::Absent)
+				if !matches!(p.content, Patch::Absent)
 					&& self.timeline.get(p.id).is_some_and(
 						|old| !matches!(p.edited, Patch::Value(at) if old.edited_at.is_some_and(|old| at < old)),
-					);
-				let own_previous = fresh_content
-					.then(|| {
-						self.message_actions
-							.take_unobserved_previous(p.channel, p.id)
-					})
-					.flatten();
+					) {
+					self.message_actions.observe_content(p.channel, p.id);
+				}
 				if self.selected == Some(p.channel)
 					&& self.reactions.invalidated(p.id)
 					&& !matches!(p.reactions, Patch::Absent)
@@ -3087,37 +3083,6 @@ impl State {
 					&& self.can_view(p.channel)
 					&& self.freshness != Freshness::Unavailable
 				{
-					if self.timeline.get_display(p.id).is_some()
-						&& let Patch::Value(content) =
-							std::mem::replace(&mut p.content, Patch::Absent)
-					{
-						let edited_at = match p.edited {
-							Patch::Value(at) => Some(at),
-							Patch::Null => None,
-							Patch::Absent => {
-								self.timeline.get_display(p.id).and_then(|m| m.edited_at)
-							}
-						};
-						if let Some(previous) = own_previous.filter(|previous| previous != &content)
-						{
-							let _ = self.timeline.observe_content(
-								p.id,
-								session_cache::ContentRevision {
-									content: content.clone(),
-									edited_at,
-									source: session_cache::ContentSource::OwnConfirm { previous },
-								},
-							);
-						}
-						let _ = self.timeline.observe_content(
-							p.id,
-							session_cache::ContentRevision {
-								content,
-								edited_at,
-								source: session_cache::ContentSource::Observed,
-							},
-						);
-					}
 					self.timeline.patch(p)
 				} else {
 					Ok(())
@@ -4854,7 +4819,6 @@ mod tests {
 				discriminator: 0,
 			},
 			content: "Synthetic history".into(),
-			prior_contents: Default::default(),
 			edited: false,
 			edited_at: None,
 			revision: 0,

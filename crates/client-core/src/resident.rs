@@ -255,7 +255,6 @@ mod tests {
 				discriminator: 0,
 			},
 			content: "Resident synthetic content".into(),
-			prior_contents: Default::default(),
 			reactions: Some(vec![]),
 			author_nick: None,
 			author_roles: vec![],

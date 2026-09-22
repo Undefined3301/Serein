@@ -106,7 +106,6 @@ pub struct TimelineView {
 	// A fingerprint of the revealed content prevents a reload that resets model revisions from
 	// revealing edits, without cloning payloads. Pruned with the active window: at most 500 records.
 	revealed: BTreeMap<Id, Revealed>,
-	prior_revealed: BTreeMap<(Id, u16), (u64, u32)>,
 	pub(super) viewing: Option<(Id, Id)>,
 	/// Fixture-only: viewer to open once its message has arrived in the timeline.
 	pending_viewer: Option<(Id, Id)>,
@@ -278,9 +277,6 @@ fn layout_key(message: &Message) -> u64 {
 	// A layout fingerprint only; spoiler visibility uses exact text instead.
 	let mut key = DefaultHasher::new();
 	message.content.hash(&mut key);
-	for prior in message.prior_contents.as_slice() {
-		prior.hash(&mut key);
-	}
 	for user in &message.mentions {
 		user.id.hash(&mut key);
 		user.name.hash(&mut key);
@@ -1429,8 +1425,6 @@ impl TimelineView {
 			self.revealed.retain(|id, content| {
 				display_message(state, *id).is_some_and(|m| content.matches(m))
 			});
-			self.prior_revealed
-				.retain(|(id, _), _| row_ids.binary_search(id).is_ok());
 			let mut previous = None;
 			let mut lead_basis = 0.0;
 			let mut stale_heights = Vec::new();
@@ -2207,70 +2201,6 @@ impl TimelineView {
 														.color(colors.muted),
 												);
 												ui.add_space(4.0);
-											}
-											for (index, prior) in
-												message.prior_contents.as_slice().iter().enumerate()
-											{
-												let part =
-													u16::try_from(index + 1).unwrap_or(u16::MAX);
-												let mut fingerprint = DefaultHasher::new();
-												prior.hash(&mut fingerprint);
-												let fingerprint = fingerprint.finish();
-												let mut revealed = self
-													.prior_revealed
-													.get(&(id, part))
-													.filter(|(stored, _)| *stored == fingerprint)
-													.map(|(_, bits)| *bits)
-													.unwrap_or(0);
-												let before = revealed;
-												{
-													let formatted =
-														self.formatted.get_part(id, part, prior);
-													ui.scope(|ui| {
-														ui.visuals_mut().override_text_color =
-															Some(colors.muted);
-														let mut surface =
-															crate::select::Surface::new(
-																ui, "prior",
-															);
-														let source =
-															crate::mentions::MentionSource {
-																state,
-																channel: message.channel,
-															};
-														formatted.show_references(
-															ui,
-															&mut self.opening,
-															&message.mentions,
-															Some(&source),
-															profile,
-															(
-																&state.channels,
-																&mut self.channel_reference,
-																&state.guilds,
-																crate::mentions::known_roles(
-																	state,
-																	message.channel,
-																),
-															),
-															(avatars, state.demo, &mut revealed),
-															&mut surface,
-														);
-														surface.finish(ui);
-													});
-												}
-												if revealed == 0 {
-													self.prior_revealed.remove(&(id, part));
-												} else {
-													self.prior_revealed.insert(
-														(id, part),
-														(fingerprint, revealed),
-													);
-												}
-												if revealed != before {
-													self.heights.remove(&id);
-													ui.ctx().request_repaint();
-												}
 											}
 											let body_color = if deleted
 												&& !self.suppressed_deleted_highlight.contains(&id)
@@ -4099,7 +4029,6 @@ mod tests {
 				primary_guild: None,
 			},
 			content: "Synthetic text with enough words to wrap in a narrow viewport.".into(),
-			prior_contents: Default::default(),
 			edited: false,
 			edited_at: None,
 			revision: 0,
@@ -7100,13 +7029,11 @@ mod tests {
 	}
 	#[test]
 	fn channel_rename_invalidates_offscreen_reference_heights() {
-		for prior in [false, true] {
-			check_channel_rename_heights(prior);
-		}
+		check_channel_rename_heights();
 	}
 
-	fn check_channel_rename_heights(prior: bool) {
-		let mut message = Message {
+	fn check_channel_rename_heights() {
+		let message = Message {
 			sticker_items: vec![],
 			id: Id(1),
 			channel: Id(2),
@@ -7120,7 +7047,6 @@ mod tests {
 				primary_guild: None,
 			},
 			content: "<#4> ".repeat(12),
-			prior_contents: Default::default(),
 			author_nick: None,
 			author_roles: vec![],
 			mention_roles: vec![],
@@ -7147,11 +7073,6 @@ mod tests {
 			embeds_suppressed: false,
 			attachments: vec![],
 		};
-		if prior {
-			message
-				.prior_contents
-				.push_line(std::mem::take(&mut message.content));
-		}
 		let message_key = layout_key(&message);
 		let mut tail = message.clone();
 		tail.id = Id(2);
@@ -7304,7 +7225,6 @@ mod tests {
 				primary_guild: None,
 			},
 			content: "||old revealed content||".into(),
-			prior_contents: Default::default(),
 			edited: false,
 			edited_at: None,
 			revision: 0,
@@ -7405,7 +7325,6 @@ mod tests {
 				primary_guild: None,
 			},
 			content: "Ordinary text".into(),
-			prior_contents: Default::default(),
 			edited: false,
 			edited_at: None,
 			revision: 0,

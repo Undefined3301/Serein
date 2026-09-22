@@ -6,25 +6,6 @@ pub const MAX_MESSAGES: usize = 500;
 pub const MAX_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_MUTATIONS: usize = 1024;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ContentSource {
-	/// Local optimistic body change; never records a prior.
-	Optimistic,
-	/// Service-observed content; push the stored body when it differs.
-	Observed,
-	/// Own edit acknowledgment; push `previous` once when it differs.
-	OwnConfirm { previous: String },
-	/// Restore pre-optimistic body; never records a prior.
-	Rollback,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ContentRevision {
-	pub content: String,
-	pub edited_at: Option<i128>,
-	pub source: ContentSource,
-}
-
 fn keep_author_membership(message: &mut Message, roles: &[Id], nick: Option<&str>) {
 	if message.author_roles.is_empty() && !roles.is_empty() {
 		message.author_roles = roles.to_vec();
@@ -36,37 +17,6 @@ fn keep_author_membership(message: &mut Message, roles: &[Id], nick: Option<&str
 	}
 }
 
-fn records_prior(message: &Message) -> bool {
-	!message.forwarded && !message.is_system()
-}
-
-fn apply_edited_at(message: &mut Message, edited_at: Option<i128>) {
-	match edited_at {
-		Some(at) => {
-			message.edited = true;
-			message.edited_at = Some(at);
-		}
-		None => {
-			message.edited = false;
-			message.edited_at = None;
-		}
-	}
-}
-
-fn record_observed_prior(message: &mut Message, previous: &str, next: &str) {
-	if !records_prior(message) || previous == next {
-		return;
-	}
-	if message
-		.prior_contents
-		.as_slice()
-		.last()
-		.is_some_and(|last| last == previous)
-	{
-		return;
-	}
-	message.prior_contents.push_line(previous.to_owned());
-}
 #[derive(Default)]
 pub struct Timeline {
 	// None preserves only the position of a message deleted while it was loaded.
@@ -287,18 +237,6 @@ impl Timeline {
 				&previous.author_roles,
 				previous.author_nick.as_deref(),
 			);
-			let mut priors = previous.prior_contents.clone();
-			if previous.content != message.content
-				&& records_prior(previous)
-				&& records_prior(&message)
-				&& priors
-					.as_slice()
-					.last()
-					.is_none_or(|last| last != &previous.content)
-			{
-				priors.push_line(previous.content.clone());
-			}
-			message.prior_contents = priors;
 			message.revision = previous.revision
 				+ u64::from(
 					previous.content != message.content
@@ -314,8 +252,7 @@ impl Timeline {
 						|| previous.attachments != message.attachments
 						|| previous.embeds_suppressed != message.embeds_suppressed
 						|| previous.author_roles != message.author_roles
-						|| previous.author_nick != message.author_nick
-						|| previous.prior_contents != message.prior_contents,
+						|| previous.author_nick != message.author_nick,
 				);
 		}
 		self.bytes += message.bytes();
@@ -428,72 +365,6 @@ impl Timeline {
 		self.changed.clear();
 		self.patches.clear();
 		self.patch_bytes = 0;
-		Ok(())
-	}
-	/// Sole writer that may append to `Message::prior_contents`.
-	pub fn observe_content(
-		&mut self,
-		id: Id,
-		revision: ContentRevision,
-	) -> Result<(), &'static str> {
-		if self.deleted.contains(&id) {
-			return Ok(());
-		}
-		if revision.content.len() > 64 * 1024 {
-			return Err("Message patch exceeds capacity");
-		}
-		self.remember(id)?;
-		let retained = self.row_bytes();
-		let Some(message) = self.messages.get_mut(&id).and_then(Option::as_mut) else {
-			return Ok(());
-		};
-		let before = message.bytes();
-		let restore_content = message.content.clone();
-		let restore_priors = message.prior_contents.clone();
-		let restore_edited = (message.edited, message.edited_at);
-		match &revision.source {
-			ContentSource::Optimistic | ContentSource::Rollback => {
-				message.content.clone_from(&revision.content);
-			}
-			ContentSource::Observed => {
-				if matches!(
-					revision.edited_at,
-					Some(new) if message.edited_at.is_some_and(|old| new < old)
-				) {
-					return Ok(());
-				}
-				if message.forwarded {
-					return Ok(());
-				}
-				let previous = message.content.clone();
-				record_observed_prior(message, &previous, &revision.content);
-				message.content.clone_from(&revision.content);
-				apply_edited_at(message, revision.edited_at);
-			}
-			ContentSource::OwnConfirm { previous } => {
-				if previous.as_str() != revision.content
-					&& message
-						.prior_contents
-						.as_slice()
-						.last()
-						.is_none_or(|last| last != previous)
-				{
-					message.prior_contents.push_line(previous.clone());
-				}
-				message.content.clone_from(&revision.content);
-				apply_edited_at(message, revision.edited_at);
-			}
-		}
-		let after = message.bytes();
-		if retained - before + after > MAX_BYTES {
-			message.content = restore_content;
-			message.prior_contents = restore_priors;
-			message.edited = restore_edited.0;
-			message.edited_at = restore_edited.1;
-			return Err("Message exceeds timeline capacity");
-		}
-		message.revision += 1;
-		self.bytes = self.bytes - before + after;
 		Ok(())
 	}
 	pub fn patch(&mut self, patch: MessagePatch) -> Result<(), &'static str> {
@@ -1274,7 +1145,6 @@ mod tests {
 				name: "Synthetic".into(),
 			},
 			content: "before".into(),
-			prior_contents: Default::default(),
 			edited: false,
 			edited_at: None,
 			revision: 0,

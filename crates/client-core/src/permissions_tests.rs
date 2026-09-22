@@ -277,7 +277,6 @@ fn message(id: u64, channel: Id) -> Message {
 		kind: 0,
 		author: user(),
 		content: "Synthetic server content".into(),
-		prior_contents: Default::default(),
 		reactions: Some(vec![]),
 		edited: false,
 		edited_at: None,

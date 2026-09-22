@@ -1042,7 +1042,6 @@ mod tests {
 				..owner.clone()
 			},
 			content: "Synthetic".into(),
-			prior_contents: Default::default(),
 			mentions: vec![owner.clone()],
 			author_nick: None,
 			author_roles: vec![],

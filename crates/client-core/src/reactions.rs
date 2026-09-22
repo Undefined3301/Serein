@@ -1317,7 +1317,6 @@ mod tests {
 					channel: Id(10),
 					author: user,
 					content: "Synthetic".into(),
-					prior_contents: Default::default(),
 					reactions: Some(vec![]),
 					author_nick: None,
 					author_roles: vec![],

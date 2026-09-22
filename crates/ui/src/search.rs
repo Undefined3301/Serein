@@ -958,7 +958,6 @@ impl SearchUi {
 				author_roles: vec![],
 				author_nick: None,
 				content: String::new(),
-				prior_contents: Default::default(),
 				mentions: vec![],
 				mention_roles: vec![],
 				mention_everyone: false,
