@@ -546,6 +546,11 @@ Offline SQLite tests exercise real temporary-file reopen, schema upgrade, appear
 
 A process-write trace was attempted with `sudo -n fs_usage -w -f filesys -t 3 <synthetic-app-pid>`; the OS returned “a password is required.” No trace was obtained. The account/cache code and synthetic SQLite files were tested, but actual process-write behavior is not certified.
 
+Avatar request tracking retains at most 2,048 keys of at most 2,054 bytes each
+(4,206,592 key bytes, plus bounded map metadata). Pending entries remain tracked
+until completion; capacity defers new requests rather than evicting pending work.
+Failed entries expire five seconds after failure, permitting an on-demand retry.
+
 Current image limits include the GIF and larger-viewer features added after September 10.
 One worker decodes serially while up to four credential-free downloads overlap, with
 128 bounded keys waiting and two decoded results queued. Ordinary encoded bodies are
@@ -557,6 +562,9 @@ allocations and 128×128 output. Previews/banners use 1024×1024 source, 8 MiB d
 allocations and a 512-pixel output edge. Larger-viewer images allow 4096×4096 source,
 96 MiB decoder allocations and a 2048-pixel output edge (16 MiB RGBA per image).
 GIF/WebP animations retain at most 80 frames with a 160-pixel edge, about 8 MiB per clip.
+Animation source dimensions are capped at 2048×2048, with a 48 MiB decoder allocation
+budget for the persistent RGBA canvas, current frame and composited output canvas.
+Resized retained frames, encoded input and library overhead are additional.
 Two queued large stills can retain 32 MiB of decoded pixels; active decoding, image
 conversion and framework/driver allocations are additional. Shared textures are bounded
 by 256 entries / 64 MiB, with a separate four-animation / 16 MiB retained-pixel budget.

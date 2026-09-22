@@ -2690,20 +2690,45 @@ pub fn slider<T: egui::emath::Numeric>(
 			Color32::from_black_alpha(if enabled { 40 } else { 15 }),
 		),
 	);
-	let pill = egui::Rect::from_min_max(
-		egui::pos2(rect.right() - readout_width, rect.top() + 2.0),
-		egui::pos2(rect.right(), rect.bottom() - 2.0),
+	let pill = egui::Rect::from_center_size(
+		egui::pos2(rect.right() - readout_width * 0.5, track.center().y),
+		egui::vec2(readout_width, 20.0),
 	);
-	let editor = ui.put(
-		pill,
-		egui::DragValue::new(value)
-			.clip_text(true)
-			.range(range)
-			.speed(if T::INTEGRAL { 1.0 } else { span / 100.0 })
-			.fixed_decimals(if T::INTEGRAL { 0 } else { 1 })
-			.suffix(suffix)
-			.update_while_editing(false),
-	);
+	let fmt_suffix = suffix.to_string();
+	let parse_suffix = fmt_suffix.clone();
+	let editor = ui
+		.scope_builder(
+			egui::UiBuilder::new().max_rect(pill).layout(
+				egui::Layout::top_down(egui::Align::Max)
+					.with_main_justify(true)
+					.with_cross_justify(true),
+			),
+			|ui| {
+				ui.spacing_mut().interact_size.y = 20.0;
+				ui.spacing_mut().button_padding.y = 0.0;
+				ui.spacing_mut().button_padding.x = 4.0;
+				ui.add(
+					egui::DragValue::new(value)
+						.clip_text(true)
+						.range(range)
+						.speed(if T::INTEGRAL { 1.0 } else { span / 100.0 })
+						.fixed_decimals(if T::INTEGRAL { 0 } else { 1 })
+						.custom_formatter(move |n, _| {
+							if T::INTEGRAL {
+								format!("{}{fmt_suffix}", n.round() as i64)
+							} else {
+								format!("{n:.1}{fmt_suffix}")
+							}
+						})
+						.custom_parser(move |text| {
+							let trimmed = text.trim().trim_end_matches(&parse_suffix).trim();
+							trimmed.parse::<f64>().ok()
+						})
+						.update_while_editing(false),
+				)
+			},
+		)
+		.inner;
 	if enabled && (response.hovered() || response.dragged()) {
 		ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
 	}
@@ -2712,6 +2737,7 @@ pub fn slider<T: egui::emath::Numeric>(
 
 /// Offline pointer/keyboard check for the shared settings control.
 #[cfg(debug_assertions)]
+#[test]
 pub fn debug_slider_check() {
 	let ctx = egui::Context::default();
 	apply(&ctx);
