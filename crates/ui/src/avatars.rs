@@ -393,20 +393,32 @@ impl Avatars {
 		gif: &model::Gif,
 		demo: bool,
 	) -> Option<(egui::TextureId, [usize; 2])> {
-		let animated = self.animate_gifs
-			&& gif.preview.ends_with(".gif")
-			&& model::valid_gif_url(&gif.preview);
-		let key = if animated {
-			format!("anim:{}", gif.preview)
-		} else {
-			format!("gif:{}", gif.preview)
-		};
-		let animated_texture = self.advance_animation(ctx, &key, false);
 		#[cfg(any(test, feature = "demo"))]
-		if demo && gif.preview.contains("/synthetic/") && !self.textures.contains_key(&key) {
-			self.attempts.insert(key.clone(), (Instant::now(), false));
-			self.accept(ctx, key.clone(), Some(synthetic_gif(gif)));
+		if demo && gif.preview.contains("/synthetic/") {
+			let key = self.preview_key(&gif.preview);
+			if !self.textures.contains_key(&key) {
+				self.attempts.insert(key.clone(), (Instant::now(), false));
+				self.accept(ctx, key, Some(synthetic_gif(gif)));
+			}
 		}
+		self.preview_texture(ctx, &gif.preview, demo)
+	}
+	fn preview_key(&self, preview: &str) -> String {
+		if self.animate_gifs && (preview.ends_with(".gif") || preview.ends_with(".webp")) {
+			format!("anim:{preview}")
+		} else {
+			format!("gif:{preview}")
+		}
+	}
+	/// Provider artwork such as a GIF category tile; it plays when animation is enabled.
+	pub(crate) fn preview_texture(
+		&mut self,
+		ctx: &egui::Context,
+		preview: &str,
+		demo: bool,
+	) -> Option<(egui::TextureId, [usize; 2])> {
+		let key = self.preview_key(preview);
+		let animated_texture = self.advance_animation(ctx, &key, false);
 		if let Some(entry) = self.textures.get_mut(&key) {
 			self.clock += 1;
 			entry.0 = self.clock;

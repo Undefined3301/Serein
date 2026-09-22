@@ -1,6 +1,6 @@
 //! Tenor results relayed by `/gifs/search` and `/gifs/trending`. Unofficial: the official
 //! developer reference does not document these normal-client routes.
-use model::{GIF_CATEGORIES, GIF_PAGE_SIZE, Gif, GifPage};
+use model::{GIF_CATEGORIES, GIF_PAGE_SIZE, Gif, GifCategory, GifPage};
 use serde::{
 	Deserialize, Deserializer,
 	de::{IgnoredAny, SeqAccess, Visitor},
@@ -14,9 +14,6 @@ pub struct GifDto {
 	#[serde(default)]
 	title: String,
 	url: String,
-	/// The requested small rendition (`media_format=tinygif`).
-	#[serde(default)]
-	src: Option<String>,
 	#[serde(default)]
 	gif_src: Option<String>,
 	#[serde(default)]
@@ -29,6 +26,8 @@ pub struct GifDto {
 #[derive(Deserialize)]
 struct CategoryDto {
 	name: String,
+	#[serde(default)]
+	src: Option<String>,
 }
 #[derive(Deserialize)]
 pub struct SearchReply(#[serde(deserialize_with = "truncated::<_, _, GIF_PAGE_SIZE>")] Vec<GifDto>);
@@ -71,12 +70,14 @@ fn into_gifs(gifs: Vec<GifDto>) -> Vec<Gif> {
 		if !model::valid_gif_url(&gif.url) {
 			continue;
 		}
-		// The picker animates the small GIF; `gif_src` is the full-size original for sharing.
-		let Some(preview) = gif
-			.src
-			.filter(|src| model::valid_gif_preview(src) && src.ends_with(".gif"))
-			.or(gif.preview)
-		else {
+		// KLIPY's `preview` GIF is often several megabytes; its `gif_src` WebP is the same
+		// clip at a fraction of the size, so the picker shows that instead.
+		let webp = gif
+			.gif_src
+			.as_ref()
+			.filter(|src| src.ends_with(".webp") && model::valid_gif_preview(src))
+			.cloned();
+		let Some(preview) = webp.or(gif.preview) else {
 			continue;
 		};
 		let gif = Gif {
@@ -110,14 +111,15 @@ impl SearchReply {
 }
 impl TrendingReply {
 	pub fn into_page(self) -> Result<GifPage, &'static str> {
-		let mut categories: Vec<String> = Vec::with_capacity(self.categories.len());
+		let mut categories: Vec<GifCategory> = Vec::with_capacity(self.categories.len());
 		for category in self.categories {
-			let name: String = category.name.trim().chars().take(64).collect();
-			if !name.is_empty()
-				&& !name.chars().any(char::is_control)
-				&& !categories.contains(&name)
-			{
-				categories.push(name);
+			let category = GifCategory {
+				name: category.name.trim().chars().take(64).collect(),
+				// Unusable artwork leaves the flat tile rather than dropping the category.
+				preview: category.src.filter(|src| model::valid_gif_preview(src)),
+			};
+			if category.valid() && !categories.iter().any(|known| known.name == category.name) {
+				categories.push(category);
 			}
 		}
 		let page = GifPage {
@@ -171,7 +173,13 @@ mod tests {
 			.unwrap()
 			.into_page()
 			.unwrap();
-		assert_eq!(page.categories, vec!["happy".to_owned()]);
+		assert_eq!(
+			page.categories,
+			vec![GifCategory {
+				name: "happy".into(),
+				preview: Some("https://media.tenor.com/c.gif".into()),
+			}]
+		);
 		assert_eq!(page.gifs.len(), 1);
 		assert!(
 			crate::decode::<TrendingReply>(b"{}")

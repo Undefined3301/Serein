@@ -66,7 +66,10 @@ pub fn gif_page(query: Option<&str>) -> model::GifPage {
 				"Thank you",
 			]
 			.into_iter()
-			.map(str::to_owned)
+			.map(|name| model::GifCategory {
+				name: name.to_owned(),
+				preview: None,
+			})
 			.collect()
 		} else {
 			Vec::new()
