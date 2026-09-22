@@ -1077,7 +1077,7 @@ impl MessagingUi {
 		let start = list.start;
 		let guild = list.guild;
 		let guild_or_channel = guild.unwrap_or(channel);
-		let member_key = (state.generation, guild_or_channel, list.request);
+		let member_key = (state.generation, channel, list.request);
 		let reset_scroll = self.member_pane_key.is_none_or(|key| key != member_key);
 		if reset_scroll {
 			self.member_pane_key = Some(member_key);
