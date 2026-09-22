@@ -2983,10 +2983,6 @@ impl State {
 			self.read_state.forget(*id);
 			self.forget_direct_inbox(*id);
 		}
-		if !removed.is_empty() {
-			self.clear_profile();
-			self.profile_cache.clear();
-		}
 		if self.selected.is_some_and(|id| removed.contains(&id)) {
 			self.clear_search();
 			self.search_target = None;
