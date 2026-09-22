@@ -3276,11 +3276,13 @@ impl MessagingUi {
 					ui.painter().rect_filled(ui.max_rect(), 0, message_surface);
 				}
 				let warnings = state.startup_warnings;
+				if !warnings.presence {
+					self.friends.presence_warning_dismissed = None;
+				}
 				let unavailable: Vec<_> = [
 					(warnings.read_state, "read status"),
 					(warnings.notifications, "notification settings"),
 					(warnings.sessions, "session status"),
-					(warnings.presence, "friend presence"),
 					(warnings.emojis, "some server emoji"),
 					(warnings.stickers, "some server stickers"),
 				]
@@ -3464,6 +3466,8 @@ impl MessagingUi {
 					.show(ui, |ui| {
 						design::paint_chat_background(ui, ui.available_rect_before_wrap());
 						self.timeline.hide_media_links = self.reading_preferences.hide_media_links;
+						self.timeline.instant_scrolling =
+							!self.reading_preferences.smooth_scrolling;
 						self.timeline.extension_actions = self.extensions.message_actions();
 						let mut seen = std::collections::BTreeSet::new();
 						let author_lookup: Vec<_> = state
