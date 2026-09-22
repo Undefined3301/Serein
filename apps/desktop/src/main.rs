@@ -72,6 +72,7 @@ fn main() -> eframe::Result {
 	if std::env::args().any(|arg| arg == "--demo")
 		&& std::env::args().any(|arg| arg == "--demo-check-spotify")
 	{
+		spotify::debug_check();
 		discord_api::spotify::debug_check();
 		discord_gateway::debug_spotify_check();
 		return Ok(());

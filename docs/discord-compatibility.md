@@ -1671,7 +1671,8 @@ Artwork uses the existing credential-free, redirect-free bounded image worker an
 account-isolated image cache, with the existing 1024px decode limit for media previews.
 Normal-account behavior and live artwork delivery remain unverified.
 
-Serein also polls the linked Spotify account every 15 seconds while visible, independently
+Serein also polls the linked Spotify account at most every 15 seconds while visible (sooner
+at track end, with a one-second minimum interval), independently
 of local game detection. It reads the connection's `show_activity` preference, obtains a
 session-only bearer through Discord's unofficial connection access-token endpoint, and reads
 Spotify's [`GET /v1/me/player`](https://developer.spotify.com/documentation/web-api/reference/get-information-about-the-users-current-playback).
@@ -1683,6 +1684,8 @@ Paused, private, local-file, ad, episode, unavailable or failed playback clears 
 Invisible stops polling and clears publication. Spotify shares the existing rate-limited Gateway
 sender alongside games/custom status. The local profile previews Spotify when no game is active.
 Unlinking or disabling Spotify activity is detected on the next poll; service cooldowns apply.
+Track-end polls retain the previous activity while awaiting the next response, with a
+10–30 second request timeout instead of cancelling immediately at the old track deadline.
 The offline debug command is `cargo run --locked -p serein --features demo -- --demo --demo-check-spotify`.
 
 ### Outgoing message forwarding

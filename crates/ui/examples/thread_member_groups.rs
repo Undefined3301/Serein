@@ -74,9 +74,12 @@ fn main() {
 		.collect();
 	list.total = 3;
 	let ctx = egui::Context::default();
+	ui::design::apply(&ctx);
 	let mut view = ui::MessagingUi::default();
 	view.reading_preferences.show_members = true;
 	let mut painted = Vec::new();
+	let mut name_rect = egui::Rect::NOTHING;
+	let mut subtitle_rect = egui::Rect::NOTHING;
 	for _ in 0..3 {
 		painted.clear();
 		let output = ctx.run_ui(
@@ -93,6 +96,14 @@ fn main() {
 		);
 		for shape in &output.shapes {
 			text(&shape.shape, &mut painted);
+			if let egui::Shape::Text(text) = &shape.shape {
+				let rect = egui::Rect::from_min_size(text.pos, text.galley.size());
+				match text.galley.job.text.as_str() {
+					"Participant 2" => name_rect = rect,
+					"Synthetic artist" => subtitle_rect = rect,
+					_ => {}
+				}
+			}
 		}
 		output.drop_without_applying_deltas();
 	}
@@ -114,6 +125,12 @@ fn main() {
 		assert!(painted.contains(&format!("Participant {id}")));
 	}
 	assert!(painted.contains(&"Synthetic artist".into()));
+	assert!(name_rect.is_finite() && subtitle_rect.is_finite());
+	assert!(subtitle_rect.top() >= name_rect.bottom());
+	assert!(
+		subtitle_rect.bottom() - name_rect.top() <= 34.0,
+		"member text must fit beside the avatar: {name_rect:?} {subtitle_rect:?}"
+	);
 	assert!(!painted.contains(&"Listening to Spotify".into()));
 	println!("Thread role groups, online fallback and offline members rendered correctly.");
 }

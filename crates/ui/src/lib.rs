@@ -1260,6 +1260,7 @@ impl MessagingUi {
 								if let Some(subtitle) = subtitle {
 									ui.vertical(|ui| {
 										ui.spacing_mut().item_spacing.y = 1.0;
+										ui.spacing_mut().interact_size.y = 0.0;
 										show_name(ui);
 										ui.horizontal(|ui| {
 											ui.spacing_mut().item_spacing.x = 4.0;
