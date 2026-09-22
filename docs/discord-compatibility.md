@@ -1641,6 +1641,20 @@ Artwork uses the existing credential-free, redirect-free bounded image worker an
 account-isolated image cache, with the existing 1024px decode limit for media previews.
 Normal-account behavior and live artwork delivery remain unverified.
 
+Serein also polls the linked Spotify account every 15 seconds while visible, independently
+of local game detection. It reads the connection's `show_activity` preference, obtains a
+session-only bearer through Discord's unofficial connection access-token endpoint, and reads
+Spotify's [`GET /v1/me/player`](https://developer.spotify.com/documentation/web-api/reference/get-information-about-the-users-current-playback).
+The token route and outgoing activity fields follow
+[discord.py-self](https://github.com/dolfies/discord.py-self/blob/master/discord/connections.py).
+The linked token must grant `user-read-playback-state`; that scope and end-to-end publication
+remain live-unverified. No local Spotify IPC, playback control or extra Spotify login is used.
+Paused, private, local-file, ad, episode, unavailable or failed playback clears the activity;
+Invisible stops polling and clears publication. Spotify shares the existing rate-limited Gateway
+sender alongside games/custom status. The local profile previews Spotify when no game is active.
+Unlinking or disabling Spotify activity is detected on the next poll; service cooldowns apply.
+The offline debug command is `cargo run --locked -p serein --features demo -- --demo --demo-check-spotify`.
+
 ### Outgoing message forwarding
 
 The message toolbar and context menu open a native searchable destination picker for up to

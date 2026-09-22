@@ -18,6 +18,7 @@ mod server_integrations;
 mod server_invites;
 mod server_roles;
 mod server_settings;
+pub mod spotify;
 pub mod upload;
 mod user_actions;
 use client_core::{

@@ -36,6 +36,7 @@ mod screen;
 mod server_settings_demo;
 #[cfg(feature = "demo")]
 mod slash_demo;
+mod spotify;
 mod startup;
 mod toggle_setting;
 mod tray_window;
@@ -61,6 +62,14 @@ const SIGN_IN_HEADER_HEIGHT: f32 = if cfg!(target_os = "windows") {
 };
 
 fn main() -> eframe::Result {
+	#[cfg(all(debug_assertions, feature = "demo"))]
+	if std::env::args().any(|arg| arg == "--demo")
+		&& std::env::args().any(|arg| arg == "--demo-check-spotify")
+	{
+		discord_api::spotify::debug_check();
+		discord_gateway::debug_spotify_check();
+		return Ok(());
+	}
 	#[cfg(all(debug_assertions, feature = "demo"))]
 	if std::env::args().any(|arg| arg == "--demo")
 		&& std::env::args().any(|arg| arg == "--demo-check-forward")
@@ -2607,6 +2616,16 @@ impl Desktop {
 					}
 				}
 			}
+		}
+		// Keep the existing game preview; Spotify fills the activity card while no game is active.
+		if own_activity.is_none() && self.state.gateway_connected {
+			own_activity = self.connection.as_ref().and_then(|connection| {
+				connection
+					.spotify_activity
+					.borrow()
+					.as_ref()
+					.map(|activity| activity.display())
+			});
 		}
 		let changed = self.state.set_local_game_activity(own_activity);
 		if changed

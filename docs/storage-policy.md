@@ -730,6 +730,18 @@ Screen/window labels, selected source identifiers, settings, raw pixels and enco
 
 ### Own game activity (September 11, 2026)
 
+Linked Spotify playback is independent of this local game toggle. One cancellable worker
+reads the linked connection preference and playback on a 15-second interval while visible.
+Connection and playback responses are capped at 64 KiB, token responses at 16 KiB;
+at most 64 connections, 64 artists and eight album images are accepted. Only five artists
+contribute to the bounded display string. One track is retained in replaceable watch/Gateway
+slots, with title/artist/album text capped at 128 characters each, a 22-character track ID,
+40-hex artwork ID and fixed timestamps. There is no playback history or new disk cache.
+The Spotify bearer is private, zeroizing session RAM (8 KiB maximum), never serialized to disk
+or diagnostics, and sent only to fixed `https://api.spotify.com/v1/me/player` with a sensitive
+header. Redirects, proxies and automatic HTTP retries are disabled. Invisible/session teardown
+drops the bearer; unlinking clears it on the next poll. The existing album-image cache applies.
+
 Sharing is off by default. The application-wide `game_activity` SQLite singleton stores
 one constrained boolean; disabling deletes the override. The independent additive table
 is created even for existing schema-10/12 databases, requires no message migration, and survives
