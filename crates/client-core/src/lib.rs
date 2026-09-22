@@ -1092,7 +1092,8 @@ impl State {
 		self.restore_scroll = false;
 		self.reactions.reset();
 		self.interactions.reset();
-		self.application_commands.clear();
+		let scope = self.application_command_scope(channel);
+		self.application_commands.retain(scope);
 		self.older_exhausted = false;
 		self.reply = None;
 		self.revision += 1;
@@ -2049,7 +2050,11 @@ impl State {
 			self.navigation_index.bytes.set(None);
 		}
 		let access_changed = envelope.event.changes_access();
-		if access_changed {
+		// Command permissions are evaluated live from `permissions`; member, role and channel
+		// updates keep the index. Only a lost bot conversation invalidates its own index.
+		if let Event::Unavailable(channel) = &envelope.event
+			&& self.application_commands.scope == Some(*channel)
+		{
 			self.application_commands.clear();
 		}
 		// Ephemeral names must not outlive navigation identity/permission replacement.

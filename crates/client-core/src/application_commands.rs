@@ -34,9 +34,13 @@ fn overrides(
 	(target, location)
 }
 
+/// One guild's (or one bot DM's) command index. Permissions are re-evaluated live from
+/// `State::permissions`, so member, role and channel updates never invalidate the index;
+/// only a scope change, a session reset or an explicit refresh replaces it.
 #[derive(Default)]
 pub struct Catalog {
-	pub channel: Option<Id>,
+	/// Guild id for guild channels, the channel id for a bot DM.
+	pub scope: Option<Id>,
 	pub request: u64,
 	pub loading: bool,
 	pub commands: Vec<schema::Command>,
@@ -45,10 +49,16 @@ pub struct Catalog {
 impl Catalog {
 	pub fn clear(&mut self) {
 		self.request = self.request.wrapping_add(1);
-		self.channel = None;
+		self.scope = None;
 		self.loading = false;
 		self.commands = Vec::new();
 		self.error = None;
+	}
+	/// Drop the index only when it belongs to another guild or conversation.
+	pub fn retain(&mut self, scope: Option<Id>) {
+		if self.scope.is_some() && self.scope != scope {
+			self.clear();
+		}
 	}
 }
 
@@ -124,18 +134,28 @@ impl State {
 					}
 			})
 	}
+	/// The index shared by every channel of a guild; bot DMs have their own.
+	pub fn application_command_scope(&self, channel: Id) -> Option<Id> {
+		self.channel(channel).map(|c| c.guild.unwrap_or(channel))
+	}
+	/// The current index covers this channel (loaded, loading or failed).
+	pub fn application_commands_cover(&self, channel: Id) -> bool {
+		let scope = self.application_command_scope(channel);
+		scope.is_some() && self.application_commands.scope == scope
+	}
 	pub fn request_application_commands(&mut self, channel: Id, refresh: bool) -> Option<Command> {
 		if !self.can_request_application_commands(channel) {
 			return None;
 		}
 		let catalog = &self.application_commands;
-		if catalog.channel == Some(channel) && (catalog.loading || !refresh) {
+		if self.application_commands_cover(channel) && (catalog.loading || !refresh) {
 			return None;
 		}
 		let guild = self.channel(channel)?.guild;
+		let scope = self.application_command_scope(channel);
 		let catalog = &mut self.application_commands;
 		catalog.clear();
-		catalog.channel = Some(channel);
+		catalog.scope = scope;
 		catalog.loading = true;
 		Some(Command::ApplicationCommands {
 			channel,
@@ -149,8 +169,9 @@ impl State {
 		request: u64,
 		result: Result<Vec<schema::Command>, Failure>,
 	) {
-		if !self.can_request_application_commands(channel)
-			|| self.application_commands.channel != Some(channel)
+		// The reply may land after a switch to a sibling channel; the guild index still applies.
+		if self.auth != AuthState::Authenticated
+			|| !self.application_commands_cover(channel)
 			|| self.application_commands.request != request
 			|| !self.application_commands.loading
 		{
@@ -202,7 +223,7 @@ impl State {
 			return Err("Finish the current application interaction first");
 		}
 		let catalog = &self.application_commands;
-		if catalog.channel != Some(channel) || catalog.loading || catalog.error.is_some() {
+		if !self.application_commands_cover(channel) || catalog.loading || catalog.error.is_some() {
 			return Err("Refresh the application command list first");
 		}
 		let command = catalog
@@ -446,7 +467,7 @@ mod tests {
 		command.permissions.channels.insert(Id(2), false);
 		assert!(!state.can_use_application_command(Id(21), &command));
 		state.selected = Some(Id(2));
-		state.application_commands.channel = Some(Id(2));
+		state.application_commands.scope = Some(Id(10));
 		state.application_commands.commands = vec![command.clone()];
 		assert!(
 			state
@@ -605,8 +626,87 @@ mod tests {
 			generation,
 			event: Event::Disconnected,
 		});
+		assert!(!state.application_commands.loading && state.application_commands.scope.is_none());
+	}
+	#[test]
+	fn guild_index_survives_sibling_channels_and_access_events() {
+		let mut state = bot_state();
+		state.user = Some(state.channels[0].recipients[0].clone());
+		state.channels[0].guild = Some(Id(10));
+		state.channels[0].kind = 0;
+		let mut sibling = state.channels[0].clone();
+		sibling.id = Id(3);
+		state.channels.push(sibling);
+		state.guilds.push(model::Guild {
+			id: Id(10),
+			name: "Synthetic guild".into(),
+			icon: None,
+			emojis: None,
+			stickers: None,
+		});
+		use model::permissions as p;
+		state
+			.permissions
+			.replace(p::Snapshot {
+				guilds: vec![p::Guild {
+					id: Id(10),
+					owner: Some(Id(99)),
+					roles: Some(vec![p::Role {
+						id: Id(10),
+						bits: p::VIEW_CHANNEL | p::USE_APPLICATION_COMMANDS,
+						name: "Synthetic role".into(),
+						color: 0,
+						position: 0,
+						hoist: false,
+					}]),
+					member: Some(p::Member {
+						roles: vec![],
+						timeout_until: None,
+					}),
+				}],
+				channels: [Id(2), Id(3)]
+					.into_iter()
+					.map(|id| p::Channel {
+						id,
+						guild: Id(10),
+						overwrites: Some(vec![]),
+					})
+					.collect(),
+			})
+			.unwrap();
+		let Some(Command::ApplicationCommands { guild, request, .. }) =
+			state.request_application_commands(Id(2), false)
+		else {
+			panic!("guild index request");
+		};
+		assert_eq!(guild, Some(Id(10)));
 		assert!(
-			!state.application_commands.loading && state.application_commands.channel.is_none()
+			state.request_application_commands(Id(2), false).is_none(),
+			"one request per index while loading"
 		);
+		state.apply(Envelope {
+			generation: state.generation,
+			event: Event::Permissions(crate::permissions::Event::Member {
+				guild: Id(10),
+				roles: model::Patch::Value(vec![]),
+				timeout_until: model::Patch::Absent,
+			}),
+		});
+		assert!(
+			state.application_commands.loading,
+			"member updates must not restart the index request"
+		);
+		state.select(Id(3));
+		let mut command = command();
+		command.contexts = None;
+		command.guild_id = Some(Id(10));
+		state.apply_application_commands(Id(2), request, Ok(vec![command]));
+		assert_eq!(state.application_commands.commands.len(), 1);
+		assert!(state.application_commands_cover(Id(3)));
+		assert!(
+			state.request_application_commands(Id(3), false).is_none(),
+			"sibling channels share the guild index"
+		);
+		assert!(state.request_application_commands(Id(3), true).is_some());
 	}
 }

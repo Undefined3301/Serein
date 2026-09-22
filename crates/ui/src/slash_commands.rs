@@ -7,8 +7,12 @@ use model::{
 };
 
 const RESULTS: usize = 64;
-const ROW: f32 = 58.0;
+const ROW: f32 = 56.0;
 const RAIL: f32 = 56.0;
+const HEADING: f32 = 30.0;
+const FOOTER: f32 = 26.0;
+const HELP: f32 = 44.0;
+const CHIP: f32 = 32.0;
 const NO_PERMISSION: &str = "You don't have permission to use this command in this channel.";
 
 #[derive(Clone)]
@@ -58,7 +62,6 @@ pub(super) struct Menu {
 	pub error: Option<&'static str>,
 	pub run: bool,
 	pub retry: bool,
-	last: Option<Active>,
 }
 
 impl Menu {
@@ -323,6 +326,13 @@ impl Menu {
 		let colors = design::palette(ui);
 		let bounds = ui.ctx().content_rect().shrink(8.0);
 		let width = anchor.width().min(bounds.width());
+		// Discord parity: a bare "/" browses by application beside an icon rail; once the
+		// user types a name, one flat "commands matching" list with per-row icons takes over.
+		let flat = self.query.as_deref().is_some_and(|query| !query.is_empty());
+		let footer = state.application_commands.loading
+			|| self.error.is_some()
+			|| state.application_commands.error.is_some();
+		let footer_height = if footer { FOOTER } else { 0.0 };
 		let groups = self
 			.items
 			.iter()
@@ -330,13 +340,18 @@ impl Menu {
 			.collect::<std::collections::BTreeSet<_>>()
 			.len();
 		let height = if self.active.is_some() {
-			84.0
+			HELP
+		} else if flat {
+			(HEADING + (self.items.len().clamp(1, 6) as f32) * ROW + 10.0 + footer_height)
+				.min(420.0)
 		} else {
-			((self.items.len().clamp(2, 6) as f32) * ROW + groups.min(3) as f32 * 32.0 + 16.0)
+			((self.items.len().clamp(2, 6) as f32) * ROW
+				+ groups.min(3) as f32 * HEADING
+				+ 16.0 + footer_height)
 				.min(420.0)
 		};
 		let height = height
-			.min((anchor.top() - bounds.top() - 8.0).max(96.0))
+			.min((anchor.top() - bounds.top() - 8.0).max(HELP))
 			.min(bounds.height());
 		let position = egui::pos2(
 			anchor
@@ -353,6 +368,11 @@ impl Menu {
 			.show(ui.ctx(), |ui| {
 				let (rect, _) =
 					ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+				ui.painter().rect_filled(
+					rect.translate(egui::vec2(0.0, 3.0)).expand(1.0),
+					10,
+					egui::Color32::from_black_alpha(if ui.visuals().dark_mode { 70 } else { 28 }),
+				);
 				ui.painter().rect_filled(rect, 8, colors.sidebar);
 				ui.painter().rect_stroke(
 					rect,
@@ -361,18 +381,80 @@ impl Menu {
 					egui::StrokeKind::Inside,
 				);
 				if self.active.is_some() {
-					let mut body = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink(10.0)));
+					let mut body = ui.new_child(
+						egui::UiBuilder::new()
+							.max_rect(rect.shrink2(egui::vec2(14.0, 0.0)))
+							.layout(egui::Layout::left_to_right(egui::Align::Center)),
+					);
 					body.set_clip_rect(rect.shrink(1.0));
-					body.spacing_mut().item_spacing.y = 4.0;
+					body.spacing_mut().item_spacing.x = 8.0;
 					self.help(&mut body, state, channel);
 					return;
 				}
-				let rail_rect = egui::Rect::from_min_size(rect.min, egui::vec2(RAIL, height));
+				if flat {
+					let content_rect = egui::Rect::from_min_max(
+						rect.min + egui::vec2(6.0, 6.0),
+						rect.max - egui::vec2(6.0, 4.0 + footer_height),
+					);
+					let mut body = ui.new_child(
+						egui::UiBuilder::new()
+							.id_salt("command-content")
+							.max_rect(content_rect),
+					);
+					body.set_clip_rect(content_rect);
+					body.spacing_mut().item_spacing.y = 0.0;
+					let (heading, _) = body.allocate_exact_size(
+						egui::vec2(body.available_width(), HEADING),
+						egui::Sense::hover(),
+					);
+					let title = format!(
+						"Commands matching /{}",
+						self.query.as_deref().unwrap_or_default()
+					)
+					.to_uppercase();
+					let mut label = body.new_child(egui::UiBuilder::new().max_rect(
+						egui::Rect::from_min_max(heading.min + egui::vec2(10.0, 0.0), heading.max),
+					));
+					label.add(
+						egui::Label::new(design::semibold(ui, title, 12.0).color(colors.muted))
+							.truncate(),
+					);
+					let follow = std::mem::take(&mut self.follow);
+					egui::ScrollArea::vertical()
+						.id_salt("command-results")
+						.max_height(content_rect.height() - HEADING)
+						.auto_shrink([false, false])
+						.show(&mut body, |ui| {
+							for (index, item) in self.items.iter().enumerate() {
+								let response = command_row(
+									ui,
+									item,
+									index == self.selected,
+									Some((avatars, state.demo)),
+								);
+								if follow && index == self.selected {
+									response.scroll_to_me(None);
+								}
+								if response.clicked() {
+									picked = Some(item.clone());
+								}
+							}
+							if self.items.is_empty() {
+								empty_row(ui);
+							}
+						});
+					if footer {
+						self.footer(ui, rect, state, channel);
+					}
+					return;
+				}
+				let rail_rect =
+					egui::Rect::from_min_size(rect.min, egui::vec2(RAIL, height - footer_height));
 				ui.painter().rect_filled(
 					rail_rect.shrink(1.0),
 					egui::CornerRadius {
 						nw: 7,
-						sw: 7,
+						sw: if footer { 0 } else { 7 },
 						..Default::default()
 					},
 					colors.base,
@@ -400,7 +482,7 @@ impl Menu {
 				}
 				egui::ScrollArea::vertical()
 					.id_salt("command-apps")
-					.max_height((height - 62.0).max(24.0))
+					.max_height((rail_rect.height() - 62.0).max(24.0))
 					.auto_shrink([false, true])
 					.scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
 					.show(&mut rail, |ui| {
@@ -448,8 +530,8 @@ impl Menu {
 					self.rebuild(state);
 				}
 				let content_rect = egui::Rect::from_min_max(
-					rect.min + egui::vec2(RAIL + 12.0, 8.0),
-					rect.max - egui::vec2(8.0, 8.0),
+					rect.min + egui::vec2(RAIL + 6.0, 6.0),
+					rect.max - egui::vec2(6.0, 4.0 + footer_height),
 				);
 				let mut body = ui.new_child(
 					egui::UiBuilder::new()
@@ -461,22 +543,22 @@ impl Menu {
 				let follow = std::mem::take(&mut self.follow);
 				egui::ScrollArea::vertical()
 					.id_salt("command-results")
-					.max_height(content_rect.height() - 24.0)
+					.max_height(content_rect.height())
 					.auto_shrink([false, false])
 					.show(&mut body, |ui| {
 						let mut previous = None;
 						for (index, item) in self.items.iter().enumerate() {
 							if previous != Some(item.application_id) {
 								if index > 0 {
-									ui.add_space(12.0);
+									ui.add_space(6.0);
 								}
 								let (heading, _) = ui.allocate_exact_size(
-									egui::vec2(ui.available_width(), 32.0),
+									egui::vec2(ui.available_width(), HEADING),
 									egui::Sense::hover(),
 								);
 								let icon_rect = egui::Rect::from_min_size(
-									heading.min + egui::vec2(8.0, 6.0),
-									egui::Vec2::splat(18.0),
+									heading.min + egui::vec2(10.0, 7.0),
+									egui::Vec2::splat(16.0),
 								);
 								command_icon(
 									ui,
@@ -488,19 +570,24 @@ impl Menu {
 									state.demo,
 									&item.application,
 								);
-								let mut label = ui.new_child(egui::UiBuilder::new().max_rect(
-									egui::Rect::from_min_max(
-										heading.min + egui::vec2(32.0, 6.0),
-										heading.max,
-									),
-								));
+								let mut label = ui.new_child(
+									egui::UiBuilder::new()
+										.max_rect(egui::Rect::from_min_max(
+											heading.min + egui::vec2(34.0, 0.0),
+											heading.max,
+										))
+										.layout(egui::Layout::left_to_right(egui::Align::Center)),
+								);
 								label.add(
-									egui::Label::new(design::semibold(ui, &item.application, 13.0))
-										.truncate(),
+									egui::Label::new(
+										design::semibold(ui, item.application.to_uppercase(), 12.0)
+											.color(colors.muted),
+									)
+									.truncate(),
 								);
 								previous = Some(item.application_id);
 							}
-							let response = command_row(ui, item, index == self.selected);
+							let response = command_row(ui, item, index == self.selected, None);
 							if follow && index == self.selected {
 								response.scroll_to_me(None);
 							}
@@ -509,50 +596,94 @@ impl Menu {
 							}
 						}
 						if self.items.is_empty() {
-							ui.weak("No commands match. Try another name or application.");
+							empty_row(ui);
 						}
 					});
-				body.horizontal(|ui| {
-					ui.add_enabled_ui(
-						state.can_request_application_commands(channel)
-							&& !state.application_commands.loading,
-						|ui| {
-							if icons::button(
-								ui,
-								icons::Icon::Reload,
-								18.0,
-								"Refresh application commands",
-							)
-							.clicked()
-							{
-								self.retry = true;
-							}
-						},
-					);
-					let (hint, color) = if state.application_commands.loading {
-						("Loading application commands…", colors.muted)
-					} else if let Some(error) = self.error.or(state.application_commands.error) {
-						(error, colors.danger)
-					} else if self.items.len() == RESULTS {
-						("Keep typing to narrow the results.", colors.muted)
-					} else {
-						("↑↓ choose · Tab / Enter select · Esc close", colors.muted)
-					};
-					ui.add(
-						egui::Label::new(egui::RichText::new(hint).size(11.0).color(color))
-							.truncate(),
-					)
-					.on_hover_text(hint);
-				});
+				if footer {
+					self.footer(ui, rect, state, channel);
+				}
 			});
 		self.rect = Some(response.response.rect);
 		picked
+	}
+	/// Loading and failure states only; a healthy list needs no chrome below it.
+	fn footer(&mut self, ui: &mut egui::Ui, rect: egui::Rect, state: &State, channel: Id) {
+		let colors = design::palette(ui);
+		let footer_rect = egui::Rect::from_min_max(
+			egui::pos2(rect.left() + 1.0, rect.bottom() - FOOTER),
+			rect.max - egui::vec2(1.0, 1.0),
+		);
+		ui.painter().rect_filled(
+			footer_rect,
+			egui::CornerRadius {
+				sw: 7,
+				se: 7,
+				..Default::default()
+			},
+			colors.base,
+		);
+		let mut body = ui.new_child(
+			egui::UiBuilder::new()
+				.id_salt("command-footer")
+				.max_rect(footer_rect.shrink2(egui::vec2(12.0, 0.0)))
+				.layout(egui::Layout::left_to_right(egui::Align::Center)),
+		);
+		body.set_clip_rect(footer_rect);
+		body.spacing_mut().item_spacing.x = 8.0;
+		let (hint, color) = if state.application_commands.loading {
+			("Loading application commands…", colors.muted)
+		} else if let Some(error) = self.error.or(state.application_commands.error) {
+			(error, colors.danger)
+		} else {
+			return;
+		};
+		if !state.application_commands.loading
+			&& state.can_request_application_commands(channel)
+			&& icons::button(
+				&mut body,
+				icons::Icon::Reload,
+				18.0,
+				"Refresh application commands",
+			)
+			.clicked()
+		{
+			self.retry = true;
+		}
+		body.add(egui::Label::new(egui::RichText::new(hint).size(12.0).color(color)).truncate())
+			.on_hover_text(hint);
+	}
+	/// The active application's icon replaces the attach button, as in the official client.
+	pub fn composer_badge(&self, ui: &mut egui::Ui, state: &State, avatars: &mut Avatars) -> bool {
+		let Some(active) = self.active.as_ref() else {
+			return false;
+		};
+		let Some(command) = state
+			.application_commands
+			.commands
+			.iter()
+			.find(|command| command.id == active.id)
+		else {
+			return false;
+		};
+		let (rect, response) =
+			ui.allocate_exact_size(egui::Vec2::splat(28.0), egui::Sense::hover());
+		command_icon(
+			ui,
+			rect,
+			Filter::Application(command.application_id),
+			command.application_icon.as_deref(),
+			avatars,
+			state.demo,
+			&command.application_name,
+		);
+		response.on_hover_text(&command.application_name);
+		true
 	}
 	pub fn can_submit(&self, state: &State, channel: Id) -> bool {
 		self.active.as_ref().is_some_and(|active| {
 			!state.interactions.busy()
 				&& state.interactions.modal.is_none()
-				&& state.application_commands.channel == Some(channel)
+				&& state.application_commands_cover(channel)
 				&& !state.application_commands.loading
 				&& state.application_commands.error.is_none()
 				&& state.application_commands.commands.iter().any(|command| {
@@ -611,17 +742,20 @@ impl Menu {
 						&& inline_submit(ui, send_chord);
 					let mut name_job = egui::text::LayoutJob::simple_singleline(
 						format!("/{}", active.name),
-						egui::FontId::new(14.0, design::semibold_family(ui.ctx())),
+						egui::FontId::new(15.0, design::semibold_family(ui.ctx())),
 						colors.text_strong,
 					);
 					name_job.wrap.max_width = (width - 12.0).max(1.0);
 					name_job.wrap.max_rows = 1;
 					let galley = ui.fonts_mut(|fonts| fonts.layout_job(name_job));
 					let (rect, _) = ui.allocate_exact_size(
-						egui::vec2((galley.size().x + 12.0).min(width), 30.0),
+						egui::vec2((galley.size().x + 12.0).min(width), CHIP),
 						egui::Sense::hover(),
 					);
 					let name = ui.interact(rect, name_id, egui::Sense::click());
+					if name.hovered() || name.has_focus() {
+						ui.painter().rect_filled(rect, 6, colors.hover);
+					}
 					ui.painter().galley(
 						rect.min + egui::vec2(6.0, (rect.height() - galley.size().y) * 0.5),
 						galley,
@@ -666,70 +800,126 @@ impl Menu {
 							.find(|(name, _)| *name == option.name)
 							.unwrap()
 							.1;
-						let label =
-							format!("{}{}", option.name, if option.required { " *" } else { "" });
+						// Two-tone chip: the option name on a lighter segment, its value on a
+						// darker one; the focused chip gets a hairline ring.
+						let label = option.name.as_str();
+						let label_font = egui::FontId::new(14.0, design::medium_family(ui.ctx()));
 						let label_width = ui
 							.fonts_mut(|fonts| {
 								fonts.layout_no_wrap(
-									label.clone(),
-									egui::FontId::proportional(12.0),
-									colors.muted,
+									label.to_owned(),
+									label_font.clone(),
+									colors.text,
 								)
 							})
 							.size()
 							.x
 							.min(140.0);
-						let value_width =
-							(value.chars().count() as f32 * 7.0 + 25.0).clamp(90.0, 200.0);
-						let chip_width = (label_width + value_width + 22.0).min(width);
+						// Size the value segment for what the control shows: the chosen label
+						// and arrow for choice/boolean/mention controls, the text otherwise.
+						let shown = if !option.choices.is_empty() || option.kind == 5 {
+							option
+								.choices
+								.iter()
+								.find(|choice| value_text(&choice.value) == *value)
+								.map_or_else(
+									|| {
+										if value.is_empty() {
+											"Choose…".chars().count()
+										} else {
+											value.chars().count()
+										}
+									},
+									|choice| choice.name.chars().count(),
+								) + 3
+						} else if matches!(option.kind, 6..=9) {
+							value.chars().count().max("ID or choose…".chars().count()) + 3
+						} else {
+							value.chars().count()
+						};
+						let value_width = (shown as f32 * 7.5 + 30.0).clamp(60.0, 220.0);
+						let label_span = label_width + 20.0;
+						let chip_width = (label_span + value_width).min(width);
+						let id =
+							egui::Id::unique(("slash-argument", channel, active.id, &option.name));
+						let had_focus = ui.memory(|memory| memory.has_focus(id));
 						ui.allocate_ui_with_layout(
-							egui::vec2(chip_width, 30.0),
+							egui::vec2(chip_width, CHIP),
 							egui::Layout::left_to_right(egui::Align::Center),
 							|ui| {
-								let frame = egui::Frame::new()
-									.fill(colors.hover)
-									.corner_radius(4)
-									.inner_margin(egui::Margin::symmetric(7, 3));
-								frame.show(ui, |ui| {
-									ui.set_width((chip_width - 14.0).max(1.0));
-									ui.spacing_mut().item_spacing.x = 6.0;
-									ui.add_sized(
-										egui::vec2(
-											label_width.min(ui.available_width() * 0.5),
-											22.0,
+								let rect = egui::Rect::from_min_size(
+									ui.max_rect().min,
+									egui::vec2(chip_width, CHIP),
+								);
+								let painter = ui.painter();
+								// The value sinks below the composer surface; the label sits above it.
+								let value_fill = if ui.visuals().dark_mode {
+									colors.base
+								} else {
+									colors.chat
+								};
+								painter.rect_filled(rect, 6, value_fill);
+								painter.rect_filled(
+									egui::Rect::from_min_size(
+										rect.min,
+										egui::vec2(label_span, CHIP),
+									),
+									egui::CornerRadius {
+										nw: 6,
+										sw: 6,
+										..Default::default()
+									},
+									colors.hover,
+								);
+								if had_focus {
+									painter.rect_stroke(
+										rect,
+										6,
+										egui::Stroke::new(1.0, colors.muted),
+										egui::StrokeKind::Inside,
+									);
+								}
+								ui.set_max_width(chip_width - 8.0);
+								ui.spacing_mut().item_spacing.x = 0.0;
+								// Choice and mention controls sit flat on the value segment.
+								let widgets = &mut ui.visuals_mut().widgets;
+								widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
+								widgets.inactive.bg_stroke = egui::Stroke::NONE;
+								widgets.hovered.bg_stroke = egui::Stroke::NONE;
+								widgets.active.bg_stroke = egui::Stroke::NONE;
+								widgets.open.bg_stroke = egui::Stroke::NONE;
+								ui.add_space(10.0);
+								ui.add_sized(
+									egui::vec2(label_width, CHIP),
+									egui::Label::new(
+										egui::RichText::new(label).font(label_font).color(
+											if option.required {
+												colors.text
+											} else {
+												colors.muted
+											},
 										),
-										egui::Label::new(
-											egui::RichText::new(label)
-												.size(12.0)
-												.color(colors.muted),
-										)
-										.truncate(),
 									)
-									.on_hover_text(&option.description);
-									let id = egui::Id::unique((
-										"slash-argument",
-										channel,
-										active.id,
-										&option.name,
-									));
-									let had_focus = ui.memory(|memory| memory.has_focus(id));
-									if had_focus
-										&& option.choices.is_empty() && option.kind != 5
-										&& inline_submit(ui, send_chord)
-									{
-										self.run = true;
-									}
-									let response = argument(ui, option, value, state, channel, id);
-									if focus_first && index == 0 {
-										response.request_focus();
-									}
-									if response.gained_focus() || (focus_first && index == 0) {
-										response.scroll_to_me(None);
-									}
-									if response.has_focus() || response.hovered() {
-										self.focused_option = index;
-									}
-								});
+									.truncate(),
+								)
+								.on_hover_text(&option.description);
+								ui.add_space(18.0);
+								if had_focus
+									&& option.choices.is_empty()
+									&& option.kind != 5 && inline_submit(ui, send_chord)
+								{
+									self.run = true;
+								}
+								let response = argument(ui, option, value, state, channel, id);
+								if focus_first && index == 0 {
+									response.request_focus();
+								}
+								if response.gained_focus() || (focus_first && index == 0) {
+									response.scroll_to_me(None);
+								}
+								if response.has_focus() || response.hovered() {
+									self.focused_option = index;
+								}
 							},
 						);
 					}
@@ -756,49 +946,9 @@ impl Menu {
 		let option = command
 			.and_then(|command| command.options_at(&active.path).ok())
 			.and_then(|options| options.get(self.focused_option));
-		ui.horizontal(|ui| {
-			if ui
-				.small_button("×")
-				.on_hover_text("Close help · keep arguments")
-				.clicked()
-			{
-				self.dismissed = true;
-			}
-			ui.add(
-				egui::Label::new(design::semibold(
-					ui,
-					option.map_or(active.name.as_str(), |option| option.name.as_str()),
-					13.0,
-				))
-				.truncate(),
-			);
-			if let Some(option) = option {
-				ui.weak(if option.required {
-					"required"
-				} else {
-					"optional"
-				});
-			}
-			if let Some(command) = command {
-				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-					ui.add(
-						egui::Label::new(
-							egui::RichText::new(&command.application_name)
-								.size(11.0)
-								.color(design::palette(ui).muted),
-						)
-						.truncate(),
-					)
-					.on_hover_text(&command.application_name);
-				});
-			}
-		});
-		let description = option
-			.map(|option| option.description.as_str())
-			.or_else(|| command.map(|command| command.description.as_str()))
-			.unwrap_or("This command is unavailable. Your arguments are kept.");
-		ui.add(egui::Label::new(egui::RichText::new(description).size(13.0)).truncate())
-			.on_hover_text(description);
+		let colors = design::palette(ui);
+		// One line, as in the official client: the focused argument's name, then its
+		// description. Problems replace the description instead of stacking below it.
 		let error = if command
 			.is_some_and(|command| !state.can_use_application_command(channel, command))
 		{
@@ -806,28 +956,36 @@ impl Menu {
 		} else {
 			self.error.or(state.interactions.error)
 		};
-		let hint = if let Some(error) = error {
-			error
-		} else if state.interactions.busy() {
-			"Waiting for the application…"
-		} else if option.is_some_and(|option| option.kind == 11) {
-			"Attachment arguments are not supported yet."
-		} else {
-			"Tab to move between arguments · Send when ready · Esc to close help"
-		};
+		let title = option.map_or(active.name.as_str(), |option| option.name.as_str());
 		ui.add(
-			egui::Label::new(
-				egui::RichText::new(hint)
-					.size(11.0)
-					.color(if error.is_some() {
-						design::palette(ui).danger
-					} else {
-						design::palette(ui).muted
-					}),
+			egui::Label::new(design::semibold(ui, title, 15.0).color(colors.text_strong))
+				.truncate(),
+		);
+		let (detail, color) = if let Some(error) = error {
+			(error, colors.danger)
+		} else if state.interactions.busy() {
+			("Waiting for the application…", colors.muted)
+		} else if option.is_some_and(|option| option.kind == 11) {
+			(
+				"Attachment arguments are not supported yet.",
+				colors.warning,
 			)
-			.truncate(),
-		)
-		.on_hover_text(hint);
+		} else {
+			(
+				option
+					.map(|option| option.description.as_str())
+					.or_else(|| command.map(|command| command.description.as_str()))
+					.unwrap_or("This command is unavailable. Your arguments are kept."),
+				colors.muted,
+			)
+		};
+		let detail = if error.is_none() && option.is_some_and(|option| !option.required) {
+			format!("{detail} · Optional")
+		} else {
+			detail.to_owned()
+		};
+		ui.add(egui::Label::new(egui::RichText::new(&detail).size(15.0).color(color)).truncate())
+			.on_hover_text(detail);
 	}
 }
 
@@ -926,7 +1084,25 @@ fn command_icon(
 	}
 }
 
-fn command_row(ui: &mut egui::Ui, item: &Pick, selected: bool) -> egui::Response {
+fn empty_row(ui: &mut egui::Ui) {
+	let (rect, _) =
+		ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW), egui::Sense::hover());
+	ui.painter().text(
+		rect.center(),
+		egui::Align2::CENTER_CENTER,
+		"No commands match",
+		egui::FontId::proportional(14.0),
+		design::palette(ui).muted,
+	);
+}
+
+/// `icon` paints the source application beside the row; grouped lists carry it in the heading.
+fn command_row(
+	ui: &mut egui::Ui,
+	item: &Pick,
+	selected: bool,
+	icon: Option<(&mut Avatars, bool)>,
+) -> egui::Response {
 	let colors = design::palette(ui);
 	let (rect, response) =
 		ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW), egui::Sense::click());
@@ -935,8 +1111,8 @@ fn command_row(ui: &mut egui::Ui, item: &Pick, selected: bool) -> egui::Response
 	}
 	if selected || response.hovered() {
 		ui.painter().rect_filled(
-			rect.shrink(1.0),
-			5,
+			rect.shrink2(egui::vec2(0.0, 1.0)),
+			6,
 			if selected {
 				colors.selected
 			} else {
@@ -944,11 +1120,28 @@ fn command_row(ui: &mut egui::Ui, item: &Pick, selected: bool) -> egui::Response
 			},
 		);
 	}
-	let source_width = (rect.width() * 0.28).min(150.0);
-	let label_width = (rect.width() - source_width - 20.0).max(32.0);
+	let text_left = if icon.is_some() { 60.0 } else { 12.0 };
+	if let Some((avatars, demo)) = icon {
+		let icon_rect = egui::Rect::from_min_size(
+			rect.min + egui::vec2(12.0, (ROW - 36.0) * 0.5),
+			egui::Vec2::splat(36.0),
+		);
+		command_icon(
+			ui,
+			icon_rect,
+			item.application_id
+				.map_or(Filter::Builtins, Filter::Application),
+			item.icon.as_deref(),
+			avatars,
+			demo,
+			&item.application,
+		);
+	}
+	let source_width = (rect.width() * 0.26).min(160.0);
+	let label_width = (rect.width() - text_left - source_width - 16.0).max(32.0);
 	let mut name = egui::text::LayoutJob::simple_singleline(
 		format!("/{}", item.name),
-		egui::FontId::proportional(16.0),
+		egui::FontId::new(15.0, design::semibold_family(ui.ctx())),
 		colors.text_strong,
 	);
 	name.wrap = egui::text::TextWrapping {
@@ -959,7 +1152,7 @@ fn command_row(ui: &mut egui::Ui, item: &Pick, selected: bool) -> egui::Response
 	};
 	let mut description = egui::text::LayoutJob::simple_singleline(
 		item.description.clone(),
-		egui::FontId::proportional(12.0),
+		egui::FontId::proportional(13.0),
 		colors.muted,
 	);
 	description.wrap = egui::text::TextWrapping {
@@ -969,12 +1162,12 @@ fn command_row(ui: &mut egui::Ui, item: &Pick, selected: bool) -> egui::Response
 		..Default::default()
 	};
 	ui.painter().galley(
-		rect.min + egui::vec2(8.0, 6.0),
+		rect.min + egui::vec2(text_left, 9.0),
 		ui.fonts_mut(|f| f.layout_job(name)),
 		colors.text_strong,
 	);
 	ui.painter().galley(
-		rect.min + egui::vec2(8.0, 29.0),
+		rect.min + egui::vec2(text_left, 30.0),
 		ui.fonts_mut(|f| f.layout_job(description)),
 		colors.muted,
 	);
@@ -982,14 +1175,14 @@ fn command_row(ui: &mut egui::Ui, item: &Pick, selected: bool) -> egui::Response
 		egui::UiBuilder::new()
 			.max_rect(egui::Rect::from_min_max(
 				egui::pos2(rect.right() - source_width, rect.top()),
-				rect.max,
+				rect.max - egui::vec2(12.0, 0.0),
 			))
 			.layout(egui::Layout::right_to_left(egui::Align::Center)),
 	);
 	source.add(
 		egui::Label::new(
 			egui::RichText::new(&item.application)
-				.size(11.0)
+				.size(13.0)
 				.color(colors.muted),
 		)
 		.truncate(),
@@ -1115,7 +1308,8 @@ fn argument(
 			egui::TextEdit::singleline(value)
 				.id(id)
 				.frame(egui::Frame::NONE)
-				.hint_text("value")
+				.font(egui::FontId::proportional(14.0))
+				.text_color(design::palette(ui).text_strong)
 				.char_limit(usize::from(option.max_length.unwrap_or(6000)).min(6000))
 				.desired_width(ui.available_width()),
 		)
@@ -1151,50 +1345,6 @@ impl crate::MessagingUi {
 		self.slash_commands
 			.accept(pick, state.drafts.get_mut(&channel).unwrap(), remaining);
 		self.preview_slash_commands();
-	}
-	pub(super) fn slash_status(&mut self, ui: &mut egui::Ui, state: &mut State, channel: Id) {
-		if self.slash_commands.channel != Some(channel)
-			|| self.slash_commands.generation != state.generation
-		{
-			return;
-		}
-		let Some(last) = self.slash_commands.last.as_ref() else {
-			return;
-		};
-		let pending = state
-			.interactions
-			.pending
-			.as_ref()
-			.is_some_and(|pending| pending.message.is_none());
-		let label = if pending {
-			format!("Waiting for /{}…", last.name)
-		} else {
-			format!("Last command: /{}", last.name)
-		};
-		ui.horizontal(|ui| {
-			ui.weak(label);
-			if let Some(error) = state.interactions.error {
-				ui.colored_label(design::palette(ui).danger, error);
-			}
-			if ui
-				.add_enabled(
-					!pending
-						&& state.drafts.get(&channel).is_none_or(String::is_empty)
-						&& state.draft_bytes()
-							+ self.slash_commands.last.as_ref().unwrap().name.len()
-							+ 2 <= client_core::MAX_DRAFT_BYTES,
-					egui::Button::new("Edit again").small(),
-				)
-				.clicked()
-			{
-				let active = self.slash_commands.last.take().unwrap();
-				state.drafts.insert(channel, format!("/{} ", active.name));
-				self.draft_changes.push(channel);
-				self.slash_commands.active = Some(active);
-				self.slash_commands.dismissed = false;
-				self.slash_commands.focus_argument = true;
-			}
-		});
 	}
 	pub(super) fn send_application_command(
 		&mut self,
@@ -1245,11 +1395,9 @@ impl crate::MessagingUi {
 			Ok(command) => {
 				commands.push(command);
 				self.clear_draft(state, channel);
-				let last = self.slash_commands.active.take();
 				self.slash_commands = Menu {
 					channel: Some(channel),
 					generation: state.generation,
-					last,
 					..Default::default()
 				};
 			}
@@ -1502,8 +1650,8 @@ mod tests {
 			let commands = frame(&mut view, &mut state, Some((egui::Key::Enter, false)));
 			assert!(matches!(commands.as_slice(), [Command::Interaction(_)]));
 			assert!(
-				view.slash_commands.last.is_some(),
-				"keep fields for an explicit retry"
+				view.slash_commands.active.is_none(),
+				"a sent command leaves no sticky status behind"
 			);
 			assert!(state.drafts.get(&channel).is_none_or(String::is_empty));
 			state.drafts.insert(channel, "/unknown".into());

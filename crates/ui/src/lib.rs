@@ -2466,14 +2466,19 @@ impl MessagingUi {
                 }
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
-                    let attach = ui
-                        .add_enabled_ui(can_attach, |ui| {
-                            icons::button(ui, icons::Icon::Attach, 28.0, "Attach files")
-                        })
-                        .inner
-						.on_hover_text("Choose, drop, or paste files (Ctrl/Cmd/Option+V). Up to 10 files and 500 MB total; account limits may be lower. Send starts the upload.");
+                    // An active application command shows its app in place of the attach button.
+                    let attach = if !editing_here && self.slash_commands.composer_badge(ui, state, &mut self.avatars) {
+                        None
+                    } else {
+                        Some(ui
+                            .add_enabled_ui(can_attach, |ui| {
+                                icons::button(ui, icons::Icon::Attach, 28.0, "Attach files")
+                            })
+                            .inner
+                            .on_hover_text("Choose, drop, or paste files (Ctrl/Cmd/Option+V). Up to 10 files and 500 MB total; account limits may be lower. Send starts the upload."))
+                    };
                     if !editing_here { self.extensions.composer_menu(ui, state); }
-                    if attach.clicked() {
+                    if attach.is_some_and(|attach| attach.clicked()) {
                         self.attach_requested = true;
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -2838,7 +2843,6 @@ impl MessagingUi {
                         }
                     });
                 });
-                if !editing_here { self.slash_status(ui, state, channel); }
                 if let Some((edit_channel, message)) = editing_key {
                     if state.freshness != Freshness::Fresh || !state.can_edit(edit_channel, message) { ui.weak("Editing this message is unavailable. Your text is kept until you cancel."); }
                 } else if !state.can_send(channel) && !application_command {
