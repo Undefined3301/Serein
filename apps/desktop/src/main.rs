@@ -1084,7 +1084,7 @@ impl Desktop {
 		transparency_available: bool,
 	) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
 		ui::fonts::install(&cc.egui_ctx);
-		ui::emoji::install_async(&cc.egui_ctx)?;
+		ui::emoji::install(&cc.egui_ctx)?;
 		ui::icons::install(&cc.egui_ctx);
 		#[cfg(feature = "demo")]
 		if demo {
@@ -2023,7 +2023,7 @@ impl Desktop {
 		self.app_settings.apply(&mut self.messaging);
 		self.messaging.share_game_activity = self.game_activity.enabled;
 		ctx.memory_mut(|m| *m = egui::Memory::default());
-		let _ = ui::emoji::install_async(ctx);
+		let _ = ui::emoji::install(ctx);
 		ui::design::apply(ctx);
 		ctx.set_theme(self.appearance);
 		self.messaging

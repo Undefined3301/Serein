@@ -220,41 +220,29 @@ pub fn mention_label(id: Id, mentions: &[User], source: Option<&MentionSource<'_
 	}
 }
 
-pub fn directory_fingerprint(state: &State, channel: Id) -> u64 {
+pub fn presentation_fingerprint(state: &State, message: &model::Message) -> u64 {
 	let mut hasher = std::collections::hash_map::DefaultHasher::new();
-	let hash_user = |hasher: &mut std::collections::hash_map::DefaultHasher, user: &User| {
-		user.id.hash(hasher);
-		user.name.hash(hasher);
+	state.message_author_name(message).hash(&mut hasher);
+	state.message_author_color(message).hash(&mut hasher);
+	let source = MentionSource {
+		state,
+		channel: message.channel,
 	};
-	if let Some(user) = &state.user {
-		hash_user(&mut hasher, user);
-	}
-	for user in state.friends() {
-		hash_user(&mut hasher, user);
-	}
-	if let Some(channel) = state.channel(channel) {
-		for user in &channel.recipients {
-			hash_user(&mut hasher, user);
-		}
-	}
-	if let Some(list) = state
-		.members
-		.as_ref()
-		.filter(|list| list.channel == channel)
-	{
-		for member in list.rows.iter().flatten() {
-			hash_user(&mut hasher, &member.user);
-			member.nick.hash(&mut hasher);
-		}
-	}
-	if let Some(request) = &state.member_search[0].request
-		&& request.channel == channel
-		&& state.can_view(channel)
-	{
-		for member in &state.member_search[0].rows {
-			hash_user(&mut hasher, &member.user);
-			member.nick.hash(&mut hasher);
-		}
+	let mut rest = message.content.as_str();
+	let mut seen = 0usize;
+	while seen < model::MAX_MENTIONS {
+		let Some(start) = rest.find('<') else {
+			break;
+		};
+		rest = &rest[start..];
+		let Some((id, len)) = model::user_mention_prefix(rest) else {
+			let skip = rest.chars().next().map_or(1, char::len_utf8);
+			rest = &rest[skip..];
+			continue;
+		};
+		mention_label(id, &message.mentions, Some(&source)).hash(&mut hasher);
+		rest = &rest[len..];
+		seen += 1;
 	}
 	hasher.finish()
 }

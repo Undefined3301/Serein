@@ -1776,7 +1776,6 @@ impl Formatted {
 						Some(id) => images.custom_image(ui.ctx(), id, size, demo),
 						None => inline.image.clone(),
 					},
-					fallback: '?',
 				}
 			})
 			.collect();
@@ -3281,7 +3280,7 @@ mod tests {
 			let mut images = 0;
 			for shape in &output.shapes {
 				match &shape.shape {
-					egui::Shape::Text(text) if text.galley.job.text != "?" => {
+					egui::Shape::Text(text) => {
 						assert!(
 							text.galley
 								.rows
@@ -3822,9 +3821,7 @@ mod tests {
 			});
 			fn walk(shape: &egui::Shape, rows: &mut Vec<(f32, f32, f32)>) {
 				match shape {
-					egui::Shape::Text(text) if text.galley.text() != "?" => {
-						// Artwork falls back to a "?" galley without the emoji atlas; it is
-						// centred on the row rather than sharing the text baseline.
+					egui::Shape::Text(text) => {
 						for placed in &text.galley.rows {
 							for glyph in &placed.row.glyphs {
 								rows.push((glyph.line_height, placed.row.size.y, glyph.pos.y));

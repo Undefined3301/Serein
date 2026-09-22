@@ -74,7 +74,7 @@ pub fn show(
 			}
 			return;
 		};
-		if writing {
+		if writing || refreshing {
 			ui.visuals_mut().disabled_alpha = 1.0;
 		}
 		for reaction in reactions {

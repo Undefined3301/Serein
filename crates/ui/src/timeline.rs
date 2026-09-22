@@ -550,7 +550,7 @@ fn row_key(
 		.is_none_or(|p| timestamp(p.id).date() != timestamp(message.id).date())
 		.hash(&mut key);
 	(boundary == Some(message.id)).hash(&mut key);
-	crate::mentions::directory_fingerprint(state, message.channel).hash(&mut key);
+	crate::mentions::presentation_fingerprint(state, message).hash(&mut key);
 	key.finish()
 }
 fn divider(ui: &mut egui::Ui, label: String, unread: bool) {
@@ -870,7 +870,13 @@ fn banner_rect(area: egui::Rect) -> egui::Rect {
 	)
 }
 
-fn history_banner(ui: &mut egui::Ui, rect: egui::Rect, unread: bool, newer: bool) -> (bool, bool) {
+fn history_banner(
+	ui: &mut egui::Ui,
+	rect: egui::Rect,
+	unread: bool,
+	jump: bool,
+	newer: bool,
+) -> (bool, bool) {
 	let colors = crate::design::palette(ui);
 	let mut jump_unread = false;
 	let mut load_newer = false;
@@ -898,7 +904,7 @@ fn history_banner(ui: &mut egui::Ui, rect: egui::Rect, unread: bool, newer: bool
 				.color(colors.accent_text),
 			);
 			ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-				if unread
+				if jump
 					&& bar_button(
 						ui,
 						"Jump to unread",
@@ -1369,8 +1375,9 @@ impl TimelineView {
 			let area = ui.available_rect_before_wrap().intersect(ui.clip_rect());
 			loading_messages(ui);
 			session.bind(ui, ui.scope_id().with(("timeline", state.selected)), area);
-			if state.can_jump_unread() {
-				let (jump_unread, _) = history_banner(ui, banner_rect(area), true, false);
+			if state.show_missed_banner() {
+				let (jump_unread, _) =
+					history_banner(ui, banner_rect(area), true, state.can_jump_unread(), false);
 				if jump_unread {
 					self.unread_jump = true;
 					self.browse_away();
@@ -1979,41 +1986,79 @@ impl TimelineView {
 										);
 										surface.keep(&deleted);
 									} else {
-										ui.add_enabled_ui(
-											state.can_open_reply_target(reply),
-											|ui| {
-												let mut preview = egui::text::LayoutJob::default();
-												if let Some(original) = state.timeline.get(reply) {
-													let reply_avatar = avatars.show(
-														ui,
-														&original.author,
-														16.0,
-														state.demo,
-													);
-													if reply_avatar.clicked() {
-														self.request_reply_target(reply);
-													}
-													surface.keep(&reply_avatar);
-													preview.append(
-														&format!(
-															"@{}  ",
-															state.message_author_name(original)
-														),
-														0.0,
-														egui::TextFormat {
-															font_id: egui::FontId::new(
-																13.0,
-																crate::design::semibold_family(
-																	ui.ctx(),
-																),
-															),
-															color: colors.muted,
-															..Default::default()
-														},
-													);
-													if crate::embeds::has_spoilers(original) {
+										ui.scope(|ui| {
+											ui.visuals_mut().disabled_alpha = 1.0;
+											ui.add_enabled_ui(
+												state.can_open_reply_target(reply),
+												|ui| {
+													let mut preview =
+														egui::text::LayoutJob::default();
+													if let Some(original) =
+														state.timeline.get(reply)
+													{
+														let reply_avatar = avatars.show(
+															ui,
+															&original.author,
+															16.0,
+															state.demo,
+														);
+														if reply_avatar.clicked() {
+															self.request_reply_target(reply);
+														}
+														surface.keep(&reply_avatar);
 														preview.append(
-															"Spoiler",
+															&format!(
+																"@{}  ",
+																state.message_author_name(original)
+															),
+															0.0,
+															egui::TextFormat {
+																font_id: egui::FontId::new(
+																	13.0,
+																	crate::design::semibold_family(
+																		ui.ctx(),
+																	),
+																),
+																color: colors.muted,
+																..Default::default()
+															},
+														);
+														if crate::embeds::has_spoilers(original) {
+															preview.append(
+																"Spoiler",
+																0.0,
+																egui::TextFormat {
+																	font_id:
+																		egui::FontId::proportional(
+																			13.0,
+																		),
+																	color: colors.muted,
+																	..Default::default()
+																},
+															);
+														} else {
+															let source =
+																crate::mentions::MentionSource {
+																	state,
+																	channel: original.channel,
+																};
+															self.formatted
+																.get(reply, &original.content)
+																.append_inline_preview(
+																	&mut preview,
+																	ui,
+																	&original.mentions,
+																	Some(&source),
+																	crate::mentions::known_roles(
+																		state,
+																		original.channel,
+																	),
+																	&state.channels,
+																);
+														}
+													} else {
+														preview.append(
+															"Earlier message · View original",
 															0.0,
 															egui::TextFormat {
 																font_id: egui::FontId::proportional(
@@ -2023,56 +2068,27 @@ impl TimelineView {
 																..Default::default()
 															},
 														);
-													} else {
-														let source =
-															crate::mentions::MentionSource {
-																state,
-																channel: original.channel,
-															};
-														self.formatted
-															.get(reply, &original.content)
-															.append_inline_preview(
-																&mut preview,
-																ui,
-																&original.mentions,
-																Some(&source),
-																crate::mentions::known_roles(
-																	state,
-																	original.channel,
-																),
-																&state.channels,
-															);
 													}
-												} else {
-													preview.append(
-														"Earlier message · View original",
-														0.0,
-														egui::TextFormat {
-															font_id: egui::FontId::proportional(
-																13.0,
-															),
-															color: colors.muted,
-															..Default::default()
-														},
-													);
-												}
-												let reply_preview = ui
-													.add(
-														egui::Label::new(preview)
-															.truncate()
-															.sense(egui::Sense::click()),
-													)
-													.on_hover_cursor(egui::CursorIcon::PointingHand)
-													.on_hover_text("View original message")
-													.on_disabled_hover_text(
-														"Wait for readable, current message history",
-													);
-												surface.keep(&reply_preview);
-												if reply_preview.clicked() {
-													self.request_reply_target(reply);
-												}
-											},
-										);
+													let reply_preview = ui
+														.add(
+															egui::Label::new(preview)
+																.truncate()
+																.sense(egui::Sense::click()),
+														)
+														.on_hover_cursor(
+															egui::CursorIcon::PointingHand,
+														)
+														.on_hover_text("View original message")
+														.on_disabled_hover_text(
+															"Wait for readable, current message history",
+														);
+													surface.keep(&reply_preview);
+													if reply_preview.clicked() {
+														self.request_reply_target(reply);
+													}
+												},
+											);
+										});
 									}
 								});
 							}
@@ -3045,23 +3061,29 @@ impl TimelineView {
 		let browsing_history = state.history_targeted
 			|| state.history_before.is_some()
 			|| state.history_after.is_some();
-		let jump_ready = state.can_jump_unread();
+		let missed = state.show_missed_banner();
 		let opening_unread =
-			jump_ready && state.freshness == model::Freshness::Loading && state.history_pending;
-		let can_jump_unread = jump_ready
+			missed && state.freshness == model::Freshness::Loading && state.history_pending;
+		let show_unread = missed
 			&& (state.timeline.iter().next().is_some() || opening_unread)
 			&& (opening_unread
 				|| !(self.following
 					&& self.at_current_latest
 					&& !browsing_history
 					&& ui.input(|input| input.focused)));
+		let can_jump_unread = show_unread && state.can_jump_unread();
 		// Latest-message metadata can outlive a deleted message. A complete, visible
 		// latest page has nowhere useful to jump; targeted pages still need navigation.
-		if (can_jump_unread || can_load_newer)
+		if (show_unread || can_load_newer)
 			&& (!whole_conversation_visible || browsing_history || opening_unread)
 		{
-			let (jump_unread, load_newer) =
-				history_banner(ui, banner_rect(area), can_jump_unread, can_load_newer);
+			let (jump_unread, load_newer) = history_banner(
+				ui,
+				banner_rect(area),
+				show_unread,
+				can_jump_unread,
+				can_load_newer,
+			);
 			if jump_unread {
 				self.unread_jump = true;
 				self.browse_away();
@@ -3077,7 +3099,7 @@ impl TimelineView {
 		let detached_page = state.history_targeted || state.history_after.is_some();
 		let unread = state
 			.selected
-			.is_some_and(|channel| state.unread(channel) == Some(true));
+			.is_some_and(|channel| state.missed(channel) == Some(true));
 		self.present_control = None;
 		if (!self.following && distance_from_bottom > PRESENT_CONTROL_SCREENS * area.height())
 			|| (self.target_browsing && !(at_bottom && unread))
