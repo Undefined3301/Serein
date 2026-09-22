@@ -60,6 +60,7 @@ pub struct TimelineView {
 	pub(super) present_control: Option<egui::Rect>,
 	highlighted: Option<(Id, f64)>,
 	target_browsing: bool,
+	hold_read_ack: bool,
 	initial_read_checked: bool,
 	pub(super) unread_jump: bool,
 	pub(super) load_newer: bool,
@@ -1213,6 +1214,22 @@ impl TimelineView {
 		let width = ui.available_width();
 		let channel_changed = self.channel != state.selected;
 		if channel_changed {
+			if let Some(previous) = self.channel {
+				let cursor = if self.following {
+					client_core::ReadingCursor {
+						message: None,
+						inset: 0.0,
+					}
+				} else {
+					client_core::ReadingCursor {
+						message: self.anchor.map(|(id, _)| id),
+						inset: self.anchor.map(|(_, inset)| inset).unwrap_or(0.0),
+					}
+				};
+				state.remember_reading(previous, cursor);
+			}
+			let restored = state.selected.and_then(|id| state.reading(id));
+			let following = restored.is_none_or(|cursor| cursor.message.is_none());
 			*self = Self {
 				extension_actions: self.extension_actions.clone(),
 				hide_media_links: self.hide_media_links,
@@ -1221,16 +1238,16 @@ impl TimelineView {
 					&mut self.suppressed_deleted_highlight,
 				),
 				channel: state.selected,
-				following: true,
+				following,
+				anchor: restored.and_then(|cursor| cursor.message.map(|id| (id, cursor.inset))),
 				download: std::mem::take(&mut self.download),
 				opening: self.opening.take(),
 				browser_opening: self.browser_opening.take(),
 				pending_viewer: self.pending_viewer.take(),
-				jump: true,
+				jump: following,
 				..Self::default()
 			};
 		}
-		let mut unread_join = false;
 		if !self.initial_read_checked
 			&& state.freshness == model::Freshness::Fresh
 			&& !state.history_pending
@@ -1239,17 +1256,14 @@ impl TimelineView {
 		{
 			self.initial_read_checked = true;
 			if unread {
-				let marker_loaded = state
-					.read_marker(channel)
-					.flatten()
-					.is_some_and(|marker| state.timeline.row_ids().any(|id| id == marker));
-				unread_join = !self.target_browsing;
-				self.target_browsing = true;
-				self.following = false;
-				if !marker_loaded {
-					self.jump = false;
-				}
 				self.mark_read = None;
+				let first_text_open = state
+					.channel(channel)
+					.is_some_and(|channel| channel.supports_text())
+					&& state.reading(channel).is_none();
+				if first_text_open && state.timeline.iter().next().is_some() {
+					self.hold_read_ack = true;
+				}
 			}
 		}
 		let can_load_newer = state.can_load_newer();
@@ -1494,49 +1508,68 @@ impl TimelineView {
 		let pending_height = pending_rows.iter().map(|(_, height)| *height).sum::<f32>();
 		let packed = total + pending_height + end_padding;
 		let lead_packed = lead_rows.unwrap_or(total) + pending_height + end_padding;
-		if state.freshness == model::Freshness::Fresh
-			&& !state.history_pending
-			&& let Some(target) = state.search_target.take()
-		{
-			unread_join = false;
-			let reveal = self.pending_reveal.take().unwrap_or(TargetReveal::Center);
-			if state.timeline.get(target).is_some() {
-				self.highlighted = Some((target, ui.input(|input| input.time) + 2.0));
-				let viewport_h = area.height();
-				let current_offset = self
-					.scroll_offset
-					.clamp(0.0, (packed - viewport_h).max(0.0));
-				let (first, end, _) =
-					visible_range(&self.rows, current_offset, current_offset + viewport_h);
-				let visible = self.rows[first..end].iter().any(|(id, _)| *id == target);
-				let stay = match reveal {
-					TargetReveal::StayIfVisible => visible,
-					TargetReveal::Center => false,
-				};
-				if !stay {
+		if state.freshness == model::Freshness::Fresh && !state.history_pending {
+			if let Some(target) = state.search_target.take() {
+				let saved = state
+					.restore_scroll
+					.then(|| {
+						state
+							.selected
+							.and_then(|channel| state.reading(channel))
+							.filter(|cursor| cursor.message == Some(target))
+					})
+					.flatten();
+				state.restore_scroll = false;
+				let reveal = self.pending_reveal.take().unwrap_or(TargetReveal::Center);
+				if state.timeline.get(target).is_some() {
+					if saved.is_none() {
+						self.highlighted = Some((target, ui.input(|input| input.time) + 2.0));
+					}
+					let viewport_h = area.height();
+					let current_offset = self
+						.scroll_offset
+						.clamp(0.0, (packed - viewport_h).max(0.0));
+					let (first, end, _) =
+						visible_range(&self.rows, current_offset, current_offset + viewport_h);
+					let visible = self.rows[first..end].iter().any(|(id, _)| *id == target);
+					let stay = saved.is_none()
+						&& match reveal {
+							TargetReveal::StayIfVisible => visible,
+							TargetReveal::Center => false,
+						};
+					if !stay {
+						self.target_browsing = true;
+						self.mark_read = None;
+						self.following = false;
+						self.jump = false;
+						let to = if let Some(cursor) = saved {
+							anchor_offset(&self.rows, target, cursor.inset)
+								.clamp(0.0, (packed - viewport_h).max(0.0))
+						} else {
+							centered_offset(&self.rows, target, viewport_h, packed)
+						};
+						if saved.is_some()
+							|| self.instant_scrolling
+							|| (to - current_offset).abs() < 1.0
+						{
+							offset = Some(to);
+							self.reveal_scroll = None;
+						} else {
+							self.reveal_scroll = Some(RevealScroll {
+								target,
+								from: current_offset,
+								elapsed: 0.0,
+							});
+						}
+					}
+				} else {
 					self.target_browsing = true;
 					self.mark_read = None;
-					self.following = false;
-					self.jump = false;
-					let to = centered_offset(&self.rows, target, viewport_h, packed);
-					if self.instant_scrolling || (to - current_offset).abs() < 1.0 {
-						offset = Some(to);
-						self.reveal_scroll = None;
-					} else {
-						self.reveal_scroll = Some(RevealScroll {
-							target,
-							from: current_offset,
-							elapsed: 0.0,
-						});
-					}
+					state.status =
+						"Message was not returned; it may have been removed or become unavailable";
 				}
 			} else {
-				// Target browsing is deliberate reading, even when the service omits the target.
-				// A short result page must not acknowledge unrelated newer messages automatically.
-				self.target_browsing = true;
-				self.mark_read = None;
-				state.status =
-					"Message was not returned; it may have been removed or become unavailable";
+				state.restore_scroll = false;
 			}
 		}
 		if let Some((_, until)) = self.highlighted {
@@ -2956,15 +2989,6 @@ impl TimelineView {
 					Some(channel.id) == state.selected && channel.last_message == Some(message.id)
 				})
 			});
-		if unread_join
-			&& !state.history_targeted
-			&& state.history_before.is_none()
-			&& state.history_after.is_none()
-			&& state.timeline.iter().next().is_none()
-		{
-			self.target_browsing = false;
-		}
-
 		let scrolled_toward_bottom = ui.input(|input| {
 			(scroll_delta < 0.0
 				&& (session.holding()
@@ -2985,6 +3009,7 @@ impl TimelineView {
 				}
 			} else if scrolled_toward_bottom {
 				self.target_browsing = false;
+				self.hold_read_ack = false;
 				if state.history_targeted || state.history_after.is_some() {
 					self.latest = true;
 				}
@@ -2995,6 +3020,7 @@ impl TimelineView {
 		}
 		self.following = at_bottom && !self.target_browsing;
 		if self.following
+			&& !self.hold_read_ack
 			&& self.mark_unread.is_none()
 			&& !state.history_targeted
 			&& state.history_before.is_none()
@@ -3131,6 +3157,7 @@ impl TimelineView {
 		let show_unread = missed
 			&& (state.timeline.iter().next().is_some() || opening_unread)
 			&& (opening_unread
+				|| self.hold_read_ack
 				|| !(self.following
 					&& self.at_current_latest
 					&& !browsing_history
@@ -3139,7 +3166,10 @@ impl TimelineView {
 		// Latest-message metadata can outlive a deleted message. A complete, visible
 		// latest page has nowhere useful to jump; targeted pages still need navigation.
 		if (show_unread || can_load_newer)
-			&& (!whole_conversation_visible || browsing_history || opening_unread)
+			&& (!whole_conversation_visible
+				|| browsing_history
+				|| opening_unread
+				|| self.hold_read_ack)
 		{
 			let (jump_unread, load_newer) = history_banner(
 				ui,
@@ -3467,26 +3497,38 @@ mod tests {
 			for _ in 0..5 {
 				let labels = banner_frame(&ctx, &mut view, &mut state, vec![], false);
 				if tall {
-					assert!(view.target_browsing && view.mark_read.is_none());
-					assert!(view.anchor.is_some_and(|(_, inset)| inset <= 3.0));
+					assert!(view.following && view.hold_read_ack && view.mark_read.is_none());
+					assert!(
+						view.scroll_offset > 400.0,
+						"unread join opened at offset {}",
+						view.scroll_offset
+					);
+					assert!(
+						labels.iter().any(|(text, _)| text == "Unread messages"),
+						"unread join at the bottom hid the banner: {labels:?}"
+					);
 					continue;
 				}
-				for forbidden in [
-					"Unread messages",
-					"More messages",
-					"Jump to unread",
-					"New messages below",
-					"Jump to present",
-				] {
-					assert!(
-						!labels.iter().any(|(text, _)| text == forbidden),
-						"{count} messages unexpectedly showed {forbidden}"
-					);
-				}
 				if count == 0 {
-					assert!(!view.target_browsing && view.following);
+					for forbidden in [
+						"Unread messages",
+						"More messages",
+						"Jump to unread",
+						"New messages below",
+						"Jump to present",
+					] {
+						assert!(
+							!labels.iter().any(|(text, _)| text == forbidden),
+							"{count} messages unexpectedly showed {forbidden}"
+						);
+					}
+					assert!(!view.hold_read_ack && view.following);
 				} else {
-					assert!(view.target_browsing && view.mark_read.is_none());
+					assert!(
+						labels.iter().any(|(text, _)| text == "Unread messages"),
+						"unacked short join hid the banner: {labels:?}"
+					);
+					assert!(view.following && view.hold_read_ack && view.mark_read.is_none());
 				}
 			}
 			assert_eq!(view.mark_read, (count == 0).then_some(Id(latest)));
@@ -3515,7 +3557,12 @@ mod tests {
 				);
 				assert!(view.following && !view.target_browsing);
 				assert_eq!(view.mark_read.take(), Some(Id(21)));
-				for forbidden in ["Next messages", "New messages below", "Jump to present"] {
+				for forbidden in [
+					"Unread messages",
+					"Next messages",
+					"New messages below",
+					"Jump to present",
+				] {
 					assert!(
 						!labels.iter().any(|(text, _)| text == forbidden),
 						"tall stale channel still showed {forbidden}"
@@ -5323,10 +5370,10 @@ mod tests {
 			for _ in 0..3 {
 				frame(&mut view, &mut state, vec![]);
 			}
-			assert!(view.target_browsing && !view.following);
+			assert!(view.following && view.hold_read_ack);
 			assert!(
 				view.mark_read.is_none(),
-				"Opening an unread channel must not acknowledge until the user reaches the bottom"
+				"Opening an unread channel must not acknowledge until the user scrolls toward the bottom"
 			);
 			frame(
 				&mut view,
@@ -5341,7 +5388,7 @@ mod tests {
 					},
 				],
 			);
-			assert!(!view.target_browsing && view.following);
+			assert!(!view.hold_read_ack && view.following);
 			assert_eq!(
 				view.mark_read.take(),
 				Some(Id(20)),
@@ -5831,9 +5878,10 @@ mod tests {
 			crate::design::apply(&ctx);
 			let mut view = TimelineView::default();
 			let mut avatars = crate::avatars::Avatars::default();
-			let mut render = |state: &mut State| {
+			let mut render = |state: &mut State, events: Vec<egui::Event>| {
 				let output = ctx.run_ui(
 					egui::RawInput {
+						events,
 						screen_rect: Some(egui::Rect::from_min_size(
 							egui::Pos2::ZERO,
 							egui::vec2(width, 480.0),
@@ -5858,7 +5906,13 @@ mod tests {
 					_ => None,
 				});
 				output.drop_without_applying_deltas();
-				y
+				(
+					y,
+					view.scroll_offset,
+					view.following,
+					view.hold_read_ack,
+					view.anchor,
+				)
 			};
 			for channel in [Id(20), Id(21)] {
 				state.select(channel);
@@ -5885,7 +5939,7 @@ mod tests {
 					},
 				});
 				for _ in 0..6 {
-					render(&mut state);
+					render(&mut state, vec![]);
 				}
 			}
 			for channel in [Id(20), Id(21), Id(20)] {
@@ -5894,9 +5948,13 @@ mod tests {
 					Some(client_core::Command::History { .. })
 				));
 				assert!(state.history_pending);
-				let first = render(&mut state).expect("cached switch must paint last message");
+				let first = render(&mut state, vec![])
+					.0
+					.expect("cached switch must paint last message");
 				for _ in 0..4 {
-					let next = render(&mut state).expect("settled chat must paint last message");
+					let next = render(&mut state, vec![])
+						.0
+						.expect("settled chat must paint last message");
 					assert!(
 						(first - next).abs() <= 1.0,
 						"cached switch moved from {first} to {next} at width {width}"
@@ -5912,11 +5970,96 @@ mod tests {
 						messages,
 					},
 				});
-				let refreshed = render(&mut state).expect("refreshed chat must paint last message");
+				let refreshed = render(&mut state, vec![])
+					.0
+					.expect("refreshed chat must paint last message");
 				assert!(
 					(first - refreshed).abs() <= 1.0,
 					"refresh moved from {first} to {refreshed} at width {width}"
 				);
+			}
+			if count == 50 {
+				let (_, bottom, _, _, _) = render(&mut state, vec![]);
+				let up = vec![
+					egui::Event::PointerMoved(egui::pos2(width / 2.0, 240.0)),
+					egui::Event::MouseWheel {
+						unit: egui::MouseWheelUnit::Point,
+						delta: egui::vec2(0.0, 4_000.0),
+						modifiers: egui::Modifiers::NONE,
+						phase: egui::TouchPhase::Move,
+					},
+				];
+				let mut left = bottom;
+				let mut pinned = None;
+				for _ in 0..6 {
+					let frame = render(&mut state, up.clone());
+					left = frame.1;
+					pinned = frame.4;
+				}
+				let (pinned_id, _) = pinned.expect("scrolled channel has an anchor");
+				assert!(
+					left + 200.0 < bottom,
+					"scroll left the live edge at {left}, bottom was {bottom}"
+				);
+				state.select(Id(21));
+				render(&mut state, vec![]);
+				assert!(
+					state.select(Id(20)).is_none(),
+					"a parked page scrolls locally"
+				);
+				let mut back = (None, 0.0, true, false, None);
+				for _ in 0..8 {
+					back = render(&mut state, vec![]);
+				}
+				assert_eq!(back.4.map(|(id, _)| id), Some(pinned_id));
+				assert!(
+					(back.1 - left).abs() <= 1.0,
+					"loaded return moved from {left} to {}",
+					back.1
+				);
+				assert!(!back.2 && !back.3);
+				state.select(Id(21));
+				render(&mut state, vec![]);
+				state.clear_cached_history();
+				let command = state.select(Id(20));
+				let client_core::Command::History {
+					before: None,
+					after: Some(after),
+					..
+				} = command.expect("an evicted page requests history")
+				else {
+					panic!("evicted return did not request the page after the pinned message");
+				};
+				let saved = state
+					.reading(Id(20))
+					.expect("evicted channel keeps its cursor");
+				let pinned_id = saved.message.expect("evicted cursor names a message");
+				assert_eq!(after.0, pinned_id.0 - 1);
+				let pinned_inset = saved.inset;
+				let messages = (0..40)
+					.map(|index| {
+						let mut message = text_message(pinned_id.0 + index);
+						message.channel = Id(20);
+						message.content = "A wrapped synthetic message with different measured and estimated heights. ".repeat(3);
+						message
+					})
+					.collect();
+				state.apply(client_core::Envelope {
+					generation: state.generation,
+					event: client_core::Event::History {
+						channel: Id(20),
+						request: state.request,
+						older: false,
+						messages,
+					},
+				});
+				let mut back = (None, 0.0, true, false, None);
+				for _ in 0..8 {
+					back = render(&mut state, vec![]);
+				}
+				assert_eq!(back.4.map(|(id, _)| id), Some(pinned_id));
+				assert!((back.1 - pinned_inset).abs() <= 1.0);
+				assert!(!back.2 && !back.3);
 			}
 		}
 	}
