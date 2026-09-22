@@ -856,6 +856,24 @@ fn role_chips(
 	});
 }
 
+pub(crate) fn profile_opener_id() -> egui::Id {
+	egui::Id::unique("serein-profile-opener")
+}
+
+pub(crate) fn arm_profile_opener(ui: &egui::Ui, response: &egui::Response) {
+	if response.contains_pointer() {
+		ui.data_mut(|data| data.insert_temp(profile_opener_id(), response.rect));
+	}
+}
+
+pub(crate) fn toggle_profile(profile: &mut Option<User>, user: &User) {
+	if profile.as_ref().is_some_and(|open| open.id == user.id) {
+		*profile = None;
+	} else {
+		*profile = Some(user.clone());
+	}
+}
+
 /// Shows the popout beside `anchor`; returns an action when the card wants to change or close.
 #[allow(clippy::too_many_arguments)]
 pub fn show(

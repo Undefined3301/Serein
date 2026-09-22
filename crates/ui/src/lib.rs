@@ -2929,6 +2929,9 @@ impl MessagingUi {
 			return commands;
 		}
 		self.profile_trigger = None;
+		ui.ctx().data_mut(|data| {
+			data.remove::<egui::Rect>(profiles::profile_opener_id());
+		});
 		let ctx = ui.ctx().clone();
 		self.extensions.reset_theme_shortcut(&ctx);
 		if self.extensions.has_result() {
@@ -3983,6 +3986,11 @@ impl MessagingUi {
 					pos
 				}
 			};
+			if let Some(rect) =
+				ctx.data(|data| data.get_temp::<egui::Rect>(profiles::profile_opener_id()))
+			{
+				self.profile_trigger = Some(rect);
+			}
 			match profiles::show(
 				ui,
 				user,
@@ -4080,6 +4088,7 @@ impl MessagingUi {
 			}
 		} else {
 			self.profile_anchor = None;
+			self.profile_link = None;
 		}
 
 		if let Some((generation, image)) = &self.profile_image
@@ -6654,6 +6663,79 @@ mod composer_tests {
 			assert_eq!(state.profile.is_some(), !webhook);
 		}
 	}
+
+	#[test]
+	fn text_author_click_toggles_profile_like_voice() {
+		fn labels(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+			match shape {
+				egui::Shape::Text(text) => out.push((
+					text.galley.job.text.clone(),
+					text.galley.rect.translate(text.pos.to_vec2()),
+				)),
+				egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| labels(shape, out)),
+				_ => {}
+			}
+		}
+		let ctx = egui::Context::default();
+		let mut state = test_support::demo_state();
+		let mut messaging = MessagingUi::default();
+		let frame = |messaging: &mut MessagingUi, state: &mut State, events: Vec<egui::Event>| {
+			let mut output = ctx.run_ui(
+				egui::RawInput {
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(1120.0, 900.0),
+					)),
+					events,
+					..Default::default()
+				},
+				|ui| {
+					messaging.show(ui, state);
+				},
+			);
+			output.textures_delta.clear();
+			let mut text = vec![];
+			for shape in output.shapes {
+				labels(&shape.shape, &mut text);
+			}
+			text
+		};
+		let click = |messaging: &mut MessagingUi, state: &mut State, pos: egui::Pos2| {
+			for pressed in [true, false] {
+				frame(
+					messaging,
+					state,
+					vec![
+						egui::Event::PointerMoved(pos),
+						egui::Event::PointerButton {
+							pos,
+							button: egui::PointerButton::Primary,
+							pressed,
+							modifiers: egui::Modifiers::NONE,
+						},
+					],
+				);
+			}
+		};
+		let text = frame(&mut messaging, &mut state, vec![]);
+		let (_, author) = text
+			.iter()
+			.filter(|(label, _)| label == "Robin (synthetic)")
+			.min_by(|(_, left), (_, right)| left.min.x.total_cmp(&right.min.x))
+			.expect("message author");
+		let pos = author.center();
+		click(&mut messaging, &mut state, pos);
+		assert_eq!(messaging.profile.as_ref().map(|user| user.id), Some(Id(2)));
+		click(&mut messaging, &mut state, pos);
+		assert!(messaging.profile.is_none());
+		assert!(
+			state
+				.profile
+				.as_ref()
+				.is_some_and(|view| view.data.is_some())
+		);
+	}
+
 	#[test]
 	fn profile_uses_open_conversation_not_browsed_sidebar_server() {
 		for guild in [None, Some(Id(10))] {

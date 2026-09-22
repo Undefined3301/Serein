@@ -392,8 +392,7 @@ impl Permissions {
 impl State {
 	pub(crate) fn update_permissions(&mut self, event: Event) -> Result<(), &'static str> {
 		let update = self.permissions.update_changed(event);
-		// Repeated gateway snapshots must not restart an open profile request.
-		if !matches!(update, Ok(false)) {
+		if update.is_err() {
 			self.clear_profile();
 			self.profile_cache.clear();
 		}
