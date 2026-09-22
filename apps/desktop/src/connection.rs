@@ -357,9 +357,9 @@ impl Connection {
                                 }
                                 continue;
                             }
-                            if let Command::Members {guild,channel,request,list_id,thread} = command {
+                            if let Command::Members {guild,channel,request,list_id,thread,ranges} = command {
                                 let subscription=match (guild,channel,list_id) {
-                                    (Some(guild),Some(channel),list_id) if thread || list_id.is_some() => Some(discord_gateway::MemberSubscription {guild,channel,request,thread,list_id:list_id.unwrap_or_default()}),
+                                    (Some(guild),Some(channel),list_id) if thread || list_id.is_some() => Some(discord_gateway::MemberSubscription {guild,channel,request,thread,list_id:list_id.unwrap_or_default(),ranges}),
                                     _=>None
                                 };
                                 member_send.send(subscription).map_err(|_|Failure::Network)?;

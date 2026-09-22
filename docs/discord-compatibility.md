@@ -843,8 +843,8 @@ is unperformed; offline regressions cover reference shape, missing/null data and
 
 A guild refresh triggered by subscribing can recreate channel navigation objects without
 the READY-only member-list ID. Member requests now compute that ID from the existing
-bounded role/overwrite mirror, so GUILD_CREATE, newly delivered/restored channels and
-Reload people use current metadata. A change in list identity retires the active request
+bounded role/overwrite mirror, so GUILD_CREATE and newly delivered/restored channels
+subscribe with current metadata. A change in list identity retires the active request
 and lets the visible pane request again; unchanged metadata preserves pending replies.
 Missing metadata still means unavailable for ordinary guild channels. Thread participants now
 use the separate Gateway snapshot described below.
@@ -879,12 +879,18 @@ or long-running capacity behavior.
 
 ### Member role display
 
-The active server member pane groups loaded online members by their highest hoisted role,
-then shows ungrouped Online and Offline sections. Heading counts cover loaded members, not
-the entire server; the existing partial-list hint remains. Highest nonzero role color sets
-online names independently of the hoisted role. Offline names remain muted. Unknown roles
-fall back to ordinary names/groups. Role changes/removals reuse the live permission mirror,
-and member list SYNC/UPDATE supplies role membership. No directory fetch was added.
+The active server member pane follows the gateway member-list index. Scrollbar length is
+`member_count` (`total` on lazy guild lists). The live subscription is the visible chunk, or two
+chunks when the pane spans a boundary. A viewport move sends those ranges only. It does not clear
+the guild channel subscription. The chunk loaded when the channel opened stays in a 1 MiB cache
+and paints immediately on the way back. A loading snapshot does not erase it. A fresh snapshot
+for a range the user already left is still stored there. Group headers and person rows come from
+those slots.
+The pane does not regroup loaded members or show a partial-list hint. Highest nonzero role color
+sets online names independently of the hoisted role used for grouping on the gateway. Offline
+names remain muted. Unknown role group ids fall back to the label Role. Role changes/removals
+reuse the live permission mirror, and member list SYNC/UPDATE supplies role membership. No
+directory fetch was added.
 
 Role name, position, hoist and primary color are documented fields in
 [Discord's role object](https://docs.discord.com/developers/topics/permissions#role-object).
@@ -892,8 +898,8 @@ Modern `colors.primary_color` takes precedence over legacy `color`; role gradien
 rendered. Equal positions favor the lower role ID, consistent with
 [discord.py role comparison](https://github.com/Rapptz/discord.py/blob/master/discord/role.py).
 Names retain hue when readable; the theme adjusts insufficient contrast, including hover.
-Member list subscriptions remain unofficial. Synthetic role evidence does not establish
-live role behavior for every account.
+Member list subscriptions and lazy-range focus remain unofficial. Synthetic role evidence does
+not establish live role behavior for every account.
 
 
 ### Authorized message deletion - September 10, 2026

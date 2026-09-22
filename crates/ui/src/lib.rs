@@ -114,11 +114,6 @@ pub struct AttachmentPaste {
 	pub image: Option<std::sync::Arc<egui::ColorImage>>,
 }
 
-enum MemberRow {
-	Header(String),
-	Member(usize, bool),
-}
-
 #[derive(Default)]
 pub struct MessagingUi {
 	forwarding: forwarding::ForwardDialog,
@@ -150,9 +145,6 @@ pub struct MessagingUi {
 	join_server: join_server::JoinDialog,
 	folder_ui: guild_folders::FolderUi,
 	rail_cache: notifications::RailCache,
-	member_cache_key: Option<(u64, u64, Option<Id>, bool, u64)>,
-	member_cache: Vec<MemberRow>,
-	member_count: usize,
 	composer_layout: composer_text::Layout,
 	channel_cache: categories::Cache,
 	channel_move: Option<(Id, client_core::channel_actions::Action)>,
@@ -221,7 +213,6 @@ pub struct MessagingUi {
 	profile_trigger: Option<egui::Rect>,
 	friend_removal: Option<(u64, model::User)>,
 	members_narrow_open: bool,
-	member_reload_requested: bool,
 	guild: Option<Id>,
 	navigation_channel: Option<Id>,
 	pub logout_requested: bool,
@@ -971,8 +962,9 @@ impl MessagingUi {
 				);
 			});
 	}
-	fn member_rows(&mut self, ui: &mut egui::Ui, state: &State) {
+	fn member_rows(&mut self, ui: &mut egui::Ui, state: &mut State, commands: &mut Vec<Command>) {
 		let colors = design::palette(ui);
+		let cached = state.members_cached();
 		let Some(list) = state
 			.members
 			.as_ref()
@@ -982,117 +974,81 @@ impl MessagingUi {
 			ui.label(RichText::new("Choose a conversation to see its people.").color(colors.muted));
 			return;
 		};
-		if matches!(list.freshness, Freshness::Stale | Freshness::Unavailable) {
+		let has_entry = list.slots.iter().any(|slot| slot.is_some()) || cached;
+		if !has_entry {
 			ui.add_space(8.0);
-			ui.label(
-				RichText::new(match list.freshness {
-					Freshness::Stale => "Awaiting member sync",
-					_ => "Member list unavailable",
-				})
-				.small()
-				.color(colors.muted),
-			);
-			if ui.small_button("Reload people").clicked() {
-				self.member_reload_requested = true;
-			}
-		} else if list.freshness == Freshness::Loading {
-			ui.add_space(8.0);
-			ui.label(RichText::new("Loading people…").small().color(colors.muted));
-		}
-		let cache_key = (
-			state.generation,
-			state.revision,
-			state.selected,
-			state.gateway_connected,
-			list.request,
-		);
-		if self.member_cache_key != Some(cache_key) {
-			let members: Vec<_> = list
-				.rows
-				.iter()
-				.enumerate()
-				.filter_map(|(i, m)| m.as_ref().map(|m| (i, m)))
-				.collect();
-			let online = |(_, member): &(usize, &model::Member)| {
-				profiles::member_presence(state, member, list.guild)
-					.0
-					.is_some_and(|s| matches!(s, "online" | "idle" | "dnd"))
-			};
-			let (online_members, offline_members): (Vec<_>, Vec<_>) =
-				members.iter().copied().partition(online);
-			let mut rows = Vec::with_capacity(members.len() + 2);
-			if let Some(guild) = list.guild {
-				let mut online_members: Vec<_> = online_members
-					.into_iter()
-					.map(|member| (member, state.member_roles(guild, member.1).0))
-					.collect();
-				online_members.sort_by(|a, b| match (a.1, b.1) {
-					(Some(a), Some(b)) => b.cmp_hierarchy(a),
-					(Some(_), None) => std::cmp::Ordering::Less,
-					(None, Some(_)) => std::cmp::Ordering::Greater,
-					(None, None) => std::cmp::Ordering::Equal,
-				});
-				for members in
-					online_members.chunk_by(|a, b| a.1.map(|r| r.id) == b.1.map(|r| r.id))
-				{
-					let name = members[0].1.map_or("Online", |r| {
-						if r.name.is_empty() {
-							"Role"
-						} else {
-							r.name.as_str()
-						}
-					});
-					rows.push(MemberRow::Header(format!("{name} — {}", members.len())));
-					rows.extend(members.iter().map(|(m, _)| MemberRow::Member(m.0, true)));
-				}
-				if !offline_members.is_empty() {
-					rows.push(MemberRow::Header(format!(
-						"Offline — {}",
-						offline_members.len()
-					)));
-					rows.extend(
-						offline_members
-							.iter()
-							.map(|m| MemberRow::Member(m.0, false)),
-					);
-				}
+			if list.freshness != Freshness::Fresh {
+				let text = if list.freshness == Freshness::Unavailable {
+					"People aren't available in this conversation."
+				} else {
+					"Loading people…"
+				};
+				ui.label(RichText::new(text).small().color(colors.muted));
 			} else {
-				rows.push(MemberRow::Header(format!("Members — {}", members.len())));
-				rows.extend(members.iter().map(|m| MemberRow::Member(m.0, online(m))));
+				ui.label(
+					RichText::new("No people returned for this view.")
+						.small()
+						.color(colors.muted),
+				);
 			}
-			self.member_count = members.len();
-			self.member_cache = rows;
-			self.member_cache_key = Some(cache_key);
 		}
-		let member_count = self.member_count;
-		if member_count == 0 && list.freshness == Freshness::Fresh {
-			ui.add_space(8.0);
-			ui.label(
-				RichText::new("No people returned for this view.")
-					.small()
-					.color(colors.muted),
-			);
-		}
-		let hint = if list.guild.is_some() && list.total > member_count as u64 {
-			Some(format!(
-				"Showing {} of {} members",
-				member_count, list.total
-			))
+		let channel = list.channel;
+		let lazy = list.lazy;
+		let start = list.start;
+		let guild = list.guild;
+		let row_count = if lazy {
+			(list.total.min(250_000)) as usize
 		} else {
-			None
+			list.slots.len()
 		};
 		let row_spacing = ui.spacing().item_spacing.y;
 		ui.spacing_mut().item_spacing.y = 0.0;
+		let mut visible = 0usize..0;
 		self.scroll
 			.attach(
 				ui,
-				("people", list.channel),
+				("people", channel),
 				egui::ScrollArea::vertical().auto_shrink([false, false]),
 			)
-			.show_rows(ui, 42.0, self.member_cache.len(), |ui, range| {
+			.show_rows(ui, 42.0, row_count, |ui, range| {
+				visible = range.clone();
 				for index in range {
-					match &self.member_cache[index] {
-						MemberRow::Header(text) => {
+					let slot = if lazy {
+						state.member_slot(index).or_else(|| {
+							if index >= start {
+								list.slots.get(index - start).and_then(|slot| slot.as_ref())
+							} else {
+								None
+							}
+						})
+					} else {
+						list.slots.get(index).and_then(|s| s.as_ref())
+					};
+					match slot {
+						Some(model::MemberSlot::Group(id)) => {
+							let name = match id.as_str() {
+								"online" => "Online".to_owned(),
+								"offline" => "Offline".to_owned(),
+								_ => {
+									let role = id.parse::<u64>().ok().and_then(|role_id| {
+										guild.and_then(|guild| {
+											state.guild_roles(guild).and_then(|roles| {
+												roles.iter().find(|role| role.id == Id(role_id))
+											})
+										})
+									});
+									match role {
+										Some(role) if !role.name.is_empty() => role.name.clone(),
+										_ => "Role".to_owned(),
+									}
+								}
+							};
+							let text = list
+								.groups
+								.iter()
+								.find(|(group_id, _)| group_id == id)
+								.map(|(_, count)| format!("{name} - {count}"))
+								.unwrap_or(name);
 							let (rect, _) = ui.allocate_exact_size(
 								egui::vec2(ui.available_width(), 42.0),
 								egui::Sense::hover(),
@@ -1108,24 +1064,23 @@ impl MessagingUi {
 							header
 								.add(
 									egui::Label::new(
-										design::medium(ui, text, 12.0).color(colors.muted),
+										design::medium(ui, &text, 12.0).color(colors.muted),
 									)
 									.truncate(),
 								)
-								.on_hover_text(text);
+								.on_hover_text(&text);
 						}
-						MemberRow::Member(member_index, online) => {
-							let member = list.rows[*member_index]
-								.as_ref()
-								.expect("cached member row");
+						Some(model::MemberSlot::Person(member)) => {
 							let name = member
 								.nick
 								.as_deref()
 								.filter(|nick| !nick.is_empty())
 								.unwrap_or_else(|| state.user_display_name(&member.user));
 							let (status, custom, activities) =
-								profiles::member_presence(state, member, list.guild);
+								profiles::member_presence(state, member, guild);
 							let subtitle = profiles::subtitle(custom, activities);
+							let online =
+								status.is_some_and(|s| matches!(s, "online" | "idle" | "dnd"));
 							let (rect, response) = ui.allocate_exact_size(
 								egui::vec2(ui.available_width(), 42.0),
 								egui::Sense::click(),
@@ -1175,8 +1130,8 @@ impl MessagingUi {
 										colors.sidebar,
 									);
 								}
-								let text_color = if *online {
-									let role_color = list.guild.and_then(|guild| {
+								let text_color = if online {
+									let role_color = guild.and_then(|guild| {
 										state.member_roles(guild, member).1.map(|role| role.color)
 									});
 									let background = if response.hovered() || response.has_focus() {
@@ -1191,7 +1146,6 @@ impl MessagingUi {
 									colors.muted
 								};
 								let mut show_name = |ui: &mut egui::Ui| {
-									// A text line must not inherit the 32-point interactive-row height.
 									ui.allocate_ui_with_layout(
 										egui::vec2(ui.available_width(), 18.0),
 										egui::Layout::left_to_right(egui::Align::Center),
@@ -1250,12 +1204,22 @@ impl MessagingUi {
 								self.profile = Some(member.user.clone());
 							}
 						}
+						None => {
+							ui.allocate_exact_size(
+								egui::vec2(ui.available_width(), 42.0),
+								egui::Sense::hover(),
+							);
+						}
 					}
 				}
 			});
 		ui.spacing_mut().item_spacing.y = row_spacing;
-		if let Some(hint) = hint {
-			ui.label(RichText::new(hint).size(11.0).color(colors.muted));
+		if lazy && !visible.is_empty() {
+			let first = visible.start;
+			let last = visible.end.saturating_sub(1);
+			if let Some(cmd) = state.focus_member_ranges(first, last) {
+				commands.push(cmd);
+			}
 		}
 	}
 	/// Channel sidebar: context header, scrolling list and the account card.
@@ -3247,14 +3211,18 @@ impl MessagingUi {
 							}),
 					)
 					.show(ui, |ui| {
-						self.member_rows(ui, state);
+						self.member_rows(ui, state, &mut commands);
 					});
 			} else {
 				let response = dialog::Dialog::new("members-narrow", "Members")
 					.subtitle("Everyone with access to this conversation.")
 					.width(360.0)
 					.show(&ctx, |d| {
-						d.scroll(180.0, |ui| self.member_rows(ui, state));
+						let max = (d.available_height() - 180.0).clamp(120.0, 620.0);
+						d.content(|ui| {
+							ui.set_max_height(max);
+							self.member_rows(ui, state, &mut commands);
+						});
 					});
 				if response.close {
 					self.members_narrow_open = false;
@@ -3262,11 +3230,6 @@ impl MessagingUi {
 			}
 		} else if state.members.is_some() {
 			commands.push(state.close_members());
-		}
-		if std::mem::take(&mut self.member_reload_requested)
-			&& let Some(command) = state.request_members()
-		{
-			commands.push(command);
 		}
 		self.reaction_picker.sync(state, state.selected);
 		egui::CentralPanel::default()
@@ -6015,7 +5978,7 @@ mod composer_tests {
 					egui::ThemePreference::Dark
 				});
 				design::apply(&ctx);
-				let state = State {
+				let mut state = State {
 					demo: true,
 					selected: Some(Id(1)),
 					members: Some(model::MemberList {
@@ -6023,10 +5986,14 @@ mod composer_tests {
 						guild: Some(Id(2)),
 						request: 1,
 						total: 3,
+						lazy: false,
+						groups: vec![],
+						ranges: vec![],
 						freshness: Freshness::Fresh,
-						rows: (1..=3)
+						start: 0,
+						slots: (1..=3)
 							.map(|id| {
-								Some(model::Member {
+								Some(model::MemberSlot::Person(model::Member {
 									user: model::User {
 										id: Id(id),
 										name: format!("Member {id}"),
@@ -6047,7 +6014,7 @@ mod composer_tests {
 									status: Some("online".into()),
 									custom_status: Some(format!("Activity {id}")),
 									activities: vec![],
-								})
+								}))
 							})
 							.collect(),
 					}),
@@ -6071,7 +6038,8 @@ mod composer_tests {
 						},
 						|ui| {
 							origin = ui.cursor().min;
-							messaging.member_rows(ui, &state);
+							let mut commands = vec![];
+							messaging.member_rows(ui, &mut state, &mut commands);
 						},
 					);
 					output.textures_delta.clear();
@@ -6142,10 +6110,18 @@ mod composer_tests {
 				guild: Some(Id(2)),
 				request: 1,
 				total: 100,
+				lazy: false,
+				groups: vec![
+					("8".into(), 2),
+					("online".into(), 1),
+					("offline".into(), 97),
+				],
+				ranges: vec![],
 				freshness: Freshness::Fresh,
-				rows: (1..=100)
+				start: 0,
+				slots: (1..=100)
 					.map(|id| {
-						Some(model::Member {
+						Some(model::MemberSlot::Person(model::Member {
 							user: model::User {
 								id: Id(id),
 								name: format!("Synthetic {id}"),
@@ -6168,7 +6144,7 @@ mod composer_tests {
 							.map(str::to_owned),
 							custom_status: None,
 							activities: vec![],
-						})
+						}))
 					})
 					.collect(),
 			}),
@@ -6194,17 +6170,30 @@ mod composer_tests {
 			.members
 			.as_mut()
 			.unwrap()
-			.rows
+			.slots
 			.iter_mut()
 			.flatten()
+			.filter_map(|slot| match slot {
+				model::MemberSlot::Person(m) => Some(m),
+				_ => None,
+			})
 			.take(2)
 		{
 			member.roles.push(Id(8));
 		}
-		let rows = &mut state.members.as_mut().unwrap().rows;
-		rows[0].as_mut().unwrap().user.kind = model::AccountKind::Bot;
-		rows[1].as_mut().unwrap().user.kind = model::AccountKind::App;
-		rows[2].as_mut().unwrap().user.webhook = true;
+		let slots = &mut state.members.as_mut().unwrap().slots;
+		if let Some(model::MemberSlot::Person(m)) = slots[0].as_mut() {
+			m.user.kind = model::AccountKind::Bot;
+		}
+		if let Some(model::MemberSlot::Person(m)) = slots[1].as_mut() {
+			m.user.kind = model::AccountKind::App;
+		}
+		if let Some(model::MemberSlot::Person(m)) = slots[2].as_mut() {
+			m.user.webhook = true;
+		}
+		slots.insert(0, Some(model::MemberSlot::Group("offline".into())));
+		slots.insert(0, Some(model::MemberSlot::Group("online".into())));
+		slots.insert(0, Some(model::MemberSlot::Group("8".into())));
 		let mut messaging = MessagingUi::default();
 		let context = egui::Context::default();
 		let output = context.run_ui(
@@ -6228,9 +6217,9 @@ mod composer_tests {
 			"BOT",
 			"APP",
 			"WEBHOOK",
-			"Founders — 2",
-			"Online — 1",
-			"Offline — 97",
+			"Founders - 2",
+			"Online - 1",
+			"Offline - 97",
 		] {
 			assert!(
 				text.iter().any(|label| label == heading),
@@ -6299,15 +6288,19 @@ mod composer_tests {
 			guild: Some(guild),
 			request: 7,
 			total: 1,
+			lazy: false,
+			groups: vec![],
+			ranges: vec![],
 			freshness: Freshness::Fresh,
-			rows: vec![Some(model::Member {
+			start: 0,
+			slots: vec![Some(model::MemberSlot::Person(model::Member {
 				user: user.clone(),
 				nick: None,
 				roles: vec![],
 				status: Some("online".into()),
 				custom_status: Some("Initial synthetic status".into()),
 				activities: vec![],
-			})],
+			}))],
 		});
 		state.profile = Some(client_core::profile::ProfileView {
 			user: user.id,
@@ -6435,15 +6428,19 @@ mod composer_tests {
 				channel,
 				request: 7,
 				total: 1,
+				lazy: false,
+				groups: vec![],
+				ranges: vec![],
 				freshness: Freshness::Fresh,
-				rows: vec![Some(model::Member {
+				start: 0,
+				slots: vec![Some(model::MemberSlot::Person(model::Member {
 					roles: vec![],
 					user: user.clone(),
 					nick: None,
 					status: Some("online".into()),
 					custom_status: None,
 					activities: vec![],
-				})],
+				}))],
 			});
 			let mut messaging = MessagingUi {
 				navigation_channel: Some(channel),

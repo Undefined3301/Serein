@@ -274,17 +274,25 @@ impl State {
 		self.invalidate_navigation();
 		if let Some(list) = &mut self.members {
 			for member in list
-				.rows
+				.slots
 				.iter_mut()
 				.flatten()
+				.filter_map(|slot| match slot {
+					model::MemberSlot::Person(m) => Some(m),
+					_ => None,
+				})
 				.filter(|member| member.user.id == user.id)
 			{
 				member.user = user.clone();
 			}
 			if list
-				.rows
+				.slots
 				.iter()
 				.flatten()
+				.filter_map(|slot| match slot {
+					model::MemberSlot::Person(m) => Some(m),
+					_ => None,
+				})
 				.map(model::Member::bytes)
 				.sum::<usize>()
 				> 128 * 1024

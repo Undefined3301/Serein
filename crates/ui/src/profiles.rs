@@ -495,9 +495,13 @@ pub(crate) fn presence(
 			guild.is_some() && list.guild == guild && list.freshness == model::Freshness::Fresh
 		})
 		.and_then(|list| {
-			list.rows
+			list.slots
 				.iter()
 				.flatten()
+				.filter_map(|slot| match slot {
+					model::MemberSlot::Person(m) => Some(m),
+					_ => None,
+				})
 				.find(|member| member.user.id == user)
 		})
 		.filter(|_| state.demo || state.gateway_connected)
@@ -1910,15 +1914,19 @@ mod tests {
 			channel: Id(20),
 			request: 1,
 			total: 1,
+			lazy: false,
+			groups: vec![],
+			ranges: vec![],
 			freshness: model::Freshness::Fresh,
-			rows: vec![Some(model::Member {
+			start: 0,
+			slots: vec![Some(model::MemberSlot::Person(model::Member {
 				roles: vec![],
 				user: user.clone(),
 				nick: None,
 				status: Some("idle".into()),
 				custom_status: Some("Server status".into()),
 				activities: vec![],
-			})],
+			}))],
 		});
 		state.direct_presences.push(model::MemberPresence {
 			user: user.id,

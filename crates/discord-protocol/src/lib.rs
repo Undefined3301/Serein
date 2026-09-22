@@ -1429,9 +1429,20 @@ pub struct MemberGroup {
 }
 impl MemberItem {
 	pub fn into_model(self) -> Option<model::Member> {
+		match self.into_slot()? {
+			model::MemberSlot::Person(member) => Some(member),
+			model::MemberSlot::Group(_) => None,
+		}
+	}
+	pub fn into_slot(self) -> Option<model::MemberSlot> {
 		match self {
-			Self::Group { .. } => None,
-			Self::Member { member: mut m } => Some(model::Member {
+			Self::Group { group } => {
+				if group.id.is_empty() || group.id.len() > 32 {
+					return None;
+				}
+				Some(model::MemberSlot::Group(group.id))
+			}
+			Self::Member { member: mut m } => Some(model::MemberSlot::Person(model::Member {
 				roles: m.roles,
 				user: m.user.into_model(),
 				nick: m.nick.map(|n| n.chars().take(128).collect()),
@@ -1449,7 +1460,7 @@ impl MemberItem {
 					"online" | "idle" | "dnd" | "offline" => Some(p.status),
 					_ => None,
 				}),
-			}),
+			})),
 		}
 	}
 }
@@ -1471,11 +1482,20 @@ pub enum MemberOp {
 	Delete { index: usize },
 }
 #[derive(Deserialize)]
+pub struct MemberGroupCount {
+	pub id: String,
+	#[serde(default)]
+	pub count: u64,
+}
+
+#[derive(Deserialize)]
 pub struct MemberUpdate {
 	pub guild_id: Id,
 	pub id: String,
 	pub member_count: u64,
 	pub ops: Vec<MemberOp>,
+	#[serde(default)]
+	pub groups: Vec<MemberGroupCount>,
 }
 
 #[cfg(test)]
