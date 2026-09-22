@@ -116,6 +116,55 @@ pub struct AttachmentPaste {
 	pub image: Option<std::sync::Arc<egui::ColorImage>>,
 }
 
+fn thread_member_rows<'a>(
+	state: &'a State,
+	list: &'a model::MemberList,
+) -> Vec<(std::borrow::Cow<'a, model::MemberSlot>, Option<u64>)> {
+	use std::borrow::Cow;
+	let mut members: Vec<_> = list
+		.slots
+		.iter()
+		.flatten()
+		.filter_map(|slot| {
+			let model::MemberSlot::Person(member) = slot else {
+				return None;
+			};
+			let offline = !profiles::member_presence(state, member, list.guild)
+				.0
+				.is_some_and(|status| matches!(status, "online" | "idle" | "dnd"));
+			let role = list
+				.guild
+				.and_then(|guild| state.member_roles(guild, member).0)
+				.filter(|_| !offline);
+			Some((slot, offline, role))
+		})
+		.collect();
+	members.sort_by(|a, b| {
+		a.1.cmp(&b.1).then_with(|| match (a.2, b.2) {
+			(Some(a), Some(b)) => b.cmp_hierarchy(a),
+			(Some(_), None) => std::cmp::Ordering::Less,
+			(None, Some(_)) => std::cmp::Ordering::Greater,
+			_ => std::cmp::Ordering::Equal,
+		})
+	});
+	let mut rows = Vec::with_capacity(members.len() * 2);
+	for group in members.chunk_by(|a, b| a.1 == b.1 && a.2.map(|r| r.id) == b.2.map(|r| r.id)) {
+		let id = if group[0].1 {
+			"offline".into()
+		} else {
+			group[0]
+				.2
+				.map_or_else(|| "online".into(), |role| role.id.to_string())
+		};
+		rows.push((
+			Cow::Owned(model::MemberSlot::Group(id)),
+			Some(group.len() as u64),
+		));
+		rows.extend(group.iter().map(|row| (Cow::Borrowed(row.0), None)));
+	}
+	rows
+}
+
 #[derive(Default)]
 pub struct MessagingUi {
 	forwarding: forwarding::ForwardDialog,
@@ -1002,6 +1051,12 @@ impl MessagingUi {
 				);
 			}
 		}
+		// Thread snapshots contain people only; paged channel lists supply their own headers.
+		let thread_rows = (!list.lazy
+			&& state
+				.channel(list.channel)
+				.is_some_and(|channel| matches!(channel.kind, 10..=12)))
+		.then(|| thread_member_rows(state, list));
 		let channel = list.channel;
 		let lazy = list.lazy;
 		let start = list.start;
@@ -1016,7 +1071,7 @@ impl MessagingUi {
 		let row_count = if lazy {
 			self.member_extent.unwrap().1.min(total)
 		} else {
-			list.slots.len()
+			thread_rows.as_ref().map_or(list.slots.len(), Vec::len)
 		};
 		let row_spacing = ui.spacing().item_spacing.y;
 		ui.spacing_mut().item_spacing.y = 0.0;
@@ -1039,6 +1094,8 @@ impl MessagingUi {
 								None
 							}
 						})
+					} else if let Some(rows) = &thread_rows {
+						rows.get(index).map(|row| row.0.as_ref())
 					} else {
 						list.slots.get(index).and_then(|s| s.as_ref())
 					};
@@ -1065,7 +1122,9 @@ impl MessagingUi {
 								.groups
 								.iter()
 								.find(|(group_id, _)| group_id == id)
-								.map(|(_, count)| format!("{name} - {count}"))
+								.map(|(_, count)| *count)
+								.or_else(|| thread_rows.as_ref().and_then(|rows| rows[index].1))
+								.map(|count| format!("{name} - {count}"))
 								.unwrap_or(name);
 							let (rect, _) = ui.allocate_exact_size(
 								egui::vec2(ui.available_width(), 42.0),
