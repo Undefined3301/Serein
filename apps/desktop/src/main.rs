@@ -748,7 +748,7 @@ struct Desktop {
 	appearance: egui::ThemePreference,
 	appearance_changed: bool,
 	transparency_available: bool,
-	window_blur: bool,
+	window_blur: Option<platform::window_effects::Blur>,
 	window_transparent: bool,
 	reading: reading_settings::ReadingSettings,
 	app_settings: app_settings::Settings,
@@ -1832,6 +1832,8 @@ impl Desktop {
 			emoji_upload: emoji_upload::EmojiUpload::default(),
 			clipboard: None,
 			download_close_pending: false,
+			window_blur: transparency_available
+				.then(|| platform::window_effects::Blur::new(window.clone())),
 			window,
 			monitor_geometry: None,
 			monitor_period: None,
@@ -1854,7 +1856,6 @@ impl Desktop {
 			appearance: egui::ThemePreference::System,
 			appearance_changed: false,
 			transparency_available,
-			window_blur: false,
 			window_transparent: transparency_available,
 			reading,
 			app_settings,
@@ -5130,9 +5131,8 @@ impl Desktop {
 			self.window_transparent = transparent;
 		}
 		let blur = transparent && effects.2 > 0;
-		if blur != self.window_blur {
-			self.window.set_blur(blur);
-			self.window_blur = blur;
+		if let Some(window_blur) = &mut self.window_blur {
+			window_blur.set_enabled(blur);
 		}
 	}
 	/// Frame period of the display the window is on; egui otherwise assumes 60 Hz.
