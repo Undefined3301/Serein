@@ -879,12 +879,14 @@ or long-running capacity behavior.
 
 ### Member role display
 
-The active server member pane groups loaded online members by their highest hoisted role,
-then shows ungrouped Online and Offline sections. Heading counts cover loaded members, not
-the entire server; the existing partial-list hint remains. Highest nonzero role color sets
-online names independently of the hoisted role. Offline names remain muted. Unknown roles
-fall back to ordinary names/groups. Role changes/removals reuse the live permission mirror,
-and member list SYNC/UPDATE supplies role membership. No directory fetch was added.
+The active server member pane follows the gateway member-list index. Scrollbar length is
+`member_count` (`total` on lazy guild lists). Scrolling subscribes to further 100-wide ranges
+(at most two at a time). Group headers and person rows come from gateway slots; the pane does
+not regroup loaded members or show a partial-list hint. Highest nonzero role color sets online
+names independently of the hoisted role used for grouping on the gateway. Offline names remain
+muted. Unknown role group ids fall back to the label Role. Role changes/removals reuse the live
+permission mirror, and member list SYNC/UPDATE supplies role membership. No directory fetch
+was added.
 
 Role name, position, hoist and primary color are documented fields in
 [Discord's role object](https://docs.discord.com/developers/topics/permissions#role-object).
@@ -892,8 +894,8 @@ Modern `colors.primary_color` takes precedence over legacy `color`; role gradien
 rendered. Equal positions favor the lower role ID, consistent with
 [discord.py role comparison](https://github.com/Rapptz/discord.py/blob/master/discord/role.py).
 Names retain hue when readable; the theme adjusts insufficient contrast, including hover.
-Member list subscriptions remain unofficial. Synthetic role evidence does not establish
-live role behavior for every account.
+Member list subscriptions and lazy-range focus remain unofficial. Synthetic role evidence does
+not establish live role behavior for every account.
 
 
 ### Authorized message deletion - September 10, 2026

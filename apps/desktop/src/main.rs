@@ -1087,7 +1087,14 @@ fn demo_members(guild: Option<model::Id>, channel: model::Id, request: u64) -> m
 		channel,
 		request,
 		total: members.len() as u64,
-		rows: members.into_iter().map(Some).collect(),
+		start: 0,
+		slots: members
+			.into_iter()
+			.map(|m| Some(model::MemberSlot::Person(m)))
+			.collect(),
+		lazy: false,
+		groups: vec![],
+		ranges: vec![],
 		freshness: model::Freshness::Fresh,
 	}
 }
@@ -1232,9 +1239,13 @@ impl Desktop {
 			if !std::env::args().any(|arg| arg == "--demo-friends") {
 				let fixture = demo_members(None, model::Id(22), 0);
 				state.direct_presences = fixture
-					.rows
+					.slots
 					.into_iter()
 					.flatten()
+					.filter_map(|slot| match slot {
+						model::MemberSlot::Person(member) => Some(member),
+						_ => None,
+					})
 					.filter(|member| member.user.id != model::Id(1))
 					.map(|member| model::MemberPresence {
 						user: member.user.id,
@@ -2905,9 +2916,13 @@ impl Desktop {
 				Command::MemberSearch(request) => {
 					let query = request.query.to_lowercase();
 					let rows = demo_members(Some(request.guild), request.channel, request.nonce)
-						.rows
+						.slots
 						.into_iter()
 						.flatten()
+						.filter_map(|slot| match slot {
+							model::MemberSlot::Person(member) => Some(member),
+							_ => None,
+						})
 						.filter(|member| {
 							member.user.name.to_lowercase().contains(&query)
 								|| member

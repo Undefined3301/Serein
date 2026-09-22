@@ -243,9 +243,13 @@ impl State {
 				.as_ref()
 				.filter(|list| list.guild == Some(guild))
 				.and_then(|list| {
-					list.rows
+					list.slots
 						.iter()
 						.flatten()
+						.filter_map(|slot| match slot {
+							model::MemberSlot::Person(m) => Some(m),
+							_ => None,
+						})
 						.find(|m| m.user.id == message.author.id)
 				});
 			let nick = member

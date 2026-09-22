@@ -198,6 +198,7 @@ pub enum Command {
 		channel: Option<Id>,
 		request: u64,
 		list_id: Option<String>,
+		ranges: Vec<[usize; 2]>,
 	},
 	History {
 		channel: Id,
@@ -1089,7 +1090,13 @@ impl State {
 		}
 		let thread = matches!(channel.kind, 10..=12);
 		let list_id = self.member_list_id(channel);
-		let rows = if channel.guild.is_none() && self.freshness != Freshness::Unavailable {
+		let lazy = channel.guild.is_some() && !thread;
+		let ranges = if lazy && list_id.is_some() && self.freshness != Freshness::Unavailable {
+			vec![[0, 99]]
+		} else {
+			vec![]
+		};
+		let slots = if channel.guild.is_none() && self.freshness != Freshness::Unavailable {
 			let mut users = channel.recipients.clone();
 			if let Some(user) = &self.user
 				&& !users.iter().any(|u| u.id == user.id)
@@ -1099,14 +1106,14 @@ impl State {
 			users
 				.into_iter()
 				.map(|user| {
-					Some(Member {
+					Some(MemberSlot::Person(Member {
 						roles: vec![],
 						nick: None,
 						status: None,
 						custom_status: None,
 						activities: vec![],
 						user,
-					})
+					}))
 				})
 				.collect()
 		} else {
@@ -1125,9 +1132,13 @@ impl State {
 			guild: channel.guild,
 			channel: channel.id,
 			request: self.member_request,
-			total: rows.len() as u64,
-			rows,
+			start: 0,
+			total: if lazy { 0 } else { slots.len() as u64 },
+			slots,
+			lazy,
 			freshness,
+			groups: vec![],
+			ranges: ranges.clone(),
 		});
 		let command = Command::Members {
 			thread,
@@ -1137,6 +1148,7 @@ impl State {
 			channel: Some(channel.id),
 			request: self.member_request,
 			list_id,
+			ranges,
 		};
 		self.apply_direct_presence(&[]);
 		Some(command)
@@ -1150,7 +1162,67 @@ impl State {
 			channel: None,
 			request: self.member_request,
 			list_id: None,
+			ranges: vec![],
 		}
+	}
+	pub fn focus_member_ranges(&mut self, first: usize, last: usize) -> Option<Command> {
+		let list = self.members.as_ref()?;
+		if !list.lazy
+			|| Some(list.channel) != self.selected
+			|| list.freshness == Freshness::Unavailable
+			|| !self.can_view(list.channel)
+			|| self.freshness == Freshness::Unavailable
+		{
+			return None;
+		}
+		let index = self.channel_index(list.channel)?;
+		let channel = &self.channels[index];
+		if channel.guild.is_none() || matches!(channel.kind, 10..=12) {
+			return None;
+		}
+		let list_id = self.member_list_id(channel)?;
+		let max_idx = if list.total > 0 {
+			(list.total as usize).saturating_sub(1)
+		} else {
+			0
+		};
+		let first = first.min(max_idx);
+		let last = last.min(max_idx).max(first);
+		let chunk = |i: usize| -> [usize; 2] {
+			let start = (i / 100) * 100;
+			[start, start + 99]
+		};
+		let mut ranges = vec![chunk(first)];
+		let last_chunk = chunk(last);
+		if last_chunk != ranges[0] {
+			if last_chunk[0] > ranges[0][1].saturating_add(1) {
+				let start = last_chunk[0] - 100;
+				ranges = vec![[start, start + 99], last_chunk];
+			} else {
+				ranges.push(last_chunk);
+			}
+		} else {
+			let chunk_end = ranges[0][1];
+			if last + 25 >= chunk_end && chunk_end < max_idx {
+				let next_start = chunk_end + 1;
+				ranges.push([next_start, next_start + 99]);
+			}
+		}
+		if ranges == list.ranges {
+			return None;
+		}
+		let request = list.request;
+		let guild = list.guild;
+		let channel_id = list.channel;
+		self.members.as_mut()?.ranges = ranges.clone();
+		Some(Command::Members {
+			thread: false,
+			guild,
+			channel: Some(channel_id),
+			request,
+			list_id: Some(list_id),
+			ranges,
+		})
 	}
 	pub fn history(&mut self, before: Option<Id>) -> Command {
 		self.history_range(before, None)
@@ -2433,23 +2505,39 @@ impl State {
 				{
 					return;
 				}
-				if list.rows.len() > 100
-					|| list.rows.iter().flatten().any(|row| !row.valid())
-					|| list
-						.rows
-						.iter()
-						.flatten()
-						.any(|member| member.roles.len() > model::permissions::MAX_MEMBER_ROLES)
-					|| list.rows.iter().flatten().map(Member::bytes).sum::<usize>() > 128 * 1024
-				{
+				if self.members.as_ref().is_some_and(|current| {
+					!current.ranges.is_empty()
+						&& !list.ranges.is_empty()
+						&& current.ranges != list.ranges
+				}) {
+					return;
+				}
+				let kept_ranges = self.members.as_ref().map(|m| m.ranges.clone());
+				let invalid = list.slots.len() > 200
+					|| list.slots.iter().flatten().any(|slot| match slot {
+						MemberSlot::Person(row) => {
+							!row.valid() || row.roles.len() > model::permissions::MAX_MEMBER_ROLES
+						}
+						MemberSlot::Group(id) => id.is_empty() || id.len() > 32,
+					}) || list.slot_bytes() > 256 * 1024
+					|| list.groups.len() > 64;
+				if invalid {
 					self.members.as_mut().unwrap().freshness = Freshness::Unavailable;
 				} else {
-					for member in list.rows.iter().flatten() {
-						self.timeline.apply_author_membership(
-							member.user.id,
-							&member.roles,
-							member.nick.as_deref(),
-						);
+					for slot in list.slots.iter().flatten() {
+						if let MemberSlot::Person(member) = slot {
+							self.timeline.apply_author_membership(
+								member.user.id,
+								&member.roles,
+								member.nick.as_deref(),
+							);
+						}
+					}
+					let mut list = list;
+					if list.ranges.is_empty()
+						&& let Some(ranges) = kept_ranges.filter(|ranges| !ranges.is_empty())
+					{
+						list.ranges = ranges;
 					}
 					self.members = Some(list);
 				}
@@ -3057,7 +3145,10 @@ impl State {
 		self.member_request = self.member_request.wrapping_add(1);
 		if let Some(list) = &mut self.members {
 			list.request = self.member_request;
-			list.rows.clear();
+			list.slots.clear();
+			list.start = 0;
+			list.groups.clear();
+			list.ranges.clear();
 			list.freshness = Freshness::Unavailable;
 		}
 	}
@@ -3455,8 +3546,13 @@ impl Event {
 						})
 				}
 				Self::Members(list) => {
-					list.rows.capacity() * size_of::<Option<Member>>()
-						+ list.rows.iter().flatten().map(Member::bytes).sum::<usize>()
+					list.slots.capacity() * size_of::<Option<MemberSlot>>()
+						+ list.slot_bytes()
+						+ list
+							.groups
+							.iter()
+							.map(|(id, _)| id.capacity())
+							.sum::<usize>()
 				}
 				Self::RecipientAdded { user, .. } => user.heap_bytes(),
 				Self::History { messages, .. } => messages.iter().map(Message::bytes).sum(),
@@ -4644,7 +4740,7 @@ mod tests {
 		};
 		state.select(Id(1));
 		state.request_members();
-		assert_eq!(state.members.as_ref().unwrap().rows.len(), 1);
+		assert_eq!(state.members.as_ref().unwrap().slots.len(), 1);
 		let previous = state.members.clone().unwrap();
 		state.close_members();
 		apply(&mut state, Event::Members(previous.clone()));
@@ -4671,7 +4767,7 @@ mod tests {
 				},
 			},
 		);
-		assert_eq!(state.members.as_ref().unwrap().rows.len(), 2);
+		assert_eq!(state.members.as_ref().unwrap().slots.len(), 2);
 		apply(
 			&mut state,
 			Event::RecipientRemoved {
@@ -4679,7 +4775,7 @@ mod tests {
 				user: Id(3),
 			},
 		);
-		assert_eq!(state.members.as_ref().unwrap().rows.len(), 1);
+		assert_eq!(state.members.as_ref().unwrap().slots.len(), 1);
 	}
 	#[test]
 	fn channel_restoration_requires_known_guild_and_preserves_existing_patch_state() {

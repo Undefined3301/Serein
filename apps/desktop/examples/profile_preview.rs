@@ -385,15 +385,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 					guild: Some(model::Id(10)),
 					request: 0,
 					total: 1,
+					lazy: false,
+					groups: vec![],
+					ranges: vec![],
 					freshness: model::Freshness::Fresh,
-					rows: vec![Some(model::Member {
+					start: 0,
+					slots: vec![Some(model::MemberSlot::Person(model::Member {
 						user,
 						nick: None,
 						roles: vec![],
 						status: Some("online".into()),
 						custom_status: Some("Building a quieter place".into()),
 						activities: vec![],
-					})],
+					}))],
 				});
 			} else if page == "dm-tags" {
 				let _ = state.select(model::Id(22));

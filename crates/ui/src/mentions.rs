@@ -128,7 +128,14 @@ pub fn known_users(state: &State, channel: Id) -> Vec<User> {
 		}
 	}
 	if let Some(members) = state.members.as_ref().filter(|m| m.channel == channel) {
-		for member in members.rows.iter().flatten() {
+		for member in members
+			.slots
+			.iter()
+			.flatten()
+			.filter_map(|slot| match slot {
+				model::MemberSlot::Person(m) => Some(m),
+				_ => None,
+			}) {
 			add(&member.user);
 		}
 	}
@@ -154,9 +161,13 @@ fn member(state: &State, channel: Id, id: Id) -> Option<&model::Member> {
 		.as_ref()
 		.filter(|list| list.channel == channel)
 		.and_then(|list| {
-			list.rows
+			list.slots
 				.iter()
 				.flatten()
+				.filter_map(|slot| match slot {
+					model::MemberSlot::Person(m) => Some(m),
+					_ => None,
+				})
 				.find(|member| member.user.id == id)
 		})
 }

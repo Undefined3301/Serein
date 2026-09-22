@@ -713,13 +713,44 @@ impl Member {
 	}
 }
 #[derive(Clone)]
+pub enum MemberSlot {
+	Person(Member),
+	/// Gateway group id: role snowflake, "online", or "offline".
+	Group(String),
+}
+
+impl MemberSlot {
+	pub fn bytes(&self) -> usize {
+		match self {
+			Self::Person(member) => member.bytes(),
+			Self::Group(id) => id.capacity(),
+		}
+	}
+}
+
+#[derive(Clone)]
 pub struct MemberList {
 	pub guild: Option<Id>,
 	pub channel: Id,
 	pub request: u64,
-	pub rows: Vec<Option<Member>>,
+	/// Absolute index of `slots[0]`.
+	pub start: usize,
+	/// Contiguous window. None is a hole. At most 200 entries.
+	pub slots: Vec<Option<MemberSlot>>,
 	pub total: u64,
+	/// Guild channel lazy list. Scrollbar length is `total`. DMs and threads are false and scroll `slots.len()`.
+	pub lazy: bool,
 	pub freshness: Freshness,
+	/// id -> count from the update's top-level groups array. Display only. At most 64.
+	pub groups: Vec<(String, u64)>,
+	/// Ranges last requested for a lazy guild list.
+	pub ranges: Vec<[usize; 2]>,
+}
+
+impl MemberList {
+	pub fn slot_bytes(&self) -> usize {
+		self.slots.iter().flatten().map(MemberSlot::bytes).sum()
+	}
 }
 
 #[cfg(test)]
