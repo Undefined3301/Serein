@@ -1386,10 +1386,29 @@ pub fn debug_role_mentions_check(state: &mut State) {
 		id: Id(1548470397144666162),
 		name: "Role check".into(),
 		bits: 0,
-		color: 0,
+		color: 0xe67e22,
 		position: 1,
 		hoist: false,
 	});
+	let mut message = state.timeline.iter().next().unwrap().clone();
+	message.channel = channel;
+	message.mentions.clear();
+	message.mention_everyone = false;
+	message.mention_roles = vec![Id(1548470397144666162)];
+	assert!(!crate::timeline::mentions_viewer(&message, state));
+	state
+		.permissions
+		.guilds
+		.get_mut(&guild)
+		.unwrap()
+		.member
+		.as_mut()
+		.unwrap()
+		.roles
+		.push(Id(1548470397144666162));
+	assert!(crate::timeline::mentions_viewer(&message, state));
+	message.mention_roles = vec![Id(999999)];
+	assert!(!crate::timeline::mentions_viewer(&message, state));
 	let mut menu = Menu::default();
 	let mut draft = "@Role".to_owned();
 	menu.refresh(state, channel, &draft, Some(5), &[]);
@@ -1469,8 +1488,24 @@ pub fn debug_role_mentions_check(state: &mut State) {
 		} else {
 			egui::Visuals::light()
 		});
+		let mut role_color = egui::Color32::TRANSPARENT;
 		let output = ctx.run_ui(Default::default(), |ui| {
+			let colors = crate::design::palette(ui);
+			role_color =
+				crate::design::role_name_color(0xe67e22, colors.mention_bg, colors.mention_text);
+			assert_ne!(role_color, colors.mention_text);
 			let roles = known_roles(state, channel);
+			let mut preview = egui::text::LayoutJob::default();
+			crate::markdown::Formatted::parse(&draft).append_inline_preview(
+				&mut preview,
+				ui,
+				&[],
+				None,
+				roles,
+				&state.channels,
+			);
+			assert_eq!(preview.text, "@Role check");
+			assert_eq!(preview.sections[0].format.color, role_color);
 			let mut profile = None;
 			let mut surface = crate::select::Surface::new(ui, "mention-test");
 			parsed.show_references(
@@ -1498,7 +1533,7 @@ pub fn debug_role_mentions_check(state: &mut State) {
 			);
 			assert_eq!(galley.job.text, thread_draft);
 		});
-		fn count(shape: &egui::Shape) -> usize {
+		fn count(shape: &egui::Shape, role_color: egui::Color32) -> usize {
 			match shape {
 				egui::Shape::Text(text) => {
 					let value = &text.galley.job.text;
@@ -1506,6 +1541,15 @@ pub fn debug_role_mentions_check(state: &mut State) {
 						assert!(
 							value.contains("Hey guys"),
 							"role and body must share a galley"
+						);
+						assert!(
+							text.galley.rows.iter().any(|row| row
+								.visuals
+								.mesh
+								.vertices
+								.iter()
+								.any(|vertex| vertex.color == role_color)),
+							"role color must reach the painted text"
 						);
 						let row = &text.galley.rows[0];
 						let baseline = row.glyphs.iter().find(|g| g.chr == '@').unwrap().pos.y;
@@ -1521,7 +1565,9 @@ pub fn debug_role_mentions_check(state: &mut State) {
 						"#Thread with spaces" | "#Forum check"
 					))
 				}
-				egui::Shape::Vec(shapes) => shapes.iter().map(count).sum(),
+				egui::Shape::Vec(shapes) => {
+					shapes.iter().map(|shape| count(shape, role_color)).sum()
+				}
 				_ => 0,
 			}
 		}
@@ -1529,7 +1575,7 @@ pub fn debug_role_mentions_check(state: &mut State) {
 			output
 				.shapes
 				.iter()
-				.map(|shape| count(&shape.shape))
+				.map(|shape| count(&shape.shape, role_color))
 				.sum::<usize>(),
 			3,
 			"only the plain role mention should resolve; code stays literal and spoilers stay hidden"

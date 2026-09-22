@@ -37,6 +37,7 @@ struct Style {
 	link: Option<usize>,
 	mention: Option<Id>,
 	role: Option<Id>,
+	role_color: Option<u32>,
 	mass_mention: bool,
 	channel: Option<Id>,
 	/// Discord `<t:seconds[:style]>` reference: rendered fresh each frame, never at parse time.
@@ -1378,6 +1379,12 @@ impl Formatted {
 										format!("@{name}"),
 										Style {
 											mass_mention: true,
+											role_color: render
+												.roles
+												.iter()
+												.find(|role| role.id == id)
+												.map(|role| role.color)
+												.filter(|color| *color != 0),
 											..*style
 										},
 									)
@@ -1937,7 +1944,18 @@ impl Formatted {
 					.iter()
 					.find(|role| role.id == id)
 					.map_or_else(|| format!("unknown-role ({id})"), |role| role.name.clone());
-				(format!("@{name}"), pill.clone())
+				let style = Style {
+					mass_mention: true,
+					role_color: roles
+						.iter()
+						.find(|role| role.id == id)
+						.map(|role| role.color)
+						.filter(|color| *color != 0),
+					..Default::default()
+				};
+				let mut format = Self::format(ui, &style);
+				format.font_id = pill.font_id.clone();
+				(format!("@{name}"), format)
 			} else if let Some(id) = style.channel {
 				match channels.iter().find(|channel| channel.id == id) {
 					Some(channel)
@@ -1994,7 +2012,9 @@ impl Formatted {
 		let colors = crate::design::palette(ui);
 		let body = egui::TextStyle::Body.resolve(ui.style());
 		let color = if style.mass_mention {
-			colors.mention_text
+			style.role_color.map_or(colors.mention_text, |rgb| {
+				crate::design::role_name_color(rgb, colors.mention_bg, colors.mention_text)
+			})
 		} else if style.link.is_some() {
 			visuals.hyperlink_color
 		} else if style.strong {

@@ -571,9 +571,22 @@ fn grouped(previous: Option<&Message>, message: &Message, boundary: Option<Id>) 
 	})
 }
 
-fn mentions_viewer(message: &Message, viewer: Option<Id>) -> bool {
+pub(crate) fn mentions_viewer(message: &Message, state: &State) -> bool {
+	let viewer = state.user.as_ref().map(|user| user.id);
 	message.mention_everyone
 		|| viewer.is_some_and(|viewer| message.mentions.iter().any(|mention| mention.id == viewer))
+		|| (viewer.is_some()
+			&& state
+				.channel(message.channel)
+				.and_then(|channel| channel.guild)
+				.and_then(|guild| state.permissions.guilds.get(&guild))
+				.and_then(|guild| guild.member.as_ref())
+				.is_some_and(|member| {
+					message
+						.mention_roles
+						.iter()
+						.any(|role| member.roles.contains(role))
+				}))
 }
 fn row_key(
 	message: &Message,
@@ -2591,8 +2604,7 @@ impl TimelineView {
 							surface.finish(ui);
 						});
 					let rect = row.response.rect;
-					let mentioned =
-						mentions_viewer(message, state.user.as_ref().map(|user| user.id));
+					let mentioned = mentions_viewer(message, state);
 					if mentioned {
 						ui.painter().set(
 							background,
@@ -3763,9 +3775,9 @@ mod tests {
 	#[test]
 	fn mass_mentions_highlight_every_viewer() {
 		let mut message = text_message(1);
-		assert!(!mentions_viewer(&message, Some(Id(7))));
+		assert!(!mentions_viewer(&message, &State::default()));
 		message.mention_everyone = true;
-		assert!(mentions_viewer(&message, Some(Id(7))));
+		assert!(mentions_viewer(&message, &State::default()));
 	}
 	#[test]
 	fn forwarded_audio_keeps_sender_label_and_player_in_narrow_and_wide_rows() {
