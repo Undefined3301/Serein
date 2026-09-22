@@ -5137,12 +5137,10 @@ impl Desktop {
 }
 impl eframe::App for Desktop {
 	fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
-		if !self.transparency_available {
-			// Match eframe's default clear color on the ordinary opaque surface.
-			egui::Color32::from_rgba_unmultiplied(12, 12, 12, 180).to_normalized_gamma_f32()
-		} else if self.window_transparent {
+		if self.window_transparent {
 			egui::Color32::TRANSPARENT.to_normalized_gamma_f32()
 		} else {
+			// Opaque windows need opaque pixels too, including uncovered panel corners.
 			visuals.panel_fill.to_opaque().to_normalized_gamma_f32()
 		}
 	}
