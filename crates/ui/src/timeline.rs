@@ -67,8 +67,6 @@ pub struct TimelineView {
 	initial_read_checked: bool,
 	pub(super) unread_jump: bool,
 	pub(super) load_newer: bool,
-	channel_labels: u64,
-	channel_labels_key: Option<(u64, u64, Option<Id>)>,
 	pub(super) mark_read: Option<Id>,
 	pub(super) mark_unread: Option<Id>,
 	auto_read_attempt: Option<Id>,
@@ -314,7 +312,6 @@ fn anchor_offset(rows: &[(Id, f32)], id: Id, inset: f32) -> f32 {
 }
 fn layout_key(message: &Message) -> u64 {
 	// A layout fingerprint only; spoiler visibility uses exact text instead.
-	// Reaction counts are excluded so a +1/-1 does not drop measured heights.
 	let mut key = DefaultHasher::new();
 	message.content.hash(&mut key);
 	for prior in message.prior_contents.as_slice() {
@@ -344,10 +341,30 @@ fn layout_key(message: &Message) -> u64 {
 	message.attachments.hash(&mut key);
 	message.embeds.hash(&mut key);
 	message.embeds_suppressed.hash(&mut key);
+	match message.reactions.as_deref() {
+		Some(reactions) => {
+			true.hash(&mut key);
+			for reaction in reactions {
+				reaction.emoji.hash(&mut key);
+			}
+		}
+		None => false.hash(&mut key),
+	}
 	key.finish()
 }
 pub(crate) const MESSAGE_LINE: f32 = 22.0;
 const GROUPED_ROW_SAVINGS: f32 = 52.0;
+
+fn reserved_chrome(ui: &egui::Ui, message: &Message, width: f32) -> f32 {
+	let reactions = crate::reactions::estimated_height(
+		ui,
+		message.reactions.as_deref(),
+		(width - 88.0).max(40.0),
+	);
+	let components = 40.0 * (message.components.len().min(5) as f32);
+	let stickers = 160.0 * (message.sticker_items.len().min(4) as f32);
+	reactions + components + stickers
+}
 
 pub(crate) fn fill_header_line(ui: &mut egui::Ui, compact: bool, text_line: egui::Rect) {
 	let slack = MESSAGE_LINE - text_line.height();
@@ -1372,36 +1389,9 @@ impl TimelineView {
 		}
 		let text_size = egui::TextStyle::Body.resolve(ui.style()).size;
 		let scale = ui.ctx().pixels_per_point();
-		let mut labels_changed = false;
-		let labels_key = (
-			state.generation,
-			state.channel_labels_revision(),
-			state.selected,
-		);
-		if self.channel_labels_key != Some(labels_key) {
-			let mut labels = DefaultHasher::new();
-			for channel in state
-				.channels
-				.iter()
-				.filter(|c| c.guild.is_some() && (c.supports_text() || matches!(c.kind, 15 | 16)))
-			{
-				channel.id.hash(&mut labels);
-				channel.guild.hash(&mut labels);
-				channel.name.hash(&mut labels);
-			}
-			for role in crate::mentions::known_roles(state, state.selected.unwrap_or(Id(0))) {
-				role.id.hash(&mut labels);
-				role.name.hash(&mut labels);
-			}
-			let labels = labels.finish();
-			labels_changed = self.channel_labels != labels;
-			self.channel_labels = labels;
-			self.channel_labels_key = Some(labels_key);
-		}
 		let width_changed = (self.width - width).abs() > 1.0;
 		let content_dimensions_changed = self.text_size != text_size
 			|| self.scale != scale
-			|| labels_changed
 			|| self.hide_media_links != self.applied_hide_media_links;
 		let dimensions_changed = width_changed || content_dimensions_changed;
 		self.applied_hide_media_links = self.hide_media_links;
@@ -1472,6 +1462,7 @@ impl TimelineView {
 				.retain(|(id, _), _| row_ids.binary_search(id).is_ok());
 			let mut previous = None;
 			let mut lead_basis = 0.0;
+			let mut stale_heights = Vec::new();
 			self.rows = starter
 				.into_iter()
 				.chain(display_rows(state))
@@ -1501,11 +1492,15 @@ impl TimelineView {
 					if grouped(prior, m, self.unread_boundary) && !deleted {
 						estimate = (estimate - GROUPED_ROW_SAVINGS).max(24.0);
 					}
-					let height = self
-						.heights
-						.get(&m.id)
-						.filter(|(old_key, _)| *old_key == key)
-						.map_or(estimate, |(_, height)| *height);
+					estimate += reserved_chrome(ui, m, width);
+					let height = match self.heights.get(&m.id) {
+						Some((old_key, height)) if *old_key == key => *height,
+						Some(_) => {
+							stale_heights.push(m.id);
+							estimate
+						}
+						None => estimate,
+					};
 					lead_basis += if height * 8.0 < estimate {
 						estimate
 					} else {
@@ -1514,6 +1509,9 @@ impl TimelineView {
 					(m.id, height)
 				})
 				.collect();
+			for id in stale_heights {
+				self.heights.remove(&id);
+			}
 			lead_rows = Some(lead_basis);
 			if !self.following
 				&& let Some((id, inset)) = self.anchor
@@ -1694,10 +1692,12 @@ impl TimelineView {
 			(total + end_padding + pending_rows.iter().map(|(_, height)| height).sum::<f32>()
 				- ui.available_height())
 			.max(0.0);
+		let mut jumped_to = None;
 		if std::mem::take(&mut self.jump) && self.following {
 			self.reveal_scroll = None;
 			self.present_scroll = None;
 			offset = Some(live_edge_offset);
+			jumped_to = Some(live_edge_offset);
 		}
 		let input_options = ui.ctx().options(|options| options.input_options);
 		let wheel = ui.input(|input| {
@@ -3103,6 +3103,10 @@ impl TimelineView {
 			viewport.min.y
 		});
 		self.scroll_offset = output.state.offset.y;
+		if jumped_to.is_some_and(|target| (self.scroll_offset - target).abs() > 1.0) {
+			self.jump = false;
+			ui.ctx().request_discard("Timeline live edge settled");
+		}
 		// ScrollArea applies wheel input after laying out its contents. Preserve that
 		// movement when new row measurements rebuild the timeline on the next pass.
 		let spare = if welcome {
@@ -3166,6 +3170,7 @@ impl TimelineView {
 				}
 			}
 		}
+		let was_following = self.following;
 		self.following = at_bottom && !self.target_browsing;
 		if self.following
 			&& !self.hold_read_ack
@@ -3199,13 +3204,13 @@ impl TimelineView {
 			self.reflow_frames = self.reflow_frames.saturating_add(1);
 			self.consecutive_reflows = self.consecutive_reflows.saturating_add(1);
 			self.revision = u64::MAX;
-			if self.following {
+			let user_scrolling = scroll_delta != 0.0 || session.holding();
+			if was_following && !user_scrolling {
+				self.following = true;
 				self.jump = true;
-				// Settle a newly selected chat before presenting estimated row positions.
-				// Keep resize and active scrolling on their existing anchored path.
-				if !dimensions_changed
-					|| (channel_changed && scroll_delta == 0.0 && !session.holding())
-				{
+				// An anchored reader keeps this frame's places. The next frame
+				// applies the new leading height through the scroll anchor.
+				if !dimensions_changed || channel_changed {
 					ui.ctx().request_discard("Timeline message heights settled");
 				}
 			}
@@ -6960,7 +6965,13 @@ mod tests {
 	}
 	#[test]
 	fn channel_rename_invalidates_offscreen_reference_heights() {
-		let message = Message {
+		for prior in [false, true] {
+			check_channel_rename_heights(prior);
+		}
+	}
+
+	fn check_channel_rename_heights(prior: bool) {
+		let mut message = Message {
 			sticker_items: vec![],
 			id: Id(1),
 			channel: Id(2),
@@ -7001,6 +7012,11 @@ mod tests {
 			embeds_suppressed: false,
 			attachments: vec![],
 		};
+		if prior {
+			message
+				.prior_contents
+				.push_line(std::mem::take(&mut message.content));
+		}
 		let message_key = layout_key(&message);
 		let mut tail = message.clone();
 		tail.id = Id(2);
@@ -7061,13 +7077,11 @@ mod tests {
 			render(&mut view, &mut state, &mut images);
 		}
 		let short_height = view.heights[&Id(1)].1;
-		let labels_key = view.channel_labels_key;
 		state.apply(client_core::Envelope {
 			generation: state.generation,
 			event: client_core::Event::Message(test_support::message(1_000_000, Id(4))),
 		});
 		render(&mut view, &mut state, &mut images);
-		assert_eq!(view.channel_labels_key, labels_key);
 		assert_eq!(view.heights[&Id(1)].1, short_height);
 		view.following = false;
 		view.anchor = Some((Id(2), 400.0));
@@ -7092,7 +7106,6 @@ mod tests {
 		});
 		assert_eq!(layout_key(state.timeline.get(Id(1)).unwrap()), message_key);
 		render(&mut view, &mut state, &mut images);
-		assert_ne!(view.channel_labels_key, labels_key);
 		assert!(
 			!view.heights.contains_key(&Id(1)),
 			"An offscreen row must lose its old label-dependent height even though its message did not change"
@@ -7109,6 +7122,7 @@ mod tests {
 		);
 		assert!(images.take_requests().is_empty());
 	}
+
 	#[test]
 	fn navigation_preserves_active_download_controls() {
 		let mut view = TimelineView::default();

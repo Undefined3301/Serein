@@ -622,7 +622,38 @@ pub fn estimated_height(embeds: &[Embed]) -> f32 {
 		height += if inline_image(e).is_some() {
 			if count > 1 { image_height + 6.0 } else { 206.0 }
 		} else {
-			(100.0 + e.fields.len() as f32 * 44.0 + image_height).min(664.0)
+			let mut lines = 0.0;
+			if e.provider
+				.as_ref()
+				.is_some_and(|provider| !provider.name.is_empty())
+			{
+				lines += 1.0;
+			}
+			if e.author.is_some() {
+				lines += 1.0;
+			}
+			if e.title.is_some() {
+				lines += 1.0;
+			}
+			if let Some(description) = e.description.as_deref().filter(|text| !text.is_empty()) {
+				lines += description
+					.lines()
+					.map(|line| (line.chars().count() as f32 / 48.0).ceil().max(1.0))
+					.sum::<f32>();
+			}
+			if e.footer
+				.as_ref()
+				.is_some_and(|footer| !footer.text.is_empty())
+				|| e.timestamp.is_some()
+			{
+				lines += 1.0;
+			}
+			if lines == 0.0 {
+				lines = 1.0;
+			}
+			let text = 24.0 + lines * 20.0 + 6.0;
+			let thumb = if e.thumbnail.is_some() { 114.0 } else { 0.0 };
+			(text.max(thumb) + e.fields.len() as f32 * 44.0 + image_height).min(664.0)
 		};
 		index += count;
 	}
