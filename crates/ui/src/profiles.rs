@@ -65,6 +65,7 @@ pub(crate) fn activity_card(
 	demo: bool,
 	(fill, muted): (Color32, Color32),
 ) {
+	let spotify = activity.kind == 2 && activity.name.eq_ignore_ascii_case("Spotify");
 	egui::Frame::new()
 		.fill(fill)
 		.corner_radius(RADIUS)
@@ -74,12 +75,16 @@ pub(crate) fn activity_card(
 			ui.horizontal(|ui| {
 				let heading = match activity.kind {
 					1 => "Streaming",
+					2 if spotify => "Listening to Spotify",
 					2 => "Listening to",
 					3 => "Watching",
 					5 => "Competing in",
 					_ => "Playing",
 				};
 				ui.label(design::semibold(ui, heading, 12.0).color(muted));
+				if spotify {
+					icons::inline(ui, Icon::Spotify, 14.0, muted);
+				}
 				ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 					let more = icons::button(ui, Icon::More, 20.0, "Activity options");
 					egui::Popup::menu(&more).show(|ui| {
@@ -116,15 +121,25 @@ pub(crate) fn activity_card(
 							avatars.show_icon(ui, Some(badge.key()), 24.0, demo, "Activity badge");
 						});
 					}
+				} else if spotify {
+					icons::inline(ui, Icon::Spotify, 64.0, design::palette(ui).positive);
 				}
 				ui.vertical(|ui| {
 					ui.set_width(ui.available_width());
 					ui.spacing_mut().item_spacing.y = 2.0;
-					ui.add(egui::Label::new(design::semibold(ui, &activity.name, 14.0)).truncate())
-						.on_hover_text(&activity.name);
-					for text in [activity.details.as_deref(), activity.state.as_deref()]
-						.into_iter()
-						.flatten()
+					let title = if spotify {
+						activity.details.as_deref().unwrap_or(&activity.name)
+					} else {
+						&activity.name
+					};
+					ui.add(egui::Label::new(design::semibold(ui, title, 14.0)).truncate())
+						.on_hover_text(title);
+					for text in [
+						activity.details.as_deref().filter(|_| !spotify),
+						activity.state.as_deref(),
+					]
+					.into_iter()
+					.flatten()
 					{
 						ui.add(
 							egui::Label::new(RichText::new(text).size(12.0).color(muted))
@@ -136,14 +151,56 @@ pub(crate) fn activity_card(
 						.duration_since(std::time::UNIX_EPOCH)
 						.unwrap_or_default()
 						.as_millis() as u64;
-					if let Some(elapsed) = activity
+					let playback = activity
+						.started_at
+						.zip(activity.ends_at)
+						.filter(|(start, end)| spotify && end > start);
+					if let Some((start, end)) = playback {
+						let elapsed = now.saturating_sub(start).min(end - start);
+						ui.horizontal(|ui| {
+							ui.spacing_mut().item_spacing.x = 4.0;
+							ui.label(
+								RichText::new(activity_elapsed(0, elapsed).unwrap())
+									.monospace()
+									.size(12.0)
+									.color(muted),
+							);
+							let total = RichText::new(activity_elapsed(start, end).unwrap())
+								.monospace()
+								.size(12.0)
+								.color(muted);
+							ui.with_layout(
+								egui::Layout::right_to_left(egui::Align::Center),
+								|ui| {
+									ui.label(total);
+									ui.add(
+										egui::ProgressBar::new(
+											elapsed as f32 / (end - start) as f32,
+										)
+										.desired_width(ui.available_width())
+										.desired_height(4.0)
+										.fill(muted),
+									);
+								},
+							);
+						});
+					} else if let Some(elapsed) = activity
 						.started_at
 						.and_then(|start| activity_elapsed(start, now))
 					{
 						let color = design::palette(ui).positive;
 						ui.horizontal(|ui| {
 							ui.spacing_mut().item_spacing.x = 4.0;
-							icons::inline(ui, Icon::GameController, 14.0, color);
+							icons::inline(
+								ui,
+								if spotify {
+									Icon::Spotify
+								} else {
+									Icon::GameController
+								},
+								14.0,
+								color,
+							);
 							ui.label(RichText::new(elapsed).monospace().size(12.0).color(color));
 						});
 					}
@@ -1503,6 +1560,7 @@ mod tests {
 						asset: Id(2),
 					}),
 					small_image: Some(model::ActivityImage::Application(Id(1))),
+					ends_at: None,
 					started_at: Some(
 						std::time::SystemTime::now()
 							.duration_since(std::time::UNIX_EPOCH)

@@ -40,6 +40,7 @@ fn decode_edge(key: &str) -> u32 {
 	} else if key.starts_with("anim:")
 		|| key.starts_with("embed:")
 		|| key.starts_with("gif:")
+		|| key.starts_with("spotify-")
 		|| key.starts_with("banner-")
 		|| key.starts_with("member-banner-")
 	{
@@ -185,6 +186,11 @@ fn cdn_url(key: &str) -> Option<String> {
 		return model::valid_avatar_hash(hash).then(|| {
 			format!("https://cdn.discordapp.com/channel-icons/{channel}/{hash}.png?size=128")
 		});
+	}
+	if let Some(id) = key.strip_prefix("spotify-") {
+		return model::ActivityImage::Spotify(id.into())
+			.valid()
+			.then(|| format!("https://i.scdn.co/image/{id}"));
 	}
 	if let Some(id) = key.strip_prefix("app-icon-") {
 		let id: Id = id.parse().ok()?;

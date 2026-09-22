@@ -151,6 +151,7 @@ impl Avatars {
 		} else if key.starts_with("anim:")
 			|| key.starts_with("embed:")
 			|| key.starts_with("gif:")
+			|| key.starts_with("spotify-")
 			|| key.starts_with("banner-")
 			|| key.starts_with("member-banner-")
 		{

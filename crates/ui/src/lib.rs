@@ -6447,6 +6447,7 @@ mod composer_tests {
 							asset: Id(9002),
 						}),
 						small_image: None,
+						ends_at: None,
 						started_at: None,
 					}]
 				};

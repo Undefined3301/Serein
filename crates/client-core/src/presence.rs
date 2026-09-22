@@ -112,7 +112,8 @@ pub fn projected_row_bytes(row: &model::Member, update: &MemberPresence) -> usiz
 						.into_iter()
 						.flatten()
 						.map(|image| match image {
-							model::ActivityImage::Proxy(path) => path.len(),
+							model::ActivityImage::Proxy(path)
+							| model::ActivityImage::Spotify(path) => path.len(),
 							_ => 0,
 						})
 						.sum::<usize>()
@@ -448,6 +449,7 @@ mod tests {
 			state: None,
 			image: None,
 			small_image: None,
+			ends_at: None,
 			started_at: None,
 		};
 		let mut state = state();
@@ -824,6 +826,7 @@ mod tests {
 			state: None,
 			image: None,
 			small_image: None,
+			ends_at: None,
 			started_at: None,
 		}
 	}

@@ -1557,3 +1557,15 @@ or unavailable summaries remain explicitly unavailable until refresh or new acti
 successful summaries are reused when returning to a forum during the same session.
 Startup preserves cursors for threads loaded after READY. These changes have synthetic
 offline coverage; normal-account behavior remains unofficial and live-unverified.
+
+### Spotify profile activity — September 22, 2026
+
+Spotify cards use supplied album artwork, song title and artist, with a large Spotify
+logo when artwork is absent. Valid start/end timestamps drive a clamped, read-only
+elapsed/total progress bar. This does not control playback or implement Listen Along.
+The unofficial `spotify:` image mapping follows
+[discord.py](https://github.com/Rapptz/discord.py/blob/master/discord/activity.py):
+only a 40-character hexadecimal image ID can resolve to `https://i.scdn.co/image/{id}`.
+Artwork uses the existing credential-free, redirect-free bounded image worker and
+account-isolated image cache, with the existing 1024px decode limit for media previews.
+Normal-account behavior and live artwork delivery remain unverified.

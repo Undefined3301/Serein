@@ -1041,6 +1041,7 @@ fn demo_members(guild: Option<model::Id>, channel: model::Id, request: u64) -> m
 					asset: model::Id(9002),
 				}),
 				small_image: None,
+				ends_at: None,
 				started_at: None,
 			}],
 		},

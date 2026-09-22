@@ -24,6 +24,7 @@ fn own_profile_and_server_member_render_local_updates_and_clear_without_changing
 				state: None,
 				image: None,
 				small_image: None,
+				ends_at: None,
 				started_at: None,
 			};
 			state.members = Some(model::MemberList {

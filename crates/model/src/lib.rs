@@ -503,6 +503,7 @@ impl OwnPresence {
 pub enum ActivityImage {
 	Asset { application: Id, asset: Id },
 	Proxy(String),
+	Spotify(String),
 	Application(Id),
 }
 impl ActivityImage {
@@ -510,6 +511,7 @@ impl ActivityImage {
 		match self {
 			Self::Asset { application, asset } => application.0 != 0 && asset.0 != 0,
 			Self::Application(id) => id.0 != 0,
+			Self::Spotify(id) => id.len() == 40 && id.bytes().all(|b| b.is_ascii_hexdigit()),
 			Self::Proxy(path) => {
 				!path.is_empty()
 					&& path.len() <= 1024
@@ -528,7 +530,7 @@ impl ActivityImage {
 	}
 	pub fn heap_bytes(&self) -> usize {
 		match self {
-			Self::Proxy(path) => path.capacity(),
+			Self::Proxy(path) | Self::Spotify(path) => path.capacity(),
 			_ => 0,
 		}
 	}
@@ -537,6 +539,7 @@ impl ActivityImage {
 			Self::Asset { application, asset } => format!("activity-{application}-{asset}"),
 			Self::Proxy(path) => format!("embed:https://media.discordapp.net/{path}"),
 			Self::Application(id) => format!("app-icon-{id}"),
+			Self::Spotify(id) => format!("spotify-{id}"),
 		}
 	}
 }
@@ -552,6 +555,8 @@ pub struct RichActivity {
 	pub small_image: Option<ActivityImage>,
 	/// Unix milliseconds, as supplied by the activity producer.
 	pub started_at: Option<u64>,
+	/// Track end in Unix milliseconds; absent when duration is unknown.
+	pub ends_at: Option<u64>,
 }
 pub const MAX_ACTIVITY_TIMESTAMP: u64 = 9_007_199_254_740_991;
 impl RichActivity {
@@ -565,6 +570,9 @@ impl RichActivity {
 			&& self
 				.started_at
 				.is_none_or(|at| at <= MAX_ACTIVITY_TIMESTAMP)
+			&& self.ends_at.is_none_or(|end| {
+				end <= MAX_ACTIVITY_TIMESTAMP && self.started_at.is_some_and(|start| end > start)
+			})
 	}
 	pub fn heap_bytes(&self) -> usize {
 		self.name.capacity()
@@ -721,6 +729,7 @@ mod presence_tests {
 			state: Some("In a party".into()),
 			image: None,
 			small_image: None,
+			ends_at: None,
 			started_at: None,
 		};
 		let mut presence = MemberPresence {
