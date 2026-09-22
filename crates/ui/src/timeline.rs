@@ -6684,7 +6684,13 @@ mod tests {
 	}
 	#[test]
 	fn channel_rename_invalidates_offscreen_reference_heights() {
-		let message = Message {
+		for prior in [false, true] {
+			check_channel_rename_heights(prior);
+		}
+	}
+
+	fn check_channel_rename_heights(prior: bool) {
+		let mut message = Message {
 			sticker_items: vec![],
 			id: Id(1),
 			channel: Id(2),
@@ -6725,6 +6731,11 @@ mod tests {
 			embeds_suppressed: false,
 			attachments: vec![],
 		};
+		if prior {
+			message
+				.prior_contents
+				.push_line(std::mem::take(&mut message.content));
+		}
 		let message_key = layout_key(&message);
 		let mut tail = message.clone();
 		tail.id = Id(2);
@@ -6821,6 +6832,7 @@ mod tests {
 		);
 		assert!(images.take_requests().is_empty());
 	}
+
 	#[test]
 	fn navigation_preserves_active_download_controls() {
 		let mut view = TimelineView::default();

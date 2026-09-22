@@ -242,42 +242,46 @@ pub fn presentation_fingerprint(state: &State, message: &model::Message) -> u64 
 		channel: message.channel,
 	};
 	let roles = known_roles(state, message.channel);
-	let mut rest = message.content.as_str();
-	let mut seen = 0usize;
-	while seen < model::MAX_MENTIONS {
-		let Some(start) = rest.find('<') else {
-			break;
-		};
-		rest = &rest[start..];
-		if let Some((id, len)) = model::user_mention_prefix(rest) {
-			mention_label(id, &message.mentions, Some(&source)).hash(&mut hasher);
-			rest = &rest[len..];
-		} else if let Some((id, len)) = model::role_mention_prefix(rest) {
-			let name = roles
-				.iter()
-				.find(|role| role.id == id)
-				.map_or_else(|| format!("unknown-role ({id})"), |role| role.name.clone());
-			format!("@{name}").hash(&mut hasher);
-			rest = &rest[len..];
-		} else if let Some((id, len)) = model::channel_mention_prefix(rest) {
-			let label = match state.channels.iter().find(|channel| channel.id == id) {
-				Some(channel)
-					if channel.guild.is_some()
-						&& matches!(channel.kind, 0 | 5 | 10..=12 | 15 | 16) =>
-				{
-					format!("#{}", channel.name)
-				}
-				Some(_) => String::new(),
-				None => "#unknown-channel".into(),
+	for text in std::iter::once(message.content.as_str())
+		.chain(message.prior_contents.as_slice().iter().map(String::as_str))
+	{
+		let mut rest = text;
+		let mut seen = 0usize;
+		while seen < model::MAX_MENTIONS {
+			let Some(start) = rest.find('<') else {
+				break;
 			};
-			label.hash(&mut hasher);
-			rest = &rest[len..];
-		} else {
-			let skip = rest.chars().next().map_or(1, char::len_utf8);
-			rest = &rest[skip..];
-			continue;
+			rest = &rest[start..];
+			if let Some((id, len)) = model::user_mention_prefix(rest) {
+				mention_label(id, &message.mentions, Some(&source)).hash(&mut hasher);
+				rest = &rest[len..];
+			} else if let Some((id, len)) = model::role_mention_prefix(rest) {
+				let name = roles
+					.iter()
+					.find(|role| role.id == id)
+					.map_or_else(|| format!("unknown-role ({id})"), |role| role.name.clone());
+				format!("@{name}").hash(&mut hasher);
+				rest = &rest[len..];
+			} else if let Some((id, len)) = model::channel_mention_prefix(rest) {
+				let label = match state.channels.iter().find(|channel| channel.id == id) {
+					Some(channel)
+						if channel.guild.is_some()
+							&& matches!(channel.kind, 0 | 5 | 10..=12 | 15 | 16) =>
+					{
+						format!("#{}", channel.name)
+					}
+					Some(_) => String::new(),
+					None => "#unknown-channel".into(),
+				};
+				label.hash(&mut hasher);
+				rest = &rest[len..];
+			} else {
+				let skip = rest.chars().next().map_or(1, char::len_utf8);
+				rest = &rest[skip..];
+				continue;
+			}
+			seen += 1;
 		}
-		seen += 1;
 	}
 	hasher.finish()
 }
