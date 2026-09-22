@@ -214,19 +214,19 @@ pub struct MemberSubscription {
 	pub request: u64,
 	pub list_id: String,
 }
-fn subscription_packet(guild: Id, channel: Option<Id>, thread: bool) -> Frame {
+fn subscription_packet(guild: Id, typing: bool, channel: Option<Id>, thread: bool) -> Frame {
 	let channels = channel.filter(|_| !thread).map_or_else(
 		|| serde_json::json!({}),
 		|channel| serde_json::json!({channel.to_string():[[0,99]]}),
 	);
-	// Unofficial guild subscriptions require typing=true before channel ranges work.
-	// This receives events; it does not send a typing notification or request members in bulk.
+	// Channel ranges are ignored until a prior frame has subscribed the guild.
+	// `typing` is that subscription. It does not send a typing notification.
 	let threads: Vec<_> = channel
 		.filter(|_| thread)
 		.into_iter()
 		.map(|id| id.to_string())
 		.collect();
-	Frame::Text(serde_json::json!({"op":37,"d":{"subscriptions":{guild.to_string():{"typing":channel.is_some(),"threads":false,"activities":true,"members":[],"channels":channels,"thread_member_lists":threads}}}}).to_string().into())
+	Frame::Text(serde_json::json!({"op":37,"d":{"subscriptions":{guild.to_string():{"typing":typing,"threads":false,"activities":true,"members":[],"channels":channels,"thread_member_lists":threads}}}}).to_string().into())
 }
 struct ActiveMembers {
 	subscription: MemberSubscription,
@@ -240,7 +240,7 @@ struct ActiveMembers {
 /// Offline debug check of the user subscription packet and its bounded snapshot path.
 #[cfg(debug_assertions)]
 pub fn debug_thread_member_check(guild: Id, channel: Id, request: u64) -> MemberList {
-	let Frame::Text(packet) = subscription_packet(guild, Some(channel), true) else {
+	let Frame::Text(packet) = subscription_packet(guild, true, Some(channel), true) else {
 		unreachable!()
 	};
 	let packet: serde_json::Value = serde_json::from_str(&packet).unwrap();
@@ -303,7 +303,7 @@ pub fn debug_thread_member_check(guild: Id, channel: Id, request: u64) -> Member
 			.unwrap()
 	);
 	assert!(active.synced && active.rows.is_empty());
-	let Frame::Text(packet) = subscription_packet(guild, None, true) else {
+	let Frame::Text(packet) = subscription_packet(guild, false, None, true) else {
 		unreachable!()
 	};
 	let packet: serde_json::Value = serde_json::from_str(&packet).unwrap();
@@ -381,14 +381,8 @@ impl ActiveMembers {
 					if start > end {
 						return Err(Failure::Protocol);
 					}
-					if start < 100 {
-						let rows = &mut self.rows[start..=end.min(99)];
-						// Invalidating empty positions must not expire the remaining members.
-						if rows.iter().any(Option::is_some) {
-							self.synced = false;
-						}
-						rows.fill(None);
-					}
+					// The range is stale, not permission to blank the sidebar. The next SYNC
+					// replaces these slots. Clearing them here is what made the pane go empty.
 				}
 				MemberOp::Update { index, item } => {
 					if index < 100 && self.synced {
@@ -782,16 +776,18 @@ async fn run_inner(
 					if subscription.list_id.len() > 32 {
 						return Err(Failure::Protocol);
 					}
+					let typing = subscription_packet(subscription.guild, true, None, false);
+					let ranges = subscription_packet(
+						subscription.guild,
+						true,
+						Some(subscription.channel),
+						subscription.thread,
+					);
 					if !matches!(
-						timeout(
-							Duration::from_secs(5),
-							socket.send(subscription_packet(
-								subscription.guild,
-								Some(subscription.channel),
-								subscription.thread
-							))
-						)
-						.await,
+						timeout(Duration::from_secs(5), socket.send(typing)).await,
+						Ok(Ok(()))
+					) || !matches!(
+						timeout(Duration::from_secs(5), socket.send(ranges)).await,
 						Ok(Ok(()))
 					) {
 						break;
@@ -804,11 +800,12 @@ async fn run_inner(
 						active.clear_presence();
 						let freshness = if active.synced {
 							Freshness::Fresh
-						} else if members_deadline.is_some() {
-							Freshness::Loading
 						} else {
-							Freshness::Unavailable
+							Freshness::Loading
 						};
+						if !active.synced {
+							members_deadline = Some(Instant::now() + Duration::from_secs(15));
+						}
 						emit(Event::Members(active.snapshot(freshness)))?;
 					} else {
 						active_members = Some(ActiveMembers::new(subscription));
@@ -893,15 +890,15 @@ async fn run_inner(
 						})
 					});
 					if !same_list {
-						if let Some(old)=active_members.take() && !matches!(timeout(Duration::from_secs(5),socket.send(subscription_packet(old.subscription.guild,None,old.subscription.thread))).await,Ok(Ok(()))) {break;}
+						if let Some(old)=active_members.take() && !matches!(timeout(Duration::from_secs(5),socket.send(subscription_packet(old.subscription.guild,false,None,old.subscription.thread))).await,Ok(Ok(()))) {break;}
 						members_deadline=None;
 					}
 					member_diagnostics.record("subscription replaced or canceled");
 					sent_members = !subscriptions_open;
 				}
 				_=tokio::time::sleep_until(members_deadline.unwrap_or(ready_deadline)), if members_deadline.is_some() => {
-					member_diagnostics.record("timeout: no populated member SYNC within 15 seconds");
-					if let Some(active)=&mut active_members {active.clear_presence();active.rows.clear();active.rows.resize(100,None);active.synced=false;emit(Event::Members(active.snapshot(Freshness::Unavailable)))?;}
+					member_diagnostics.record("timeout: no populated member SYNC within 15 seconds; subscribing again");
+					sent_members = false;
 					members_deadline=None;
 				}
 				_=tokio::time::sleep_until(presence_deadline.unwrap_or(ready_deadline)), if presence_deadline.is_some() => {
@@ -1085,8 +1082,9 @@ async fn run_inner(
 												Ok(update) if update.ops.iter().any(|op| matches!(op, MemberOp::Sync {items, ..} if items.is_empty())) => member_diagnostics.record("reply: empty SYNC received"),
 												Ok(_) => member_diagnostics.record("reply: incremental operations only; no SYNC"),
 											}
+											let refresh = decoded.as_ref().ok().is_some_and(|update| update.ops.iter().any(|op| matches!(op, MemberOp::Invalidate { .. })) && !update.ops.iter().any(|op| matches!(op, MemberOp::Sync { items, .. } if !items.is_empty())));
 											match decoded.map_err(|_|Failure::Protocol).and_then(|update|active.update(update)) {
-												Ok(true)=>{member_diagnostics.record(if active.synced {"snapshot synchronized"} else {"snapshot still awaiting populated SYNC"});let freshness=if active.synced {Freshness::Fresh}else{Freshness::Stale};emit(Event::Members(active.snapshot(freshness)))?;if active.synced {members_deadline=None;}else{members_deadline.get_or_insert(Instant::now()+Duration::from_secs(15));}},
+												Ok(true)=>{member_diagnostics.record(if active.synced {"snapshot synchronized"} else {"snapshot still awaiting populated SYNC"});let freshness=if active.synced {Freshness::Fresh}else{Freshness::Loading};emit(Event::Members(active.snapshot(freshness)))?;if refresh && members_deadline.is_none() {sent_members=false;members_deadline=Some(Instant::now()+Duration::from_secs(15));} else if active.synced {members_deadline=None;} else {members_deadline.get_or_insert(Instant::now()+Duration::from_secs(15));}},
 												Ok(false)=>{},
 												Err(_)=>{member_diagnostics.record("snapshot unavailable: decode, range or capacity failure");active.clear_presence();active.rows.fill(None);active.synced=false;emit(Event::Members(active.snapshot(Freshness::Unavailable)))?;members_deadline=None;}
 											}
@@ -2468,7 +2466,7 @@ mod member_tests {
 		assert_eq!(list.rows[1].as_ref().unwrap().user.name, "Second");
 		assert!(list.rows[2].is_none());
 		list.update(decode(br#"{"guild_id":"1","id":"everyone","member_count":2,"ops":[{"op":"INVALIDATE","range":[0,99]}]}"#).unwrap()).unwrap();
-		assert!(!list.synced && list.take_presence().is_none() && list.presence_deadline.is_none());
+		assert!(list.synced && list.take_presence().is_none() && list.presence_deadline.is_none());
 	}
 	#[test]
 	fn presence_flood_retains_only_the_hundred_loaded_users() {
@@ -2603,8 +2601,8 @@ mod member_tests {
 		assert_eq!(list.rows[2].as_ref().unwrap().user.id, Id(6));
 		assert_eq!(list.rows.len(), 100);
 		list.update(decode(br#"{"guild_id":"1","id":"everyone","member_count":2,"ops":[{"op":"INVALIDATE","range":[0,99]}]}"#).unwrap()).unwrap();
-		assert!(!list.synced);
-		assert!(list.rows.iter().all(Option::is_none));
+		assert!(list.synced);
+		assert_eq!(list.rows[1].as_ref().unwrap().user.name, "Updated");
 		assert!(list.update(decode(br#"{"guild_id":"1","id":"everyone","member_count":2,"ops":[{"op":"SYNC","range":[9,1],"items":[]}]}"#).unwrap()).is_err());
 	}
 	#[tokio::test]
@@ -2622,6 +2620,7 @@ mod member_tests {
                 socket.send(Frame::Text(json!({"op":10,"d":{"heartbeat_interval":1000}}).to_string().into())).await.unwrap();
                 assert!(matches!(socket.next().await,Some(Ok(Frame::Text(_)))));
                 socket.send(Frame::Text(json!({"op":0,"t":"READY","s":1,"d":{"user":{"id":"1","username":"Owner"},"session_id":"synthetic-members","resume_gateway_url":"wss://gateway.discord.gg/","guilds":[],"private_channels":[]}}).to_string().into())).await.unwrap();
+                let mut typing_ready=false;
                 let mut subscribed=false;
                 let mut switched=false;
                 while let Some(Ok(Frame::Text(text)))=socket.next().await {
@@ -2633,6 +2632,17 @@ mod member_tests {
                     assert_eq!(subscription["threads"],false);
                     assert_eq!(subscription["activities"],true);
                     assert_eq!(subscription["members"],json!([]));
+                    if subscription["typing"]==false {
+                        assert!(subscribed && switched, "unsubscribe before both channel ranges");
+                        assert_eq!(subscription["channels"],json!({}));
+                        break;
+                    }
+                    if subscription["channels"]==json!({}) && subscription["thread_member_lists"]==json!([]) {
+                        typing_ready=true;
+                        continue;
+                    }
+                    assert!(typing_ready, "channel ranges before the guild typing subscription");
+                    typing_ready=false;
                     if !subscribed {
                         assert_eq!(subscription["typing"],true);assert_eq!(subscription["channels"],json!({"2":[[0,99]]}));subscribed=true;
                         socket.send(Frame::Text(json!({"op":0,"t":"GUILD_MEMBER_LIST_UPDATE","s":2,"d":{"guild_id":"1","id":"everyone","member_count":1,"ops":[{"op":"SYNC","range":[0,99],"items":[{"member":{"user":{"id":"3","username":"Visible","avatar":"0123456789abcdef0123456789abcdef"}}}]}]}}).to_string().into())).await.unwrap();
@@ -2645,7 +2655,7 @@ mod member_tests {
                     } else if !switched {
                         assert_eq!(subscription["typing"],true);assert_eq!(subscription["channels"],json!({"4":[[0,99]]}));switched=true;
                         // A shared list need not send another full SYNC on a channel switch.
-                    } else {assert_eq!(subscription["typing"],false);assert_eq!(subscription["channels"],json!({}));break;}
+                    } else {panic!("unexpected member subscription after both channels");}
                 }
                 socket.close(Some(CloseFrame{code:CloseCode::Library(4004),reason:"synthetic stop".into()})).await.unwrap();
             };

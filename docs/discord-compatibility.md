@@ -843,8 +843,8 @@ is unperformed; offline regressions cover reference shape, missing/null data and
 
 A guild refresh triggered by subscribing can recreate channel navigation objects without
 the READY-only member-list ID. Member requests now compute that ID from the existing
-bounded role/overwrite mirror, so GUILD_CREATE, newly delivered/restored channels and
-Reload people use current metadata. A change in list identity retires the active request
+bounded role/overwrite mirror, so GUILD_CREATE and newly delivered/restored channels
+subscribe with current metadata. A change in list identity retires the active request
 and lets the visible pane request again; unchanged metadata preserves pending replies.
 Missing metadata still means unavailable for ordinary guild channels. Thread participants now
 use the separate Gateway snapshot described below.

@@ -2918,7 +2918,6 @@ impl State {
 				// The voice socket is independent and a RESUME replays roster changes, so the call,
 				// roster and known DM calls all stay. Only a fresh READY invalidates the voice state.
 				self.voice.incoming = None;
-				self.invalidate_members();
 				self.gateway_connected = false;
 				self.cancel_history();
 				self.freshness = Freshness::Stale;
@@ -2926,7 +2925,6 @@ impl State {
 				Ok(())
 			}
 			Event::Resumed => {
-				self.members = None;
 				self.member_search = Default::default();
 				self.gateway_connected = true;
 				self.cancel_history();
@@ -2951,7 +2949,8 @@ impl State {
 				self.disconnect_voice(
 					"Discord session or permissions changed; rejoin after refreshing",
 				);
-				self.invalidate_members();
+				self.member_search = Default::default();
+				self.members = None;
 				self.timeline.clear();
 				self.freshness = Freshness::Stale;
 				self.cancel_history();
@@ -4653,11 +4652,7 @@ mod tests {
 		state.request_members();
 		apply(&mut state, Event::PermissionsChanged);
 		apply(&mut state, Event::Members(previous));
-		assert!(state.members.as_ref().unwrap().rows.is_empty());
-		assert_eq!(
-			state.members.as_ref().unwrap().freshness,
-			Freshness::Unavailable
-		);
+		assert!(state.members.is_none());
 		apply(&mut state, Event::Resumed);
 		assert!(state.members.is_none());
 		state.request_members();

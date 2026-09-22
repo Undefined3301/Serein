@@ -221,7 +221,6 @@ pub struct MessagingUi {
 	profile_trigger: Option<egui::Rect>,
 	friend_removal: Option<(u64, model::User)>,
 	members_narrow_open: bool,
-	member_reload_requested: bool,
 	guild: Option<Id>,
 	navigation_channel: Option<Id>,
 	pub logout_requested: bool,
@@ -982,22 +981,14 @@ impl MessagingUi {
 			ui.label(RichText::new("Choose a conversation to see its people.").color(colors.muted));
 			return;
 		};
-		if matches!(list.freshness, Freshness::Stale | Freshness::Unavailable) {
+		if list.freshness != Freshness::Fresh && list.rows.iter().all(Option::is_none) {
 			ui.add_space(8.0);
-			ui.label(
-				RichText::new(match list.freshness {
-					Freshness::Stale => "Awaiting member sync",
-					_ => "Member list unavailable",
-				})
-				.small()
-				.color(colors.muted),
-			);
-			if ui.small_button("Reload people").clicked() {
-				self.member_reload_requested = true;
-			}
-		} else if list.freshness == Freshness::Loading {
-			ui.add_space(8.0);
-			ui.label(RichText::new("Loading people…").small().color(colors.muted));
+			let text = if list.freshness == Freshness::Unavailable {
+				"People aren't available in this conversation."
+			} else {
+				"Loading people…"
+			};
+			ui.label(RichText::new(text).small().color(colors.muted));
 		}
 		let cache_key = (
 			state.generation,
@@ -3262,11 +3253,6 @@ impl MessagingUi {
 			}
 		} else if state.members.is_some() {
 			commands.push(state.close_members());
-		}
-		if std::mem::take(&mut self.member_reload_requested)
-			&& let Some(command) = state.request_members()
-		{
-			commands.push(command);
 		}
 		self.reaction_picker.sync(state, state.selected);
 		egui::CentralPanel::default()
