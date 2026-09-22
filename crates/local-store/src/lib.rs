@@ -10,8 +10,8 @@ use std::{
 
 const MAX_MEDIA_JSON: usize = 256 * 1024;
 const MAX_WINDOW_BYTES: usize = 4 * 1024 * 1024;
-const NATIVE_SCHEMA: u32 = 23;
-const READABLE_SCHEMA: u32 = 23;
+const NATIVE_SCHEMA: u32 = 24;
+const READABLE_SCHEMA: u32 = 24;
 #[derive(serde::Deserialize)]
 struct CachedMentions(#[serde(deserialize_with = "model::deserialize_mentions")] Vec<User>);
 fn parse_author_roles(raw: &str) -> std::result::Result<Vec<Id>, StoreError> {
@@ -415,6 +415,12 @@ impl LocalStore {
 		if !has_smooth_scrolling {
 			transaction.execute_batch("ALTER TABLE reading_preferences ADD COLUMN smooth_scrolling INTEGER NOT NULL DEFAULT 1 CHECK(typeof(smooth_scrolling)='integer' AND smooth_scrolling IN (0,1));")?;
 		}
+		let has_scroll_speed: bool = transaction.query_row(
+			"SELECT EXISTS(SELECT 1 FROM pragma_table_info('reading_preferences') WHERE name='scroll_speed_percent')", [], |row| row.get(0),
+		)?;
+		if !has_scroll_speed {
+			transaction.execute_batch("ALTER TABLE reading_preferences ADD COLUMN scroll_speed_percent INTEGER NOT NULL DEFAULT 100 CHECK(typeof(scroll_speed_percent)='integer' AND scroll_speed_percent BETWEEN 25 AND 300);")?;
+		}
 		let has_author_roles: bool = transaction.query_row(
 			"SELECT EXISTS(SELECT 1 FROM pragma_table_info('messages') WHERE name='author_roles')",
 			[],
@@ -535,7 +541,7 @@ impl LocalStore {
 		let stored = self
 			.0
 			.query_row(
-				"SELECT zoom_percent,sidebar_width,show_members,animate_gifs,hide_media_links,confirm_external_links,smooth_scrolling FROM reading_preferences WHERE singleton=1",
+				"SELECT zoom_percent,sidebar_width,show_members,animate_gifs,hide_media_links,confirm_external_links,smooth_scrolling,scroll_speed_percent FROM reading_preferences WHERE singleton=1",
 				[],
 				|row| {
 					Ok(match (
@@ -546,6 +552,7 @@ impl LocalStore {
 						row.get_ref(4)?,
 						row.get_ref(5)?,
 						row.get_ref(6)?,
+						row.get_ref(7)?,
 					) {
 						(
 							ValueRef::Integer(zoom @ 80..=150),
@@ -555,6 +562,7 @@ impl LocalStore {
 							ValueRef::Integer(hide_media_links @ 0..=1),
 							ValueRef::Integer(confirm_external_links @ 0..=1),
 							ValueRef::Integer(smooth_scrolling @ 0..=1),
+							ValueRef::Integer(scroll_speed_percent @ 25..=300),
 						) => Some(ReadingPreferences {
 							zoom_percent: zoom as u16,
 							sidebar_width: width as u16,
@@ -563,6 +571,7 @@ impl LocalStore {
 							hide_media_links: hide_media_links == 1,
 							confirm_external_links: confirm_external_links == 1,
 							smooth_scrolling: smooth_scrolling == 1,
+							scroll_speed_percent: scroll_speed_percent as u16,
 						}),
 						_ => None,
 					})
@@ -584,10 +593,10 @@ impl LocalStore {
 			self.0
 				.execute("DELETE FROM reading_preferences WHERE singleton=1", [])?;
 		} else {
-			self.0.execute("INSERT INTO reading_preferences(singleton,zoom_percent,sidebar_width,show_members,animate_gifs,hide_media_links,confirm_external_links,smooth_scrolling)
-				VALUES(1,?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(singleton) DO UPDATE SET
-				zoom_percent=excluded.zoom_percent,sidebar_width=excluded.sidebar_width,show_members=excluded.show_members,animate_gifs=excluded.animate_gifs,hide_media_links=excluded.hide_media_links,confirm_external_links=excluded.confirm_external_links,smooth_scrolling=excluded.smooth_scrolling",
-				params![preferences.zoom_percent, preferences.sidebar_width, preferences.show_members, preferences.animate_gifs, preferences.hide_media_links, preferences.confirm_external_links, preferences.smooth_scrolling])?;
+			self.0.execute("INSERT INTO reading_preferences(singleton,zoom_percent,sidebar_width,show_members,animate_gifs,hide_media_links,confirm_external_links,smooth_scrolling,scroll_speed_percent)
+				VALUES(1,?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(singleton) DO UPDATE SET
+				zoom_percent=excluded.zoom_percent,sidebar_width=excluded.sidebar_width,show_members=excluded.show_members,animate_gifs=excluded.animate_gifs,hide_media_links=excluded.hide_media_links,confirm_external_links=excluded.confirm_external_links,smooth_scrolling=excluded.smooth_scrolling,scroll_speed_percent=excluded.scroll_speed_percent",
+				params![preferences.zoom_percent, preferences.sidebar_width, preferences.show_members, preferences.animate_gifs, preferences.hide_media_links, preferences.confirm_external_links, preferences.smooth_scrolling, preferences.scroll_speed_percent])?;
 		}
 		Ok(())
 	}
@@ -1851,6 +1860,7 @@ mod tests {
 			show_members: false,
 			animate_gifs: false,
 			smooth_scrolling: true,
+			scroll_speed_percent: 100,
 			hide_media_links: true,
 			confirm_external_links: true,
 		};
@@ -2175,6 +2185,7 @@ mod tests {
 			show_members: false,
 			animate_gifs: false,
 			smooth_scrolling: true,
+			scroll_speed_percent: 100,
 			hide_media_links: true,
 			confirm_external_links: true,
 		};
@@ -2192,6 +2203,7 @@ mod tests {
 				show_members: true,
 				animate_gifs: false,
 				smooth_scrolling: true,
+				scroll_speed_percent: 100,
 				hide_media_links: true,
 				confirm_external_links: true,
 			},
@@ -2293,6 +2305,7 @@ mod tests {
 		store
 			.save_reading_preferences(ReadingPreferences {
 				smooth_scrolling: false,
+				scroll_speed_percent: 100,
 				..Default::default()
 			})
 			.unwrap();
@@ -2346,6 +2359,7 @@ mod tests {
 					show_members,
 					animate_gifs: false,
 					smooth_scrolling: true,
+					scroll_speed_percent: 100,
 					hide_media_links: true,
 					confirm_external_links: true,
 				};
@@ -2370,6 +2384,7 @@ mod tests {
 					show_members: false,
 					animate_gifs: false,
 					smooth_scrolling: true,
+					scroll_speed_percent: 100,
 					hide_media_links: true,
 					confirm_external_links: true,
 				}),
@@ -2385,6 +2400,7 @@ mod tests {
 				show_members: false,
 				animate_gifs: false,
 				smooth_scrolling: true,
+				scroll_speed_percent: 100,
 				hide_media_links: true,
 				confirm_external_links: true,
 			}),

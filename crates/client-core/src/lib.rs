@@ -663,6 +663,9 @@ pub struct State {
 	#[doc(hidden)]
 	pub navigation_index: NavigationIndex,
 	pub selected: Option<Id>,
+	/// Session-local last opened direct or group message.
+	#[doc(hidden)]
+	pub last_viewed_dm: Option<Id>,
 	/// Session-local guild/channel ID pairs, oldest visit first; at most 16 KiB.
 	#[doc(hidden)]
 	pub last_viewed_channels: Vec<(Id, Id)>,
@@ -861,6 +864,7 @@ impl Default for State {
 			channels: vec![],
 			navigation_index: NavigationIndex::default(),
 			selected: None,
+			last_viewed_dm: None,
 			last_viewed_channels: Vec::new(),
 			last_viewed_threads: Vec::new(),
 			timeline: Timeline::default(),
@@ -1006,6 +1010,13 @@ impl State {
 				.sum::<usize>()
 	}
 	fn remember_channel(&mut self, channel: Id) {
+		if self
+			.channel(channel)
+			.is_some_and(|c| c.guild.is_none() && matches!(c.kind, 1 | 3))
+		{
+			self.last_viewed_dm = Some(channel);
+			return;
+		}
 		let Some(guild) = self.channel(channel).and_then(|c| c.guild) else {
 			return;
 		};
@@ -1133,8 +1144,22 @@ impl State {
 		Apply::Opened(Some(self.history(None)))
 	}
 
+	/// Return to the last available direct message, or Friends when none remains.
+	pub fn open_messages(&mut self) -> Option<Command> {
+		if let Some(channel) = self.last_viewed_dm.filter(|id| {
+			self.channel(*id)
+				.is_some_and(|c| c.guild.is_none() && matches!(c.kind, 1 | 3))
+				&& self.can_view(*id)
+		}) {
+			return self.select(channel);
+		}
+		self.open_home();
+		None
+	}
+
 	/// Open Friends / Home. Does not clear the timeline or emit a command.
 	pub fn open_home(&mut self) {
+		self.last_viewed_dm = None;
 		self.application_commands.clear();
 		self.selected = None;
 		self.record(Place::Home);
