@@ -213,6 +213,8 @@ pub struct MessagingUi {
 	profile_trigger: Option<egui::Rect>,
 	friend_removal: Option<(u64, model::User)>,
 	members_narrow_open: bool,
+	/// Only the open member request's revealed prefix; member data stays in the bounded core cache.
+	member_extent: Option<((u64, Id, u64), usize)>,
 	guild: Option<Id>,
 	navigation_channel: Option<Id>,
 	pub logout_requested: bool,
@@ -996,21 +998,29 @@ impl MessagingUi {
 		let lazy = list.lazy;
 		let start = list.start;
 		let guild = list.guild;
+		let member_key = (state.generation, channel, list.request);
+		let reset_scroll = self.member_extent.is_none_or(|(key, _)| key != member_key);
+		if reset_scroll {
+			self.member_extent = Some((member_key, 100));
+		}
+		let total = list.total.min(250_000) as usize;
 		let row_count = if lazy {
-			(list.total.min(250_000)) as usize
+			self.member_extent.unwrap().1.min(total)
 		} else {
 			list.slots.len()
 		};
 		let row_spacing = ui.spacing().item_spacing.y;
 		ui.spacing_mut().item_spacing.y = 0.0;
 		let mut visible = 0usize..0;
-		self.scroll
-			.attach(
-				ui,
-				("people", channel),
-				egui::ScrollArea::vertical().auto_shrink([false, false]),
-			)
-			.show_rows(ui, 42.0, row_count, |ui, range| {
+		let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]);
+		if reset_scroll {
+			area = area.vertical_scroll_offset(0.0);
+		}
+		let output = self.scroll.attach(ui, ("people", channel), area).show_rows(
+			ui,
+			42.0,
+			row_count,
+			|ui, range| {
 				visible = range.clone();
 				for index in range {
 					let slot = if lazy {
@@ -1212,11 +1222,28 @@ impl MessagingUi {
 						}
 					}
 				}
-			});
+			},
+		);
 		ui.spacing_mut().item_spacing.y = row_spacing;
 		if lazy && !visible.is_empty() {
 			let first = visible.start;
-			let last = visible.end.saturating_sub(1);
+			let mut last = visible.end.saturating_sub(1);
+			if row_count < total
+				&& output.state.offset.y > 0.0
+				&& output.state.offset.y + output.inner_rect.height() >= output.content_size.y - 1.0
+			{
+				// Keep requesting the next chunk while at the bottom, without exposing
+				// another page of empty rows before its first entry arrives.
+				last = row_count;
+				if state.member_slot(row_count).is_some()
+					|| row_count
+						.checked_sub(start)
+						.is_some_and(|index| list.slots.get(index).is_some_and(Option::is_some))
+				{
+					self.member_extent = Some((member_key, (row_count + 100).min(total)));
+					ui.ctx().request_repaint();
+				}
+			}
 			if let Some(cmd) = state.focus_member_ranges(first, last) {
 				commands.push(cmd);
 			}

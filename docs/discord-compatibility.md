@@ -879,9 +879,12 @@ or long-running capacity behavior.
 
 ### Member role display
 
-The active server member pane follows the gateway member-list index. Scrollbar length is
-`member_count` (`total` on lazy guild lists). The live subscription is the visible chunk, or two
-chunks when the pane spans a boundary. A viewport move sends those ranges only. It does not clear
+The active server member pane follows the gateway member-list index. It starts with at most
+100 positions and requests the next chunk only at the bottom, extending the scrollbar by up to
+100 positions once that chunk starts arriving, up to the reported total (capped at 250,000).
+Reopening the pane or changing conversation/session resets the prefix and scroll position.
+Only visible rows are rendered. The live subscription is the visible chunk, or two
+chunks when the pane spans a boundary or requests its next page. It does not clear
 the guild channel subscription. The chunk loaded when the channel opened stays in a 1 MiB cache
 and paints immediately on the way back. A loading snapshot does not erase it. A fresh snapshot
 for a range the user already left is still stored there. Group headers and person rows come from

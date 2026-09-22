@@ -59,9 +59,9 @@ fn main() {
 		state.request_members();
 		let mut list = state.members.clone().unwrap();
 		list.freshness = Freshness::Fresh;
-		list.rows = (1..=8)
+		list.slots = (1..=8)
 			.map(|id| {
-				Some(Member {
+				Some(model::MemberSlot::Person(Member {
 					user: model::User {
 						id: Id(id),
 						..test_support::message(id, channel).author
@@ -71,10 +71,10 @@ fn main() {
 					status: Some("online".into()),
 					custom_status: None,
 					activities: vec![],
-				})
+				}))
 			})
 			.collect();
-		list.total = list.rows.len() as u64;
+		list.total = list.slots.len() as u64;
 		state.apply(Envelope {
 			generation: state.generation,
 			event: Event::Members(list.clone()),
@@ -112,12 +112,15 @@ fn main() {
 		assert_eq!(frame(&ctx, &mut view, &mut state), settled);
 		for step in 0..3 {
 			match step {
-				0 => list.rows[0].as_mut().unwrap().status = Some("offline".into()),
+				0 => match list.slots[0].as_mut().unwrap() {
+					model::MemberSlot::Person(member) => member.status = Some("offline".into()),
+					model::MemberSlot::Group(_) => unreachable!(),
+				},
 				1 => {
-					list.rows.remove(0);
+					list.slots.remove(0);
 					list.total -= 1;
 				}
-				_ => list.rows.reverse(),
+				_ => list.slots.reverse(),
 			}
 			state.apply(Envelope {
 				generation: state.generation,
