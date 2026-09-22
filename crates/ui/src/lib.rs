@@ -1261,15 +1261,27 @@ impl MessagingUi {
 									ui.vertical(|ui| {
 										ui.spacing_mut().item_spacing.y = 1.0;
 										show_name(ui);
-										ui.add(
-											egui::Label::new(
-												RichText::new(subtitle)
-													.size(12.0)
-													.color(colors.muted),
-											)
-											.truncate()
-											.selectable(false),
-										);
+										ui.horizontal(|ui| {
+											ui.spacing_mut().item_spacing.x = 4.0;
+											if activities.first().is_some_and(profiles::is_spotify)
+											{
+												icons::inline(
+													ui,
+													icons::Icon::Spotify,
+													12.0,
+													colors.positive,
+												);
+											}
+											ui.add(
+												egui::Label::new(
+													RichText::new(subtitle)
+														.size(12.0)
+														.color(colors.muted),
+												)
+												.truncate()
+												.selectable(false),
+											);
+										});
 									});
 								} else {
 									show_name(ui);

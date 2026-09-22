@@ -55,7 +55,20 @@ fn main() {
 				roles: if id == 2 { vec![] } else { vec![Id(999)] },
 				status: Some(if id == 3 { "offline" } else { "online" }.into()),
 				custom_status: None,
-				activities: vec![],
+				activities: if id == 2 {
+					vec![model::RichActivity {
+						kind: 2,
+						name: "Spotify".into(),
+						details: Some("Synthetic track".into()),
+						state: Some("Synthetic artist".into()),
+						image: None,
+						small_image: None,
+						started_at: None,
+						ends_at: None,
+					}]
+				} else {
+					vec![]
+				},
 			}))
 		})
 		.collect();
@@ -100,5 +113,7 @@ fn main() {
 	for id in 1..=3 {
 		assert!(painted.contains(&format!("Participant {id}")));
 	}
+	assert!(painted.contains(&"Synthetic artist".into()));
+	assert!(!painted.contains(&"Listening to Spotify".into()));
 	println!("Thread role groups, online fallback and offline members rendered correctly.");
 }

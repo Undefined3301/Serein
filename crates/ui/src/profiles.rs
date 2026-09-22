@@ -66,7 +66,7 @@ pub(crate) fn activity_card(
 	demo: bool,
 	(fill, muted): (Color32, Color32),
 ) {
-	let spotify = activity.kind == 2 && activity.name.eq_ignore_ascii_case("Spotify");
+	let spotify = is_spotify(activity);
 	egui::Frame::new()
 		.fill(fill)
 		.corner_radius(RADIUS)
@@ -570,10 +570,20 @@ fn with_local_activity<'a>(
 	}
 }
 
+pub(crate) fn is_spotify(activity: &model::RichActivity) -> bool {
+	activity.kind == 2 && activity.name.eq_ignore_ascii_case("Spotify")
+}
+
 pub(crate) fn subtitle(custom: Option<&str>, activities: &[model::RichActivity]) -> Option<String> {
 	activities
 		.first()
-		.map(model::RichActivity::summary)
+		.map(|activity| {
+			if is_spotify(activity) {
+				activity.state.clone().unwrap_or_else(|| activity.summary())
+			} else {
+				activity.summary()
+			}
+		})
 		.or_else(|| custom.map(str::to_owned))
 }
 
