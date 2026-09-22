@@ -65,7 +65,7 @@ fn text(
 	part: (u16, &str),
 	cache: &mut FormatCache,
 	opening: &mut Option<String>,
-	profile: &mut Option<model::User>,
+	profile: &mut crate::profiles::ProfileSession,
 	media: (
 		&mut Avatars,
 		bool,
@@ -291,7 +291,7 @@ pub fn show(
 	images: &mut Avatars,
 	opening: &mut Option<String>,
 	download: &mut DownloadUi,
-	profile: &mut Option<model::User>,
+	profile: &mut crate::profiles::ProfileSession,
 	state: &client_core::State,
 ) -> Option<Gif> {
 	if message.embeds_suppressed {
@@ -677,6 +677,7 @@ mod tests {
 							..Default::default()
 						},
 						|ui| {
+							let mut profile = crate::profiles::ProfileSession::default();
 							assert!(
 								show(
 									ui,
@@ -685,7 +686,7 @@ mod tests {
 									&mut images,
 									&mut opening,
 									&mut download,
-									&mut None,
+									&mut profile,
 									&client_core::State::default()
 								)
 								.is_none()
@@ -831,6 +832,7 @@ mod tests {
 						..Default::default()
 					},
 					|ui| {
+						let mut profile = crate::profiles::ProfileSession::default();
 						show(
 							ui,
 							&message,
@@ -838,7 +840,7 @@ mod tests {
 							&mut images,
 							&mut None,
 							&mut DownloadUi::default(),
-							&mut None,
+							&mut profile,
 							&client_core::State::default(),
 						);
 					},
@@ -1110,6 +1112,7 @@ mod tests {
 				..Default::default()
 			},
 			|ui| {
+				let mut profile = crate::profiles::ProfileSession::default();
 				show(
 					ui,
 					&message,
@@ -1117,7 +1120,7 @@ mod tests {
 					&mut images,
 					&mut opening,
 					&mut download,
-					&mut None,
+					&mut profile,
 					&client_core::State::default(),
 				);
 			},

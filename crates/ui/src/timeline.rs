@@ -1071,7 +1071,7 @@ fn show_system(
 	system: &model::SystemMessage,
 	time: time::OffsetDateTime,
 	state: &State,
-	profile: &mut Option<model::User>,
+	profile: &mut crate::profiles::ProfileSession,
 	user_action: &mut Option<crate::user_menu::Action>,
 	surface: &mut crate::select::Surface,
 	// A "started a thread" row: the known thread, its channel, and where clicks go.
@@ -1119,10 +1119,7 @@ fn show_system(
 					.on_hover_cursor(egui::CursorIcon::PointingHand);
 				surface.keep(&response);
 				crate::user_menu::show(&response, state, user, profile, user_action);
-				crate::profiles::arm_profile_opener(ui, &response);
-				if response.clicked() {
-					crate::profiles::toggle_profile(profile, user);
-				}
+				profile.person_click(ui, &response, None, user);
 			}
 			if let Some((_, parent)) = thread {
 				let (pos, galley, response) =
@@ -1258,7 +1255,10 @@ impl TimelineView {
 		state: &mut State,
 		editing: &mut Option<(Id, Id, String)>,
 		deleting: &mut Option<(Id, Id)>,
-		(avatars, profile): (&mut crate::avatars::Avatars, &mut Option<model::User>),
+		(avatars, profile): (
+			&mut crate::avatars::Avatars,
+			&mut crate::profiles::ProfileSession,
+		),
 		upload: Option<&crate::pending::Upload>,
 	) {
 		let mut scroll = crate::scroll::Session::default();
@@ -1280,7 +1280,10 @@ impl TimelineView {
 		state: &mut State,
 		editing: &mut Option<(Id, Id, String)>,
 		deleting: &mut Option<(Id, Id)>,
-		(avatars, profile): (&mut crate::avatars::Avatars, &mut Option<model::User>),
+		(avatars, profile): (
+			&mut crate::avatars::Avatars,
+			&mut crate::profiles::ProfileSession,
+		),
 		upload: Option<&crate::pending::Upload>,
 		session: &mut crate::scroll::Session,
 	) {
@@ -2148,10 +2151,7 @@ impl TimelineView {
 										profile,
 										&mut self.user_action,
 									);
-									crate::profiles::arm_profile_opener(ui, &avatar);
-									if avatar.clicked() {
-										crate::profiles::toggle_profile(profile, &message.author);
-									}
+									profile.person_click(ui, &avatar, None, &message.author);
 									surface.keep(&avatar);
 								}
 								ui.vertical(|ui| {
@@ -2188,13 +2188,12 @@ impl TimelineView {
 													profile,
 													&mut self.user_action,
 												);
-												crate::profiles::arm_profile_opener(ui, &author);
-												if author.clicked() {
-													crate::profiles::toggle_profile(
-														profile,
-														&message.author,
-													);
-												}
+												profile.person_click(
+													ui,
+													&author,
+													None,
+													&message.author,
+												);
 												surface.keep(&author);
 												let time = timestamp(id);
 												let time = ui
@@ -3511,7 +3510,10 @@ mod tests {
 					state,
 					&mut None,
 					&mut None,
-					(&mut crate::avatars::Avatars::default(), &mut None),
+					(
+						&mut crate::avatars::Avatars::default(),
+						&mut crate::profiles::ProfileSession::default(),
+					),
 					None,
 				);
 			},
@@ -3894,7 +3896,10 @@ mod tests {
 						state,
 						&mut None,
 						&mut None,
-						(&mut crate::avatars::Avatars::default(), &mut None),
+						(
+							&mut crate::avatars::Avatars::default(),
+							&mut crate::profiles::ProfileSession::default(),
+						),
 						None,
 					);
 				},
@@ -4054,7 +4059,10 @@ mod tests {
 							&mut state,
 							&mut None,
 							&mut None,
-							(&mut avatars, &mut None),
+							(
+								&mut avatars,
+								&mut crate::profiles::ProfileSession::default(),
+							),
 							None,
 						);
 						assert!(
@@ -4267,7 +4275,7 @@ mod tests {
 							state,
 							&mut None,
 							&mut None,
-							(&mut images, &mut None),
+							(&mut images, &mut crate::profiles::ProfileSession::default()),
 							None,
 						)
 					},
@@ -4462,7 +4470,10 @@ mod tests {
 						&mut state,
 						&mut None,
 						&mut None,
-						(&mut avatars, &mut None),
+						(
+							&mut avatars,
+							&mut crate::profiles::ProfileSession::default(),
+						),
 						None,
 					);
 				},
@@ -4547,7 +4558,10 @@ mod tests {
 							&mut state,
 							&mut None,
 							&mut None,
-							(&mut avatars, &mut None),
+							(
+								&mut avatars,
+								&mut crate::profiles::ProfileSession::default(),
+							),
 							None,
 						);
 						assert!(ui.min_rect().width() <= width, "system rows overflow");
@@ -4658,7 +4672,10 @@ mod tests {
 					&mut state,
 					&mut None,
 					&mut None,
-					(&mut avatars, &mut None),
+					(
+						&mut avatars,
+						&mut crate::profiles::ProfileSession::default(),
+					),
 					None,
 				);
 			})
@@ -4670,7 +4687,10 @@ mod tests {
 				&mut state,
 				&mut None,
 				&mut None,
-				(&mut avatars, &mut None),
+				(
+					&mut avatars,
+					&mut crate::profiles::ProfileSession::default(),
+				),
 				None,
 			);
 		});
@@ -4719,7 +4739,7 @@ mod tests {
 							&mut state,
 							&mut None,
 							&mut None,
-							(&mut images, &mut None),
+							(&mut images, &mut crate::profiles::ProfileSession::default()),
 							None,
 						)
 					},
@@ -4780,7 +4800,10 @@ mod tests {
 							&mut state,
 							&mut None,
 							&mut None,
-							(&mut avatars, &mut None),
+							(
+								&mut avatars,
+								&mut crate::profiles::ProfileSession::default(),
+							),
 							None,
 						)
 					},
@@ -4869,7 +4892,10 @@ mod tests {
 						state,
 						&mut None,
 						&mut None,
-						(&mut avatars, &mut None),
+						(
+							&mut avatars,
+							&mut crate::profiles::ProfileSession::default(),
+						),
 						None,
 					)
 				},
@@ -5045,7 +5071,10 @@ mod tests {
 								state,
 								&mut editing,
 								&mut None,
-								(&mut avatars, &mut None),
+								(
+									&mut avatars,
+									&mut crate::profiles::ProfileSession::default(),
+								),
 								None,
 							)
 						},
@@ -5274,7 +5303,10 @@ mod tests {
 						state,
 						&mut editing,
 						&mut None,
-						(&mut avatars, &mut None),
+						(
+							&mut avatars,
+							&mut crate::profiles::ProfileSession::default(),
+						),
 						None,
 					)
 				},
@@ -5395,7 +5427,10 @@ mod tests {
 							state,
 							&mut None,
 							&mut None,
-							(&mut avatars, &mut None),
+							(
+								&mut avatars,
+								&mut crate::profiles::ProfileSession::default(),
+							),
 							None,
 						)
 					},
@@ -5530,7 +5565,10 @@ mod tests {
 							state,
 							&mut None,
 							&mut None,
-							(&mut avatars, &mut None),
+							(
+								&mut avatars,
+								&mut crate::profiles::ProfileSession::default(),
+							),
 							None,
 						);
 						assert!(ui.min_rect().right() <= ui.max_rect().right() + 1.0);
@@ -5610,7 +5648,10 @@ mod tests {
 						state,
 						&mut None,
 						&mut None,
-						(&mut avatars, &mut None),
+						(
+							&mut avatars,
+							&mut crate::profiles::ProfileSession::default(),
+						),
 						None,
 					);
 				},
@@ -5690,7 +5731,10 @@ mod tests {
 						state,
 						&mut None,
 						&mut None,
-						(&mut avatars, &mut None),
+						(
+							&mut avatars,
+							&mut crate::profiles::ProfileSession::default(),
+						),
 						None,
 					)
 				},
@@ -5859,7 +5903,10 @@ mod tests {
 							&mut state,
 							&mut None,
 							&mut None,
-							(&mut avatars, &mut None),
+							(
+								&mut avatars,
+								&mut crate::profiles::ProfileSession::default(),
+							),
 							None,
 						)
 					},
@@ -5953,7 +6000,10 @@ mod tests {
 							state,
 							&mut None,
 							&mut None,
-							(&mut avatars, &mut None),
+							(
+								&mut avatars,
+								&mut crate::profiles::ProfileSession::default(),
+							),
 							None,
 						);
 					},
@@ -6067,7 +6117,10 @@ mod tests {
 							state,
 							&mut None,
 							&mut None,
-							(&mut avatars, &mut None),
+							(
+								&mut avatars,
+								&mut crate::profiles::ProfileSession::default(),
+							),
 							None,
 						)
 					},
@@ -6307,7 +6360,10 @@ mod tests {
 								state,
 								&mut None,
 								&mut None,
-								(&mut avatars, &mut None),
+								(
+									&mut avatars,
+									&mut crate::profiles::ProfileSession::default(),
+								),
 								None,
 							);
 							assert!(ui.min_rect().right() <= ui.max_rect().right() + 1.0);
@@ -6433,7 +6489,16 @@ mod tests {
 				)),
 				..Default::default()
 			},
-			|ui| view.show(ui, state, &mut None, &mut None, (avatars, &mut None), None),
+			|ui| {
+				view.show(
+					ui,
+					state,
+					&mut None,
+					&mut None,
+					(avatars, &mut crate::profiles::ProfileSession::default()),
+					None,
+				)
+			},
 		)
 		.drop_without_applying_deltas();
 	}
@@ -6623,7 +6688,10 @@ mod tests {
 							state,
 							&mut None,
 							&mut None,
-							(&mut avatars, &mut None),
+							(
+								&mut avatars,
+								&mut crate::profiles::ProfileSession::default(),
+							),
 							None,
 						);
 						assert!(ui.min_rect().right() <= ui.max_rect().right() + 1.0);
@@ -6763,7 +6831,16 @@ mod tests {
 							)),
 							..Default::default()
 						},
-						|ui| view.show(ui, state, &mut None, &mut None, (images, &mut None), None),
+						|ui| {
+							view.show(
+								ui,
+								state,
+								&mut None,
+								&mut None,
+								(images, &mut crate::profiles::ProfileSession::default()),
+								None,
+							)
+						},
 					)
 					.drop_without_applying_deltas();
 			};
@@ -6836,7 +6913,10 @@ mod tests {
 						&mut state,
 						&mut None,
 						&mut None,
-						(&mut crate::avatars::Avatars::default(), &mut None),
+						(
+							&mut crate::avatars::Avatars::default(),
+							&mut crate::profiles::ProfileSession::default(),
+						),
 						None,
 					);
 				})
@@ -6916,7 +6996,10 @@ mod tests {
 				&mut state,
 				&mut None,
 				&mut None,
-				(&mut crate::avatars::Avatars::default(), &mut None),
+				(
+					&mut crate::avatars::Avatars::default(),
+					&mut crate::profiles::ProfileSession::default(),
+				),
 				None,
 			);
 		});
@@ -7008,6 +7091,7 @@ mod tests {
 				..Default::default()
 			},
 			|ui| {
+				let mut profile = crate::profiles::ProfileSession::default();
 				let _ = super::super::embeds::show(
 					ui,
 					&message,
@@ -7015,7 +7099,7 @@ mod tests {
 					&mut crate::avatars::Avatars::default(),
 					&mut None,
 					&mut crate::attachments::DownloadUi::default(),
-					&mut None,
+					&mut profile,
 					&State {
 						demo: true,
 						..Default::default()
@@ -7053,7 +7137,16 @@ mod tests {
 						)),
 						..Default::default()
 					},
-					|ui| view.show(ui, state, &mut None, &mut None, (images, &mut None), None),
+					|ui| {
+						view.show(
+							ui,
+							state,
+							&mut None,
+							&mut None,
+							(images, &mut crate::profiles::ProfileSession::default()),
+							None,
+						)
+					},
 				);
 				assert!(
 					output.platform_output.commands.is_empty(),
@@ -7226,7 +7319,10 @@ mod tests {
 							&mut state,
 							&mut None,
 							&mut None,
-							(&mut avatars, &mut None),
+							(
+								&mut avatars,
+								&mut crate::profiles::ProfileSession::default(),
+							),
 							None,
 						);
 					},
@@ -7342,7 +7438,10 @@ mod tests {
 					state,
 					&mut None,
 					&mut None,
-					(&mut avatars, &mut None),
+					(
+						&mut avatars,
+						&mut crate::profiles::ProfileSession::default(),
+					),
 					None,
 				);
 			},

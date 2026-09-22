@@ -41,7 +41,10 @@ fn frame(
 					state,
 					&mut None,
 					&mut None,
-					(&mut crate::avatars::Avatars::default(), &mut None),
+					(
+						&mut crate::avatars::Avatars::default(),
+						&mut crate::profiles::ProfileSession::default(),
+					),
 					None,
 				);
 				assert!(ui.min_rect().right() <= ui.max_rect().right() + 1.0);
