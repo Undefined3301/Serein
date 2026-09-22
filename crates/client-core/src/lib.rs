@@ -574,6 +574,14 @@ pub struct NavigationIndex {
 	guild_stamp: std::cell::Cell<Option<(usize, usize)>>,
 }
 
+/// Where a text channel was left during this session.
+/// `message` is absent when the reader was on the live edge.
+#[derive(Clone, Copy)]
+pub struct ReadingCursor {
+	pub message: Option<Id>,
+	pub inset: f32,
+}
+
 pub struct State {
 	pub stickers: stickers::Stickers,
 	pub interactions: interactions::Interactions,
@@ -602,8 +610,12 @@ pub struct State {
 	pub pins_changed: Option<Id>,
 	pub message_actions: message_actions::MessageActions,
 	pub search_target: Option<Id>,
+	/// The next consumed `search_target` restores a saved inset instead of centering.
+	pub restore_scroll: bool,
 	/// The active range was fetched around a target, independently of its consumed scroll cue.
 	pub history_targeted: bool,
+	/// Session reading cursors. Missing means the channel has not been opened yet.
+	pub reading: Vec<(Id, ReadingCursor)>,
 	pub reply_deletions: ReplyDeletions,
 	pub read_state: read_state::ReadState,
 	pub startup_warnings: model::account::Warnings,
@@ -703,7 +715,9 @@ impl Default for State {
 			pins_changed: None,
 			message_actions: Default::default(),
 			search_target: None,
+			restore_scroll: false,
 			history_targeted: false,
+			reading: Vec::new(),
 			reply_deletions: ReplyDeletions::default(),
 			read_state: read_state::ReadState::default(),
 			startup_warnings: Default::default(),
@@ -964,6 +978,7 @@ impl State {
 		self.clear_search();
 		self.reset_thread_starter();
 		self.search_target = None;
+		self.restore_scroll = false;
 		self.reactions.reset();
 		self.interactions.reset();
 		self.older_exhausted = false;
@@ -973,6 +988,23 @@ impl State {
 			self.cancel_history();
 			self.freshness = Freshness::Fresh;
 			return Apply::Opened(None);
+		}
+		if let Some(message) = self.reading(channel).and_then(|cursor| cursor.message) {
+			if self.timeline.get(message).is_some() && !self.timeline.is_deleted(message) {
+				self.cancel_history();
+				self.history_before = None;
+				self.history_targeted = false;
+				self.search_target = Some(message);
+				self.restore_scroll = true;
+				self.revision += 1;
+				if self.gateway_connected {
+					self.freshness = Freshness::Fresh;
+				}
+				return Apply::Opened(None);
+			}
+			if let Some(command) = self.open_scrolled_window(message) {
+				return Apply::Opened(Some(command));
+			}
 		}
 		Apply::Opened(Some(self.history(None)))
 	}
@@ -1124,6 +1156,40 @@ impl State {
 	}
 	pub fn history(&mut self, before: Option<Id>) -> Command {
 		self.history_range(before, None)
+	}
+	fn open_scrolled_window(&mut self, message: Id) -> Option<Command> {
+		if message.0 <= 1 || self.timeline.is_deleted(message) {
+			return None;
+		}
+		let after = Id(message.0 - 1);
+		self.timeline.clear_window_preserving_deletions();
+		self.newer_cursor = None;
+		self.newer_may_have_more = false;
+		self.revision += 1;
+		let command = self.history_range(None, Some(after));
+		self.timeline.begin_page(false);
+		self.history_targeted = true;
+		self.search_target = Some(message);
+		self.restore_scroll = true;
+		self.enforce_resident_budget();
+		Some(command)
+	}
+	const MAX_READING_CURSORS: usize = 64;
+	pub fn reading(&self, channel: Id) -> Option<ReadingCursor> {
+		self.reading
+			.iter()
+			.find(|(id, _)| *id == channel)
+			.map(|(_, cursor)| *cursor)
+	}
+	pub fn remember_reading(&mut self, channel: Id, cursor: ReadingCursor) {
+		if channel.0 == 0 {
+			return;
+		}
+		self.reading.retain(|(id, _)| *id != channel);
+		self.reading.push((channel, cursor));
+		if self.reading.len() > Self::MAX_READING_CURSORS {
+			self.reading.remove(0);
+		}
 	}
 	fn history_range(&mut self, before: Option<Id>, after: Option<Id>) -> Command {
 		self.typing.clear();
