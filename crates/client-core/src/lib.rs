@@ -4758,6 +4758,7 @@ mod tests {
 			reply_to: None,
 			kind: 0,
 			reply_deleted: false,
+			interaction: None,
 			forwarded: false,
 			unsupported: false,
 			components: vec![],
