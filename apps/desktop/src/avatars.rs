@@ -816,7 +816,9 @@ fn decode_animation(bytes: &[u8], edge: u32) -> Option<ui::GifFrames> {
 	let started = Instant::now();
 	for (index, frame) in decoded.take(601).enumerate() {
 		if index == 600 || started.elapsed() > Duration::from_secs(3) {
-			return None;
+			// Too long to play: the first frame still stands in, rather than failing the image.
+			frames.truncate(1);
+			return (!frames.is_empty()).then_some(frames);
 		}
 		let frame = frame.ok()?;
 		let (numerator, denominator) = frame.delay().numer_denom_ms();

@@ -14,6 +14,9 @@ pub struct GifDto {
 	#[serde(default)]
 	title: String,
 	url: String,
+	/// The requested small rendition (`media_format=tinygif`).
+	#[serde(default)]
+	src: Option<String>,
 	#[serde(default)]
 	gif_src: Option<String>,
 	#[serde(default)]
@@ -68,7 +71,14 @@ fn into_gifs(gifs: Vec<GifDto>) -> Vec<Gif> {
 		if !model::valid_gif_url(&gif.url) {
 			continue;
 		}
-		let Some(preview) = gif.preview else { continue };
+		// The picker animates the small GIF; `gif_src` is the full-size original for sharing.
+		let Some(preview) = gif
+			.src
+			.filter(|src| model::valid_gif_preview(src) && src.ends_with(".gif"))
+			.or(gif.preview)
+		else {
+			continue;
+		};
 		let gif = Gif {
 			id: gif.id,
 			title: gif.title.trim().chars().take(256).collect(),

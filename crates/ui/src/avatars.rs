@@ -385,16 +385,19 @@ impl Avatars {
 		}
 		response
 	}
-	/// Static Tenor preview texture for the GIF picker. Synthetic previews are painted locally.
+	/// Picker preview texture; a small GIF preview plays, never the full-size original.
+	/// Synthetic previews are painted locally.
 	pub(crate) fn gif_texture(
 		&mut self,
 		ctx: &egui::Context,
 		gif: &model::Gif,
 		demo: bool,
 	) -> Option<(egui::TextureId, [usize; 2])> {
-		let animated = self.animate_gifs && gif.url.ends_with(".gif");
+		let animated = self.animate_gifs
+			&& gif.preview.ends_with(".gif")
+			&& model::valid_gif_url(&gif.preview);
 		let key = if animated {
-			format!("anim:{}", gif.url)
+			format!("anim:{}", gif.preview)
 		} else {
 			format!("gif:{}", gif.preview)
 		};
@@ -1442,7 +1445,7 @@ mod tests {
 			id: "test".into(),
 			title: "Synthetic".into(),
 			url: "https://static.klipy.com/synthetic/test.gif".into(),
-			preview: "https://static.klipy.com/synthetic/test.png".into(),
+			preview: "https://static.klipy.com/synthetic/preview.gif".into(),
 			width: 2,
 			height: 2,
 		};
@@ -1462,7 +1465,7 @@ mod tests {
 		output.textures_delta.clear();
 		assert!(images.gif_texture(&ctx, &gif, false).is_none());
 		let key = images.take_requests().pop().unwrap();
-		assert_eq!(key, format!("anim:{}", gif.url));
+		assert_eq!(key, format!("anim:{}", gif.preview));
 		let first = ColorImage::filled([2, 2], egui::Color32::RED);
 		images.accept(&ctx, key.clone(), Some(first.clone()));
 		images.accept_animation(
