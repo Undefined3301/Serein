@@ -332,6 +332,7 @@ fn layout_key(message: &Message) -> u64 {
 	key.finish()
 }
 pub(crate) const MESSAGE_LINE: f32 = 22.0;
+const GROUPED_ROW_SAVINGS: f32 = 52.0;
 
 pub(crate) fn fill_header_line(ui: &mut egui::Ui, compact: bool, text_line: egui::Rect) {
 	let slack = MESSAGE_LINE - text_line.height();
@@ -1357,10 +1358,20 @@ impl TimelineView {
 				.into_iter()
 				.chain(state.timeline.display_iter())
 				.map(|m| {
-					let key = row_key(m, previous, self.unread_boundary, state)
-						^ u64::from(state.timeline.is_deleted(m.id));
-					previous = (!state.timeline.is_deleted(m.id)).then_some(m);
-					let estimate = (if m.embeds_suppressed {
+					let prior = previous;
+					let deleted = state.timeline.is_deleted(m.id);
+					let key = row_key(m, prior, self.unread_boundary, state) ^ u64::from(deleted);
+					previous = (!deleted).then_some(m);
+					let lines = m
+						.content
+						.lines()
+						.map(|line| {
+							(line.chars().count() as f32 / ((width - 80.0) / 8.0).max(1.0))
+								.ceil()
+								.max(1.0)
+						})
+						.sum::<f32>();
+					let mut estimate = (if m.embeds_suppressed {
 						0.0
 					} else {
 						crate::embeds::estimated_height(&m.embeds)
@@ -1368,16 +1379,10 @@ impl TimelineView {
 					}) + crate::attachments::estimated_height(
 						&m.attachments,
 						(width - 88.0).max(1.0),
-					) + 58.0 + 18.0
-						* (m.content
-							.lines()
-							.map(|line| {
-								(line.chars().count() as f32 / ((width - 80.0) / 8.0).max(1.0))
-									.ceil()
-									.max(1.0)
-							})
-							.sum::<f32>())
-						.min(128.0);
+					) + 58.0 + 18.0 * lines.min(128.0);
+					if grouped(prior, m, self.unread_boundary) && !deleted {
+						estimate = (estimate - GROUPED_ROW_SAVINGS).max(24.0);
+					}
 					let height = self
 						.heights
 						.get(&m.id)
@@ -1642,15 +1647,7 @@ impl TimelineView {
 				(viewport.height() - lead_packed).max(0.0)
 			};
 			ui.add_space(lead);
-			// Initial bottom alignment can expose more rows after estimates shrink.
-			// Grouped rows measure much shorter than the estimate. On the first
-			// pass at the live edge, look far enough above the window that the
-			// corrected offset does not uncover a new band on the next paint.
-			let overscan = if channel_changed && self.following {
-				viewport.height() * 2.0
-			} else {
-				100.0
-			};
+			let overscan = 100.0;
 			let (first, _, top) = visible_range(
 				&self.rows,
 				(viewport.min.y - overscan - lead).max(0.0),
@@ -6959,5 +6956,140 @@ mod tests {
 				.collect();
 			assert!(late.is_empty(), "{label} moved after settle: {late:?}");
 		}
+	}
+
+	fn channel_messages(channel: u64, count: u64) -> State {
+		let mut state = State {
+			selected: Some(Id(channel)),
+			revision: 1,
+			demo: true,
+			older_exhausted: true,
+			freshness: model::Freshness::Fresh,
+			channels: vec![model::Channel {
+				id: Id(channel),
+				guild: None,
+				parent_id: None,
+				position: 0,
+				name: "general".into(),
+				kind: 1,
+				recipients: vec![],
+				member_list_id: None,
+				message_count: None,
+				icon: None,
+				last_message: (count > 0).then_some(Id(count)),
+			}],
+			..Default::default()
+		};
+		for id in 1..=count {
+			let mut message = text_message(id);
+			message.channel = Id(channel);
+			message.content = format!("Row {id}");
+			state.timeline.insert(message, false, false).unwrap();
+		}
+		state
+	}
+
+	fn paint_timeline(
+		ctx: &egui::Context,
+		view: &mut TimelineView,
+		state: &mut State,
+		frame: u32,
+	) -> BTreeMap<String, f32> {
+		let mut avatars = crate::avatars::Avatars::default();
+		let output = ctx.run_ui(
+			egui::RawInput {
+				screen_rect: Some(egui::Rect::from_min_size(
+					egui::Pos2::ZERO,
+					egui::vec2(900.0, 600.0),
+				)),
+				time: Some(f64::from(frame) / 60.0),
+				focused: true,
+				..Default::default()
+			},
+			|ui| {
+				view.show(
+					ui,
+					state,
+					&mut None,
+					&mut None,
+					(&mut avatars, &mut None),
+					None,
+				);
+			},
+		);
+		let labels = label_ys(&output);
+		output.drop_without_applying_deltas();
+		labels
+	}
+
+	fn newest_y(labels: &BTreeMap<String, f32>, count: u64) -> Option<f32> {
+		labels.get(&format!("Row {count}")).copied()
+	}
+
+	#[test]
+	fn live_edge_snap_paints_the_tail_in_place() {
+		let ctx = egui::Context::default();
+		crate::design::apply(&ctx);
+		let mut state = channel_messages(21, 48);
+		let mut view = TimelineView::default();
+		let mut settled = None;
+		for frame in 0..6 {
+			settled = newest_y(&paint_timeline(&ctx, &mut view, &mut state, frame), 48);
+		}
+		let settled = settled.expect("settled tail");
+
+		view.heights.retain(|id, _| id.0 <= 12);
+		view.following = false;
+		view.target_browsing = true;
+		view.jump = false;
+		view.anchor = Some((Id(1), 0.0));
+		view.revision = u64::MAX;
+		paint_timeline(&ctx, &mut view, &mut state, 20);
+		view.follow_latest();
+		let mut ack = Vec::new();
+		for frame in 0..6 {
+			ack.push(newest_y(
+				&paint_timeline(&ctx, &mut view, &mut state, 30 + frame),
+				48,
+			));
+		}
+		assert!(
+			ack.iter()
+				.all(|y| y.is_some_and(|y| (y - settled).abs() < 1.0)),
+			"ack to the bottom walked the tail {ack:?}, settled at {settled}"
+		);
+
+		let mut loading = channel_messages(22, 48);
+		loading.timeline.clear();
+		loading.freshness = model::Freshness::Loading;
+		loading.history_pending = true;
+		loading.older_exhausted = false;
+		loading.channels[0].last_message = None;
+		let mut opened = TimelineView::default();
+		paint_timeline(&ctx, &mut opened, &mut loading, 60);
+		for id in 1..=48 {
+			let mut message = text_message(id);
+			message.channel = Id(22);
+			message.content = format!("Row {id}");
+			loading.timeline.insert(message, false, false).unwrap();
+		}
+		loading.freshness = model::Freshness::Fresh;
+		loading.history_pending = false;
+		loading.older_exhausted = true;
+		loading.channels[0].last_message = Some(Id(48));
+		loading.revision += 1;
+		let mut arrived = Vec::new();
+		for frame in 0..6 {
+			arrived.push(newest_y(
+				&paint_timeline(&ctx, &mut opened, &mut loading, 70 + frame),
+				48,
+			));
+		}
+		assert!(
+			arrived
+				.iter()
+				.all(|y| y.is_some_and(|y| (y - settled).abs() < 1.0)),
+			"opening onto loaded history walked the tail {arrived:?}, settled at {settled}"
+		);
 	}
 }
