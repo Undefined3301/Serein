@@ -69,7 +69,7 @@ pub struct TimelineView {
 	pub(super) load_newer: bool,
 	pub(super) mark_read: Option<Id>,
 	pub(super) mark_unread: Option<Id>,
-	auto_read_attempt: Option<Id>,
+	pub(super) auto_read_attempt: Option<Id>,
 	at_current_latest: bool,
 	pub(super) reaction_picker: Option<(Id, egui::Rect, egui::Id)>,
 	pub(super) reaction: Option<(Id, Option<model::ReactionEmoji>)>,
@@ -256,7 +256,8 @@ fn centered_offset(rows: &[(Id, f32)], id: Id, viewport_h: f32, packed: f32) -> 
 		.iter()
 		.find(|(row, _)| *row == id)
 		.map_or(0.0, |(_, height)| *height);
-	(row_top - (viewport_h - row_h) * 0.5).clamp(0.0, (packed - viewport_h).max(0.0))
+	(row_top - (viewport_h - row_h.min(viewport_h)) * 0.5)
+		.clamp(0.0, (packed - viewport_h).max(0.0))
 }
 fn anchor_offset(rows: &[(Id, f32)], id: Id, inset: f32) -> f32 {
 	if rows.is_empty() {
@@ -993,10 +994,15 @@ fn history_banner(
 	let colors = crate::design::palette(ui);
 	let mut jump_unread = false;
 	let mut load_newer = false;
+	let text = if unread {
+		colors.accent_text
+	} else {
+		colors.text
+	};
 	overlay_bar(
 		ui,
 		rect,
-		colors.accent,
+		if unread { colors.accent } else { colors.raised },
 		egui::CornerRadius {
 			nw: 0,
 			ne: 0,
@@ -1010,32 +1016,21 @@ fn history_banner(
 					if unread {
 						"Unread messages"
 					} else {
-						"More messages"
+						"Viewing older messages"
 					},
 					13.0,
 				)
-				.color(colors.accent_text),
+				.color(text),
 			);
 			ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
 				if jump
-					&& bar_button(
-						ui,
-						"Jump to unread",
-						crate::icons::Icon::ArrowUp,
-						colors.accent_text,
-					)
-					.clicked()
+					&& bar_button(ui, "Jump to unread", crate::icons::Icon::ArrowUp, text).clicked()
 				{
 					jump_unread = true;
 				}
 				if newer
-					&& bar_button(
-						ui,
-						"Next messages",
-						crate::icons::Icon::ArrowDown,
-						colors.accent_text,
-					)
-					.clicked()
+					&& bar_button(ui, "Next messages", crate::icons::Icon::ArrowDown, text)
+						.clicked()
 				{
 					load_newer = true;
 				}
@@ -1208,19 +1203,28 @@ impl TimelineView {
 		self.following = false;
 		self.jump = false;
 		self.reveal_scroll = None;
+		self.present_scroll = None;
 		self.pending_reveal = None;
+		self.auto_read_attempt = None;
 		self.mark_read = None;
 		self.mark_unread = None;
 	}
-	pub(super) fn follow_latest(&mut self) {
+	pub(super) fn follow_latest(&mut self, state: &State) {
+		self.latest |= state.history_targeted
+			|| state.history_before.is_some()
+			|| state.history_after.is_some();
 		self.target_browsing = false;
+		self.hold_read_ack = false;
+		self.auto_read_attempt = None;
 		self.following = true;
 		self.jump = true;
 		self.anchor = None;
 		self.reveal_scroll = None;
+		self.present_scroll = None;
 		self.pending_reveal = None;
 	}
 	pub(super) fn request_reply_target(&mut self, id: Id) {
+		self.present_scroll = None;
 		self.reply_target = Some(id);
 		self.pending_reveal = Some(if self.following && self.at_current_latest {
 			TargetReveal::StayIfVisible
@@ -1324,6 +1328,12 @@ impl TimelineView {
 			}
 		}
 		let can_load_newer = state.can_load_newer();
+		if state
+			.selected
+			.is_some_and(|channel| state.missed(channel) == Some(false))
+		{
+			self.hold_read_ack = false;
+		}
 		if self.unread_jump || self.load_newer {
 			self.browse_away();
 		}
@@ -1331,9 +1341,7 @@ impl TimelineView {
 		// Keep service read state unchanged while its acknowledgement is in flight.
 		let watching_latest = self.following
 			&& self.at_current_latest
-			&& !state.history_targeted
-			&& state.history_before.is_none()
-			&& state.history_after.is_none()
+			&& state.live_edge_latest().is_some()
 			&& ui.input(|input| input.focused);
 		let boundary = state
 			.selected
@@ -1677,7 +1685,7 @@ impl TimelineView {
 			if t >= 1.0 {
 				offset = Some(live_edge_offset);
 				self.present_scroll = None;
-				self.follow_latest();
+				self.follow_latest(state);
 				self.jump = false;
 			} else {
 				offset = Some(*from + (live_edge_offset - *from) * ease_out_cubic(t));
@@ -3123,9 +3131,9 @@ impl TimelineView {
 		self.following = at_bottom && !self.target_browsing;
 		if self.following
 			&& !self.hold_read_ack
+			&& ui.is_enabled()
 			&& self.mark_unread.is_none()
 			&& !state.history_targeted
-			&& state.history_before.is_none()
 			&& state.history_after.is_none()
 			&& ui.input(|i| i.focused)
 			&& let Some(latest) = state.live_edge_latest()
@@ -3262,7 +3270,7 @@ impl TimelineView {
 				|| self.hold_read_ack
 				|| !(self.following
 					&& self.at_current_latest
-					&& !browsing_history
+					&& state.live_edge_latest().is_some()
 					&& ui.input(|input| input.focused)));
 		let can_jump_unread = show_unread && state.can_jump_unread();
 		// Latest-message metadata can outlive a deleted message. A complete, visible
@@ -3322,7 +3330,7 @@ impl TimelineView {
 					self.target_browsing = false;
 					self.present_scroll = Some((output.state.offset.y, 0.0));
 				} else {
-					self.follow_latest();
+					self.follow_latest(state);
 				}
 				ui.ctx().request_repaint();
 			}
@@ -3383,6 +3391,177 @@ impl TimelineView {
 		}
 	}
 }
+/// Offline exercise of unread navigation, reply history and returning to the live edge.
+#[cfg(feature = "demo")]
+pub fn debug_unread_navigation_check(state: &mut State) {
+	use client_core::{Command, Envelope, Event, read_state};
+	let channel = state.selected.unwrap();
+	let template = state.timeline.iter().next().unwrap().clone();
+	let message = |id| Message {
+		id: Id(id),
+		content: format!("Synthetic message {id}"),
+		reply_to: None,
+		..template.clone()
+	};
+	let apply = |state: &mut State, event| {
+		state.apply(Envelope {
+			generation: state.generation,
+			event,
+		});
+	};
+	let page = |state: &mut State, start, end| {
+		apply(
+			state,
+			Event::History {
+				channel,
+				request: state.request,
+				older: state.history_before.is_some(),
+				messages: (start..=end).map(&message).collect(),
+			},
+		);
+	};
+	let ctx = egui::Context::default();
+	let mut view = TimelineView {
+		instant_scrolling: true,
+		..Default::default()
+	};
+	let frame = |view: &mut TimelineView, state: &mut State| {
+		for _ in 0..5 {
+			ctx.run_ui(
+				egui::RawInput {
+					focused: true,
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(900.0, 600.0),
+					)),
+					..Default::default()
+				},
+				|ui| {
+					view.show_with_scroll(
+						ui,
+						state,
+						&mut None,
+						&mut None,
+						(
+							&mut crate::avatars::Avatars::default(),
+							&mut crate::profiles::ProfileSession::default(),
+						),
+						None,
+						&mut crate::scroll::Session::default(),
+					);
+				},
+			)
+			.drop_without_applying_deltas();
+		}
+	};
+	state.history(None);
+	page(state, 451, 500);
+	state
+		.apply_read_state(read_state::Event::Ack {
+			channel,
+			message: Some(Id(499)),
+			manual: true,
+			mention_count: Some(0),
+			version: None,
+		})
+		.unwrap();
+	frame(&mut view, state);
+	let count = state.timeline.row_count();
+	assert!(
+		state.open_unread().is_none(),
+		"Loaded unread must scroll locally"
+	);
+	assert_eq!(state.search_target, Some(Id(500)));
+	assert_eq!(state.timeline.row_count(), count);
+	view.browse_away();
+	frame(&mut view, state);
+	assert_eq!(view.highlighted.map(|(id, _)| id), Some(Id(500)));
+	view.follow_latest(state);
+	frame(&mut view, state);
+	assert_eq!(view.mark_read.take(), Some(Id(500)));
+	let Command::MarkRead { request, .. } = state.prepare_mark_read(Id(500)).unwrap() else {
+		panic!("Expected read acknowledgement");
+	};
+	state
+		.apply_read_state(read_state::Event::Result {
+			channel,
+			message: Id(500),
+			request,
+			result: Ok(()),
+		})
+		.unwrap();
+
+	// Opening an unloaded reply preserves the read marker and only offers history navigation.
+	state.reply = Some(client_core::Reply::to(Id(100)));
+	assert!(state.open_reply_target(Id(100)).is_some());
+	page(state, 51, 100);
+	frame(&mut view, state);
+	assert_eq!(state.missed(channel), Some(false));
+	assert!(!state.show_missed_banner());
+	assert!(state.can_load_newer() && view.present_control.is_some());
+	assert!(view.mark_read.is_none());
+	let Command::History { after, .. } = state.newer_history().unwrap() else {
+		panic!("History");
+	};
+	assert_eq!(after, Some(Id(100)));
+	page(state, 101, 150);
+	apply(
+		state,
+		Event::Delete {
+			channel,
+			id: Id(150),
+		},
+	);
+	let Command::History { after, .. } = state.newer_history().unwrap() else {
+		panic!("History");
+	};
+	assert_eq!(
+		after,
+		Some(Id(150)),
+		"Deleted trailing rows must not rewind pagination"
+	);
+
+	// Older pagination must not disable acknowledgement at the retained live edge.
+	state.history(None);
+	page(state, 451, 500);
+	view.follow_latest(state);
+	frame(&mut view, state);
+	assert!(state.older_history().is_some());
+	page(state, 401, 450);
+	apply(state, Event::Message(message(501)));
+	frame(&mut view, state);
+	assert_eq!(view.mark_read.take(), Some(Id(501)));
+	assert_eq!(state.live_edge_latest(), Some(Id(501)));
+	apply(state, Event::Message(message(502)));
+
+	// Once the bounded window evicts its newest end, live arrivals cannot bridge the gap.
+	for end in (50..=400).rev().step_by(50) {
+		assert!(state.older_history().is_some());
+		page(state, end - 49, end);
+	}
+	assert!(state.history_targeted);
+	assert!(state.live_edge_latest().is_none());
+	apply(
+		state,
+		Event::Delete {
+			channel,
+			id: Id(100),
+		},
+	);
+	apply(state, Event::Message(message(503)));
+	assert!(state.timeline.get(Id(503)).is_none());
+	view.follow_latest(state);
+	assert!(
+		view.latest,
+		"Sending from detached history must request the present page"
+	);
+	assert_eq!(state.missed(channel), Some(true));
+	assert_eq!(
+		centered_offset(&[(Id(1), 2000.0)], Id(1), 600.0, 2000.0),
+		0.0
+	);
+}
+
 #[cfg(test)]
 #[path = "pending_tests.rs"]
 mod pending_tests;
@@ -3617,7 +3796,7 @@ mod tests {
 				if count == 0 {
 					for forbidden in [
 						"Unread messages",
-						"More messages",
+						"Viewing older messages",
 						"Jump to unread",
 						"New messages below",
 						"Jump to present",
@@ -3882,7 +4061,7 @@ mod tests {
 			top += view.pending_heights[&index.to_string()];
 		}
 		assert_eq!(view.pending_heights["63"], 100.0);
-		view.follow_latest();
+		view.follow_latest(&state);
 		for _ in 0..5 {
 			render(&mut view, &mut state);
 		}
@@ -7733,7 +7912,7 @@ mod tests {
 		view.anchor = Some((Id(1), 0.0));
 		view.revision = u64::MAX;
 		paint_timeline(&ctx, &mut view, &mut state, 20);
-		view.follow_latest();
+		view.follow_latest(&state);
 		let mut ack = Vec::new();
 		for frame in 0..6 {
 			ack.push(newest_y(

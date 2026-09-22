@@ -15,6 +15,8 @@ pub use avatars::{EMBED_EDGE, GifFrames, LARGE_EDGE, fit_edge};
 mod categories;
 #[cfg(feature = "demo")]
 pub use categories::debug_thread_navigation_check;
+#[cfg(feature = "demo")]
+pub use timeline::debug_unread_navigation_check;
 mod channel_marks;
 mod channel_menu;
 mod channel_permissions;
@@ -1892,8 +1894,8 @@ impl MessagingUi {
 								)
 								.inner;
 							if reload.clicked() {
-								self.timeline.follow_latest();
 								commands.push(state.history(None));
+								self.timeline.follow_latest(state);
 							}
 						}
 						if let Some(channel) = state.selected.filter(|_| {
@@ -2580,7 +2582,7 @@ impl MessagingUi {
                             Some(emoji_picker::Pick::Sticker(sticker)) => {
                                 if editing_here { state.status = "Finish or cancel the edit before sending a sticker."; }
                                 else if self.upload_busy { state.status = "Wait for the upload before sending a sticker."; }
-                                else if let Some(command) = state.prepare_sticker_send(&sticker) { self.timeline.follow_latest(); commands.push(command); }
+                                else if let Some(command) = state.prepare_sticker_send(&sticker) { self.timeline.follow_latest(state); commands.push(command); }
                                 None
                             },
                             Some(emoji_picker::Pick::Send(url)) => {
@@ -2600,7 +2602,7 @@ impl MessagingUi {
                                         }
                                     }
                                     if let Some(command) = command {
-                                        self.timeline.follow_latest();
+                                        self.timeline.follow_latest(state);
                                         commands.push(command);
                                     }
                                 }
@@ -2886,7 +2888,7 @@ impl MessagingUi {
                                 // Consume the selection in this UI pass, before desktop dispatch.
                                 // A second render or Send gesture must not enqueue it again.
                                 self.stage_pending_upload(ctx, &command);
-                                self.timeline.follow_latest();
+                                self.timeline.follow_latest(state);
                                 commands.push(command);
                             }
                             if !application_command { edit.request_focus(); }
@@ -3974,13 +3976,16 @@ impl MessagingUi {
 				self.timeline.browse_away();
 				commands.push(command);
 			}
-		} else if let Some(message) = self.timeline.mark_read.take()
-			&& !settings_open
-			&& state.search_target.is_none()
-			&& !state.history_targeted
-			&& let Some(command) = state.prepare_mark_read(message)
-		{
-			commands.push(command);
+		} else if let Some(message) = self.timeline.mark_read.take() {
+			if !settings_open
+				&& state.search_target.is_none()
+				&& let Some(command) = state.prepare_mark_read(message)
+			{
+				commands.push(command);
+			} else if self.timeline.auto_read_attempt == Some(message) {
+				// A suppressed action never reached the worker; allow it after the overlay closes.
+				self.timeline.auto_read_attempt = None;
+			}
 		}
 
 		if let Some(message) = self.timeline.forward_request.take() {

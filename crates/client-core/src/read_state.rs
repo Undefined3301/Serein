@@ -191,24 +191,41 @@ impl State {
 				.selected
 				.is_some_and(|channel| self.read_marker(channel).is_some())
 	}
-	/// Request the first bounded page after the service read marker. Zero is only
-	/// a pagination cursor for a known empty marker, never a fabricated message ID.
+	/// Scroll to a loaded unread boundary, or request its first bounded page.
+	/// Zero is only a pagination cursor for a known empty marker.
 	pub fn open_unread(&mut self) -> Option<crate::Command> {
 		if !self.can_jump_unread() {
 			return None;
 		}
 		let after = self.read_marker(self.selected?)?.unwrap_or(Id(0));
+		if self.freshness == Freshness::Fresh
+			&& !self.history_pending
+			&& (self.older_exhausted
+				|| self
+					.timeline
+					.row_ids()
+					.next()
+					.is_some_and(|first| first <= after))
+			&& let Some(target) = self
+				.timeline
+				.iter()
+				.find(|message| message.id > after)
+				.map(|message| message.id)
+		{
+			self.search_target = Some(target);
+			self.revision += 1;
+			return None;
+		}
 		Some(self.open_after_window(after))
 	}
 	/// The message the service counts as the selected channel's latest while the loaded page
-	/// is the live edge: the newest page, without targeted browsing, older pages, or a page in
-	/// flight. Any newer message would arrive over the gateway, so latest-message metadata
+	/// is the live edge: the newest page, without targeted browsing or a page in flight.
+	/// Older pagination must still retain the exact latest message. On the newest page, metadata
 	/// above the timeline's newest row has outlived a deleted message. Acknowledging that ID,
 	/// as the official client does, is what clears the phantom unread.
 	pub fn live_edge_latest(&self) -> Option<Id> {
 		let channel = self.selected?;
 		if self.history_targeted
-			|| self.history_before.is_some()
 			|| self.history_after.is_some()
 			|| self.history_pending
 			|| self.freshness != Freshness::Fresh
@@ -218,6 +235,14 @@ impl State {
 			return None;
 		}
 		let latest = self.channel(channel)?.last_message?;
+		if self.history_before.is_some() {
+			return self
+				.timeline
+				.iter()
+				.last()
+				.is_some_and(|newest| newest.id == latest)
+				.then_some(latest);
+		}
 		self.timeline
 			.iter()
 			.last()
@@ -261,7 +286,7 @@ impl State {
 			.iter()
 			.last()
 			.map(|m| m.id)
-			.or(self.newer_cursor)
+			.max(self.newer_cursor)
 	}
 	fn open_after_window(&mut self, after: Id) -> crate::Command {
 		self.timeline.clear_window_preserving_deletions();

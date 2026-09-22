@@ -266,7 +266,7 @@ impl crate::MessagingUi {
 				if let Some(command) = state.prepare_send_with_attachments(&names) {
 					self.stage_pending_upload(ctx, &command);
 					self.clear_draft(state, channel);
-					self.timeline.follow_latest();
+					self.timeline.follow_latest(state);
 					commands.push(command);
 				} else {
 					state.drafts.insert(channel, original);

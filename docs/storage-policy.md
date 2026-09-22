@@ -782,8 +782,9 @@ their vector capacities count toward the existing active-pane byte bound. No rol
 new cache, persistent schema, or network endpoint is introduced.
 
 Unread/forward navigation reuses the cancellable history worker, 50-message response limit,
-500-row/4-MiB active timeline and existing global resident budget. It replaces the selected
-window, preserving bounded deletion/reconciliation metadata and drafts. Three fixed-size
+500-row/4-MiB active timeline and existing global resident budget. Loaded unread boundaries
+scroll locally; unloaded boundaries replace the selected window, and forward pages append
+within its bounds, preserving deletion/reconciliation metadata and drafts. Three fixed-size
 cursor fields and a full-page flag are session-only. Forward-target pages are not restored
 from the SQLite latest-page cache or parked in the resident recent-window cache. Accepted
 message metadata remains subject to ordinary account history persistence; no new cache,

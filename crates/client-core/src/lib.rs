@@ -2211,6 +2211,32 @@ impl State {
 		{
 			self.clear_search();
 		}
+		let previous_channel = self.selected;
+		let previous_tail = matches!(
+			&envelope.event,
+			Event::History { .. } | Event::Message(_) | Event::Patch(_) | Event::SendResult { .. }
+		)
+		.then(|| self.timeline.iter().last().map(|message| message.id))
+		.flatten();
+		let incoming_tail = match &envelope.event {
+			Event::Message(message)
+				if !self.history_targeted && Some(message.channel) == self.selected =>
+			{
+				Some(message.id)
+			}
+			Event::SendResult {
+				nonce,
+				result: Ok(message),
+			} if !self.history_targeted
+				&& Some(message.channel) == self.selected
+				&& self.pending.iter().any(|pending| {
+					pending.nonce == *nonce && pending.channel == message.channel
+				}) =>
+			{
+				Some(message.id)
+			}
+			_ => None,
+		};
 		let result = match envelope.event {
 			Event::Startup(_) => {
 				unreachable!("startup is applied atomically before ordinary events")
@@ -3305,6 +3331,23 @@ impl State {
 				Ok(())
 			}
 		};
+		// Older-page retention can evict the live tail, including an arrival racing the
+		// page. Once detached, later live messages must not bridge the missing range.
+		if result.is_ok()
+			&& self.selected == previous_channel
+			&& self.history_before.is_some()
+			&& let Some(tail) = previous_tail.max(incoming_tail)
+			&& !self.timeline.is_deleted(tail)
+			&& self
+				.timeline
+				.iter()
+				.last()
+				.is_none_or(|message| message.id < tail)
+		{
+			self.history_targeted = true;
+			self.newer_cursor = None;
+			self.newer_may_have_more = false;
+		}
 		if let Err(status) = result {
 			self.clear_cached_history();
 			self.status = status;
