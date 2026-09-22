@@ -2084,10 +2084,7 @@ impl MessagingUi {
 				self.edit_undo_cleared = true;
 			}
 		}
-		if !editing_here
-			&& !state.can_compose(channel)
-			&& !state.can_request_application_commands(channel)
-		{
+		if !editing_here && !state.can_compose(channel) {
 			if self.pending_mention.take().is_some() {
 				state.status = "You don't have permission to mention anyone in this channel.";
 			}

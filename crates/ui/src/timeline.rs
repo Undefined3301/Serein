@@ -1574,7 +1574,7 @@ impl TimelineView {
 		let total: f32 = self.rows.iter().map(|(_, height)| height).sum();
 		// The typing indicator floats in the reserved strip above the composer; the gap keeps
 		// it from covering the last message, and stays there when nobody is typing.
-		let end_padding = 16.0 + crate::typing::OVERLAY_HEIGHT;
+		let end_padding = 8.0 + crate::typing::OVERLAY_HEIGHT;
 		self.pending_heights.retain(|nonce, _| {
 			state
 				.pending
