@@ -1249,7 +1249,7 @@ mod navigation_tests {
 			},
 		);
 		assert!(state.timeline.get(Id(101)).is_none());
-		page(&mut state, vec![message(500)]);
+		page(&mut state, vec![]);
 		assert!(!state.history_targeted && state.search_target.is_none());
 		state.open_unread().unwrap();
 		page(&mut state, vec![]);
