@@ -41,6 +41,7 @@ pub struct TimelineView {
 	pub(super) cancel_upload: bool,
 	pending_heights: BTreeMap<String, f32>,
 	pub(super) hide_media_links: bool,
+	pub(super) instant_scrolling: bool,
 	applied_hide_media_links: bool,
 	pub(super) gif_favorite: Option<model::Gif>,
 	pub(super) invite_requests: Vec<String>,
@@ -251,6 +252,43 @@ fn centered_offset(rows: &[(Id, f32)], id: Id, viewport_h: f32, packed: f32) -> 
 		.find(|(row, _)| *row == id)
 		.map_or(0.0, |(_, height)| *height);
 	(row_top - (viewport_h - row_h) * 0.5).clamp(0.0, (packed - viewport_h).max(0.0))
+}
+fn instant_wheel_delta(
+	events: &[egui::Event],
+	options: egui::InputOptions,
+	page_height: f32,
+) -> egui::Vec2 {
+	events
+		.iter()
+		.filter_map(|event| {
+			let egui::Event::MouseWheel {
+				unit,
+				delta,
+				phase,
+				modifiers,
+			} = event
+			else {
+				return None;
+			};
+			if *phase != egui::TouchPhase::Move || modifiers.matches_any(options.zoom_modifier) {
+				return None;
+			}
+			let mut delta = match unit {
+				egui::MouseWheelUnit::Point => *delta,
+				egui::MouseWheelUnit::Line => options.line_scroll_speed * *delta,
+				egui::MouseWheelUnit::Page => page_height * *delta,
+			};
+			let horizontal = modifiers.matches_any(options.horizontal_scroll_modifier);
+			let vertical = modifiers.matches_any(options.vertical_scroll_modifier);
+			if horizontal && !vertical {
+				delta = egui::vec2(delta.x + delta.y, 0.0);
+			}
+			if !horizontal && vertical {
+				delta = egui::vec2(0.0, delta.x + delta.y);
+			}
+			Some(delta)
+		})
+		.fold(egui::Vec2::ZERO, |total, delta| total + delta)
 }
 fn anchor_offset(rows: &[(Id, f32)], id: Id, inset: f32) -> f32 {
 	if rows.is_empty() {
@@ -1158,6 +1196,7 @@ impl TimelineView {
 			*self = Self {
 				extension_actions: self.extension_actions.clone(),
 				hide_media_links: self.hide_media_links,
+				instant_scrolling: self.instant_scrolling,
 				suppressed_deleted_highlight: std::mem::take(
 					&mut self.suppressed_deleted_highlight,
 				),
@@ -1455,7 +1494,7 @@ impl TimelineView {
 					self.following = false;
 					self.jump = false;
 					let to = centered_offset(&self.rows, target, viewport_h, packed);
-					if (to - current_offset).abs() < 1.0 {
+					if self.instant_scrolling || (to - current_offset).abs() < 1.0 {
 						offset = Some(to);
 						self.reveal_scroll = None;
 					} else {
@@ -1487,6 +1526,7 @@ impl TimelineView {
 		let mut scroll = egui::ScrollArea::vertical()
 			.id_salt(("timeline", state.selected))
 			.auto_shrink([false, false])
+			.animated(!self.instant_scrolling)
 			.stick_to_bottom(self.following);
 		let live_edge_offset =
 			(total + end_padding + pending_rows.iter().map(|(_, height)| height).sum::<f32>()
@@ -1497,7 +1537,22 @@ impl TimelineView {
 			self.present_scroll = None;
 			offset = Some(live_edge_offset);
 		}
-		let user_scroll = ui.input(|input| input.smooth_scroll_delta().y) + autoscroll_delta;
+		let input_options = ui.ctx().options(|options| options.input_options);
+		let wheel = ui.input(|input| {
+			if !self.instant_scrolling {
+				input.smooth_scroll_delta()
+			} else {
+				instant_wheel_delta(
+					&input.raw.events,
+					input_options,
+					input.viewport_rect().height(),
+				)
+			}
+		});
+		if self.instant_scrolling {
+			ui.input_mut(|input| input.smooth_scroll_delta = wheel);
+		}
+		let user_scroll = wheel.y + autoscroll_delta;
 		if user_scroll != 0.0 && self.reveal_scroll.take().is_some() {
 			offset = None;
 		}
@@ -1552,7 +1607,7 @@ impl TimelineView {
 		let mut measurements = Vec::new();
 		let mut selected_reply = None;
 		// ScrollArea consumes wheel input while applying it; retain the viewing gesture.
-		let scroll_delta = ui.input(|input| input.smooth_scroll_delta().y) + autoscroll_delta;
+		let scroll_delta = wheel.y + autoscroll_delta;
 		let allow_hover = !session.holding()
 			&& !ui.input(|input| input.is_scrolling())
 			&& ui.ctx().dragged_id().is_none();
@@ -3099,7 +3154,7 @@ impl TimelineView {
 				if browsing_history {
 					self.latest = true;
 				}
-				if distance_from_bottom > 0.5 && !browsing_history {
+				if distance_from_bottom > 0.5 && !browsing_history && !self.instant_scrolling {
 					// Glide back so the reader keeps their place in the conversation.
 					self.target_browsing = false;
 					self.present_scroll = Some((output.state.offset.y, 0.0));
@@ -5430,6 +5485,64 @@ mod tests {
 	}
 
 	#[test]
+	fn instant_wheel_preserves_units_axes_and_zoom_gestures() {
+		let options = egui::InputOptions::default();
+		let zoom = egui::Modifiers {
+			ctrl: true,
+			command: true,
+			..Default::default()
+		};
+		let events = [
+			egui::Event::MouseWheel {
+				unit: egui::MouseWheelUnit::Point,
+				delta: egui::vec2(1.0, 2.0),
+				phase: egui::TouchPhase::Move,
+				modifiers: egui::Modifiers::NONE,
+			},
+			egui::Event::MouseWheel {
+				unit: egui::MouseWheelUnit::Line,
+				delta: egui::vec2(0.0, -2.0),
+				phase: egui::TouchPhase::Move,
+				modifiers: egui::Modifiers::NONE,
+			},
+			egui::Event::MouseWheel {
+				unit: egui::MouseWheelUnit::Page,
+				delta: egui::vec2(0.0, 0.5),
+				phase: egui::TouchPhase::Move,
+				modifiers: egui::Modifiers::NONE,
+			},
+			egui::Event::MouseWheel {
+				unit: egui::MouseWheelUnit::Point,
+				delta: egui::vec2(0.0, 3.0),
+				phase: egui::TouchPhase::Move,
+				modifiers: egui::Modifiers::SHIFT,
+			},
+			egui::Event::MouseWheel {
+				unit: egui::MouseWheelUnit::Point,
+				delta: egui::vec2(5.0, 0.0),
+				phase: egui::TouchPhase::Move,
+				modifiers: egui::Modifiers::ALT,
+			},
+			egui::Event::MouseWheel {
+				unit: egui::MouseWheelUnit::Line,
+				delta: egui::vec2(0.0, 100.0),
+				phase: egui::TouchPhase::Move,
+				modifiers: zoom,
+			},
+			egui::Event::MouseWheel {
+				unit: egui::MouseWheelUnit::Page,
+				delta: egui::vec2(0.0, 100.0),
+				phase: egui::TouchPhase::Start,
+				modifiers: egui::Modifiers::NONE,
+			},
+		];
+		assert_eq!(
+			instant_wheel_delta(&events, options, 600.0),
+			egui::vec2(4.0, 227.0)
+		);
+	}
+
+	#[test]
 	fn wheel_scrolling_keeps_visible_messages_stable_during_measurement() {
 		fn texts(shape: &egui::Shape, out: &mut BTreeMap<String, f32>) {
 			match shape {
@@ -5464,7 +5577,10 @@ mod tests {
 			}
 			let ctx = egui::Context::default();
 			crate::design::apply(&ctx);
-			let mut view = TimelineView::default();
+			let mut view = TimelineView {
+				instant_scrolling: true,
+				..Default::default()
+			};
 			let mut avatars = crate::avatars::Avatars::default();
 			let mut frame_number = 0;
 			let mut frame = |view: &mut TimelineView, delta: f32| {
@@ -5510,6 +5626,7 @@ mod tests {
 			for _ in 0..8 {
 				frame(&mut view, 0.0);
 			}
+			assert!(view.instant_scrolling);
 			view.following = false;
 			view.anchor = Some((Id(200), 5.0));
 			view.revision = u64::MAX;
