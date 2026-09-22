@@ -2470,7 +2470,7 @@ fn capability_label(capability: Capability) -> &'static str {
 		Capability::Composer => "Read my draft and propose text changes",
 		Capability::Storage => "Store up to 1 MiB of local data for this account",
 		Capability::DeletedMessages => {
-			"Sample capability for the delete-protector example (retention is built-in)"
+			"Keep loaded deleted messages in session memory while enabled"
 		}
 	}
 }

@@ -5893,6 +5893,7 @@ mod tests {
 				render(&mut view, &mut state);
 			}
 			assert_eq!(view.anchor.unwrap().0, anchor.0);
+			state.set_preserve_deleted_messages(true);
 			state.timeline.delete(anchor.0).unwrap();
 			state.revision += 1;
 			for _ in 0..4 {
@@ -6144,6 +6145,7 @@ mod tests {
 					},
 				});
 				if deleted_only {
+					state.set_preserve_deleted_messages(true);
 					state.apply(client_core::Envelope {
 						generation: state.generation,
 						event: client_core::Event::DeleteBulk {
@@ -6515,6 +6517,7 @@ mod tests {
 				.insert(message.id, Revealed::new(&message, u32::MAX, true));
 			view.viewing = Some((message.id, Id(9)));
 			view.toolbar = Some((message.id, egui::Rect::EVERYTHING));
+			state.set_preserve_deleted_messages(true);
 			state.timeline.delete(message.id).unwrap();
 			state.revision += 1;
 			for _ in 0..3 {
