@@ -1079,12 +1079,7 @@ pub fn show(
 					let has_action = state.user.as_ref().is_some_and(|own| own.id == user.id)
 						|| dm_channel.is_some()
 						|| user.webhook;
-					let footer = if has_action { 40.0 } else { 0.0 }
-						+ if state.user_action_status().is_some() {
-							24.0
-						} else {
-							0.0
-						};
+					let footer = if has_action { 40.0 } else { 0.0 };
 					egui::Frame::new()
 						.fill(theme.panel)
 						.corner_radius(RADIUS)
@@ -1433,12 +1428,6 @@ pub fn show(
 							.clicked()
 					{
 						ui.ctx().copy_text(user.id.to_string());
-					}
-					if let Some(status) = state.user_action_status() {
-						ui.add(
-							egui::Label::new(RichText::new(status).size(11.0).color(theme.muted))
-								.wrap(),
-						);
 					}
 					if state.demo {
 						ui.label(

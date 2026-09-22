@@ -867,6 +867,19 @@ fn access_candidates(state: &State, event: &Event) -> Vec<model::Id> {
 		.map(|c| c.id)
 		.collect()
 }
+fn user_action_notice(event: &Event) -> Option<(ui::design::Level, &'static str)> {
+	let Event::UserAction(client_core::user_actions::Event::Written { action, result, .. }) = event
+	else {
+		return None;
+	};
+	Some(match result {
+		Ok(()) if matches!(action, client_core::user_actions::Action::OpenDm(_)) => {
+			(ui::design::Level::Error, action.completion_label())
+		}
+		Ok(()) => (ui::design::Level::Success, action.completion_label()),
+		Err(failure) => (ui::design::Level::Error, failure.label()),
+	})
+}
 fn queue_channel_preferences(
 	cache: Option<&cache::Cache>,
 	messaging: &mut ui::MessagingUi,
@@ -4792,32 +4805,9 @@ impl Desktop {
 			if event.generation != self.state.generation {
 				continue;
 			}
-			let friend_request_notice =
-				if let Event::UserAction(client_core::user_actions::Event::Written {
-					action,
-					result,
-					..
-				}) = &event.event
-				{
-					let success = match action {
-						client_core::user_actions::Action::AddFriend { .. }
-						| client_core::user_actions::Action::ProfileFriend {
-							friend: true, ..
-						} => Some("Friend request sent"),
-						client_core::user_actions::Action::ResolveFriend {
-							accept: false, ..
-						} => Some("Friend request removed"),
-						_ => None,
-					};
-					success.map(|success| match result {
-						Ok(()) => (ui::design::Level::Success, success),
-						Err(failure) => (ui::design::Level::Error, failure.label()),
-					})
-				} else {
-					None
-				};
-			let friend_request_was_pending =
-				friend_request_notice.is_some() && self.state.user_action_pending();
+			let user_action_notice = user_action_notice(&event.event);
+			let user_action_was_pending =
+				user_action_notice.is_some() && self.state.user_action_pending();
 			self.delete_cached_messages(&event.event);
 			match &event.event {
 				Event::Delete { channel, id } => {
@@ -4903,9 +4893,9 @@ impl Desktop {
 				self.notifications.dismiss();
 			}
 			self.state.apply(event);
-			if friend_request_was_pending
+			if user_action_was_pending
 				&& !self.state.user_action_pending()
-				&& let Some((level, text)) = friend_request_notice
+				&& let Some((level, text)) = user_action_notice
 			{
 				self.messaging.toasts.push(level, text);
 			}
@@ -6262,6 +6252,20 @@ impl eframe::App for Desktop {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	#[test]
+	fn user_action_results_use_toasts() {
+		let success = Event::UserAction(client_core::user_actions::Event::Written {
+			action: client_core::user_actions::Action::Nickname {
+				user: model::Id(2),
+				text: "Synthetic".into(),
+			},
+			request: 1,
+			result: Ok(()),
+		});
+		let (level, text) = user_action_notice(&success).unwrap();
+		assert!(matches!(level, ui::design::Level::Success));
+		assert_eq!(text, "Nickname saved");
+	}
 	#[test]
 	fn frame_sample_is_bounded_demo_only_and_excludes_warmup() {
 		for (demo, value) in [

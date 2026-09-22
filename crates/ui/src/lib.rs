@@ -2861,6 +2861,9 @@ impl MessagingUi {
 		Some(MentionWrite::Inserted)
 	}
 	pub fn show(&mut self, ui: &mut egui::Ui, state: &mut State) -> Vec<Command> {
+		if let Some(status) = state.take_user_action_status() {
+			self.toasts.push(design::Level::Error, status);
+		}
 		let mention_waiting = self.pending_mention.is_some();
 		let composer_open = self.editing.is_some()
 			|| state.selected.is_some_and(|id| {
