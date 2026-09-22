@@ -195,6 +195,13 @@ fn main() {
 		[[0, 99]],
 		"a new member request resets the pane to the top"
 	);
+	state.freshness = Freshness::Unavailable;
+	state.request_members().unwrap();
+	assert_eq!(
+		state.members.as_ref().unwrap().freshness,
+		Freshness::Unavailable,
+		"a cached page stays unavailable with the session"
+	);
 	println!(
 		"Member paging follows the viewport, sizes the scrollbar to Discord's online cap, and reopens on the cached top page (offline)."
 	);

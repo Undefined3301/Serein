@@ -1033,8 +1033,16 @@ impl MessagingUi {
 			ui.label(RichText::new("Choose a conversation to see its people.").color(colors.muted));
 			return;
 		};
-		let has_entry = list.slots.iter().any(|slot| slot.is_some()) || cached;
-		if !has_entry {
+		let unavailable = list.freshness == Freshness::Unavailable;
+		let has_entry = !unavailable && (list.slots.iter().any(|slot| slot.is_some()) || cached);
+		if unavailable {
+			ui.add_space(8.0);
+			ui.label(
+				RichText::new("People aren't available in this conversation.")
+					.small()
+					.color(colors.muted),
+			);
+		} else if !has_entry {
 			ui.add_space(8.0);
 			let online: u64 = list
 				.groups
@@ -1049,12 +1057,7 @@ impl MessagingUi {
 						.color(colors.muted),
 				);
 			} else if list.freshness != Freshness::Fresh {
-				let text = if list.freshness == Freshness::Unavailable {
-					"People aren't available in this conversation."
-				} else {
-					"Loading people…"
-				};
-				ui.label(RichText::new(text).small().color(colors.muted));
+				ui.label(RichText::new("Loading people…").small().color(colors.muted));
 			} else {
 				ui.label(
 					RichText::new("No people returned for this view.")

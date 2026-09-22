@@ -1339,7 +1339,9 @@ impl State {
 			list.slots = page.slots.clone();
 			list.total = page.total;
 			list.groups = page.groups.clone();
-			if list.slots.iter().any(|slot| slot.is_some()) {
+			if list.slots.iter().any(|slot| slot.is_some())
+				&& self.freshness != Freshness::Unavailable
+			{
 				list.freshness = Freshness::Fresh;
 			}
 			if let Some(guild) = guild {
