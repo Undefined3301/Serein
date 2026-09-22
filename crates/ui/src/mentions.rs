@@ -224,42 +224,29 @@ pub fn mention_label(id: Id, mentions: &[User], source: Option<&MentionSource<'_
 	}
 }
 
-pub fn directory_fingerprint(state: &State, channel: Id) -> u64 {
+pub fn presentation_fingerprint(state: &State, message: &model::Message) -> u64 {
 	let mut hasher = std::collections::hash_map::DefaultHasher::new();
-	state.relationship_view().hash(&mut hasher);
-	let hash_user = |hasher: &mut std::collections::hash_map::DefaultHasher, user: &User| {
-		user.id.hash(hasher);
-		user.name.hash(hasher);
+	state.message_author_name(message).hash(&mut hasher);
+	state.message_author_color(message).hash(&mut hasher);
+	let source = MentionSource {
+		state,
+		channel: message.channel,
 	};
-	if let Some(user) = &state.user {
-		hash_user(&mut hasher, user);
-	}
-	for user in state.friends() {
-		hash_user(&mut hasher, user);
-	}
-	if let Some(channel) = state.channel(channel) {
-		for user in &channel.recipients {
-			hash_user(&mut hasher, user);
-		}
-	}
-	if let Some(list) = state
-		.members
-		.as_ref()
-		.filter(|list| list.channel == channel)
-	{
-		for member in list.rows.iter().flatten() {
-			hash_user(&mut hasher, &member.user);
-			member.nick.hash(&mut hasher);
-		}
-	}
-	if let Some(request) = &state.member_search[0].request
-		&& request.channel == channel
-		&& state.can_view(channel)
-	{
-		for member in &state.member_search[0].rows {
-			hash_user(&mut hasher, &member.user);
-			member.nick.hash(&mut hasher);
-		}
+	let mut rest = message.content.as_str();
+	let mut seen = 0usize;
+	while seen < model::MAX_MENTIONS {
+		let Some(start) = rest.find('<') else {
+			break;
+		};
+		rest = &rest[start..];
+		let Some((id, len)) = model::user_mention_prefix(rest) else {
+			let skip = rest.chars().next().map_or(1, char::len_utf8);
+			rest = &rest[skip..];
+			continue;
+		};
+		mention_label(id, &message.mentions, Some(&source)).hash(&mut hasher);
+		rest = &rest[len..];
+		seen += 1;
 	}
 	hasher.finish()
 }
@@ -1316,8 +1303,42 @@ pub fn debug_role_mentions_check(state: &mut State) {
 				vec![(user.clone(), "synthetic.username".into())],
 			))),
 		});
+		let mut author = user.clone();
+		author.id = Id(user.id.0.wrapping_add(1));
+		author.name = "Other".into();
+		let message = model::Message {
+			sticker_items: vec![],
+			id: Id(2),
+			channel,
+			author,
+			content: format!("<@{}>", user.id),
+			edited: false,
+			edited_at: None,
+			revision: 0,
+			nonce: None,
+			reply_to: None,
+			kind: 0,
+			reply_deleted: false,
+			forwarded: false,
+			unsupported: false,
+			extra_content: Default::default(),
+			components: vec![],
+			application_id: None,
+			ephemeral: false,
+			flags: 0,
+			embeds: vec![],
+			attachments: vec![],
+			author_nick: None,
+			author_roles: vec![],
+			mention_roles: vec![],
+			mention_everyone: false,
+			suppress_notifications: false,
+			mentions: vec![user.clone()],
+			reactions: Some(vec![]),
+			embeds_suppressed: false,
+		};
 		for nickname in ["Private name", "Changed name", ""] {
-			let before = directory_fingerprint(&names, channel);
+			let before = presentation_fingerprint(&names, &message);
 			names.apply(client_core::Envelope {
 				generation: names.generation,
 				event: client_core::Event::UserAction(client_core::user_actions::Event::Nickname {
@@ -1330,7 +1351,7 @@ pub fn debug_role_mentions_check(state: &mut State) {
 			} else {
 				nickname
 			};
-			assert_ne!(directory_fingerprint(&names, channel), before);
+			assert_ne!(presentation_fingerprint(&names, &message), before);
 			assert_eq!(
 				mention_label(
 					user.id,
@@ -1386,10 +1407,29 @@ pub fn debug_role_mentions_check(state: &mut State) {
 		id: Id(1548470397144666162),
 		name: "Role check".into(),
 		bits: 0,
-		color: 0,
+		color: 0xe67e22,
 		position: 1,
 		hoist: false,
 	});
+	let mut message = state.timeline.iter().next().unwrap().clone();
+	message.channel = channel;
+	message.mentions.clear();
+	message.mention_everyone = false;
+	message.mention_roles = vec![Id(1548470397144666162)];
+	assert!(!crate::timeline::mentions_viewer(&message, state));
+	state
+		.permissions
+		.guilds
+		.get_mut(&guild)
+		.unwrap()
+		.member
+		.as_mut()
+		.unwrap()
+		.roles
+		.push(Id(1548470397144666162));
+	assert!(crate::timeline::mentions_viewer(&message, state));
+	message.mention_roles = vec![Id(999999)];
+	assert!(!crate::timeline::mentions_viewer(&message, state));
 	let mut menu = Menu::default();
 	let mut draft = "@Role".to_owned();
 	menu.refresh(state, channel, &draft, Some(5), &[]);
@@ -1469,8 +1509,24 @@ pub fn debug_role_mentions_check(state: &mut State) {
 		} else {
 			egui::Visuals::light()
 		});
+		let mut role_color = egui::Color32::TRANSPARENT;
 		let output = ctx.run_ui(Default::default(), |ui| {
+			let colors = crate::design::palette(ui);
+			role_color =
+				crate::design::role_name_color(0xe67e22, colors.mention_bg, colors.mention_text);
+			assert_ne!(role_color, colors.mention_text);
 			let roles = known_roles(state, channel);
+			let mut preview = egui::text::LayoutJob::default();
+			crate::markdown::Formatted::parse(&draft).append_inline_preview(
+				&mut preview,
+				ui,
+				&[],
+				None,
+				roles,
+				&state.channels,
+			);
+			assert_eq!(preview.text, "@Role check");
+			assert_eq!(preview.sections[0].format.color, role_color);
 			let mut profile = None;
 			let mut surface = crate::select::Surface::new(ui, "mention-test");
 			parsed.show_references(
@@ -1498,7 +1554,7 @@ pub fn debug_role_mentions_check(state: &mut State) {
 			);
 			assert_eq!(galley.job.text, thread_draft);
 		});
-		fn count(shape: &egui::Shape) -> usize {
+		fn count(shape: &egui::Shape, role_color: egui::Color32) -> usize {
 			match shape {
 				egui::Shape::Text(text) => {
 					let value = &text.galley.job.text;
@@ -1506,6 +1562,15 @@ pub fn debug_role_mentions_check(state: &mut State) {
 						assert!(
 							value.contains("Hey guys"),
 							"role and body must share a galley"
+						);
+						assert!(
+							text.galley.rows.iter().any(|row| row
+								.visuals
+								.mesh
+								.vertices
+								.iter()
+								.any(|vertex| vertex.color == role_color)),
+							"role color must reach the painted text"
 						);
 						let row = &text.galley.rows[0];
 						let baseline = row.glyphs.iter().find(|g| g.chr == '@').unwrap().pos.y;
@@ -1521,7 +1586,9 @@ pub fn debug_role_mentions_check(state: &mut State) {
 						"#Thread with spaces" | "#Forum check"
 					))
 				}
-				egui::Shape::Vec(shapes) => shapes.iter().map(count).sum(),
+				egui::Shape::Vec(shapes) => {
+					shapes.iter().map(|shape| count(shape, role_color)).sum()
+				}
 				_ => 0,
 			}
 		}
@@ -1529,7 +1596,7 @@ pub fn debug_role_mentions_check(state: &mut State) {
 			output
 				.shapes
 				.iter()
-				.map(|shape| count(&shape.shape))
+				.map(|shape| count(&shape.shape, role_color))
 				.sum::<usize>(),
 			3,
 			"only the plain role mention should resolve; code stays literal and spoilers stay hidden"

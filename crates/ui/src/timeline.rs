@@ -332,6 +332,7 @@ fn layout_key(message: &Message) -> u64 {
 	key.finish()
 }
 pub(crate) const MESSAGE_LINE: f32 = 22.0;
+const GROUPED_ROW_SAVINGS: f32 = 52.0;
 
 pub(crate) fn fill_header_line(ui: &mut egui::Ui, compact: bool, text_line: egui::Rect) {
 	let slack = MESSAGE_LINE - text_line.height();
@@ -571,9 +572,22 @@ fn grouped(previous: Option<&Message>, message: &Message, boundary: Option<Id>) 
 	})
 }
 
-fn mentions_viewer(message: &Message, viewer: Option<Id>) -> bool {
+pub(crate) fn mentions_viewer(message: &Message, state: &State) -> bool {
+	let viewer = state.user.as_ref().map(|user| user.id);
 	message.mention_everyone
 		|| viewer.is_some_and(|viewer| message.mentions.iter().any(|mention| mention.id == viewer))
+		|| (viewer.is_some()
+			&& state
+				.channel(message.channel)
+				.and_then(|channel| channel.guild)
+				.and_then(|guild| state.permissions.guilds.get(&guild))
+				.and_then(|guild| guild.member.as_ref())
+				.is_some_and(|member| {
+					message
+						.mention_roles
+						.iter()
+						.any(|role| member.roles.contains(role))
+				}))
 }
 fn row_key(
 	message: &Message,
@@ -588,7 +602,7 @@ fn row_key(
 		.is_none_or(|p| timestamp(p.id).date() != timestamp(message.id).date())
 		.hash(&mut key);
 	(boundary == Some(message.id)).hash(&mut key);
-	crate::mentions::directory_fingerprint(state, message.channel).hash(&mut key);
+	crate::mentions::presentation_fingerprint(state, message).hash(&mut key);
 	key.finish()
 }
 fn divider(ui: &mut egui::Ui, label: String, unread: bool) {
@@ -908,7 +922,13 @@ fn banner_rect(area: egui::Rect) -> egui::Rect {
 	)
 }
 
-fn history_banner(ui: &mut egui::Ui, rect: egui::Rect, unread: bool, newer: bool) -> (bool, bool) {
+fn history_banner(
+	ui: &mut egui::Ui,
+	rect: egui::Rect,
+	unread: bool,
+	jump: bool,
+	newer: bool,
+) -> (bool, bool) {
 	let colors = crate::design::palette(ui);
 	let mut jump_unread = false;
 	let mut load_newer = false;
@@ -936,7 +956,7 @@ fn history_banner(ui: &mut egui::Ui, rect: egui::Rect, unread: bool, newer: bool
 				.color(colors.accent_text),
 			);
 			ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-				if unread
+				if jump
 					&& bar_button(
 						ui,
 						"Jump to unread",
@@ -1338,10 +1358,20 @@ impl TimelineView {
 				.into_iter()
 				.chain(state.timeline.display_iter())
 				.map(|m| {
-					let key = row_key(m, previous, self.unread_boundary, state)
-						^ u64::from(state.timeline.is_deleted(m.id));
-					previous = (!state.timeline.is_deleted(m.id)).then_some(m);
-					let estimate = (if m.embeds_suppressed {
+					let prior = previous;
+					let deleted = state.timeline.is_deleted(m.id);
+					let key = row_key(m, prior, self.unread_boundary, state) ^ u64::from(deleted);
+					previous = (!deleted).then_some(m);
+					let lines = m
+						.content
+						.lines()
+						.map(|line| {
+							(line.chars().count() as f32 / ((width - 80.0) / 8.0).max(1.0))
+								.ceil()
+								.max(1.0)
+						})
+						.sum::<f32>();
+					let mut estimate = (if m.embeds_suppressed {
 						0.0
 					} else {
 						crate::embeds::estimated_height(&m.embeds)
@@ -1349,16 +1379,10 @@ impl TimelineView {
 					}) + crate::attachments::estimated_height(
 						&m.attachments,
 						(width - 88.0).max(1.0),
-					) + 58.0 + 18.0
-						* (m.content
-							.lines()
-							.map(|line| {
-								(line.chars().count() as f32 / ((width - 80.0) / 8.0).max(1.0))
-									.ceil()
-									.max(1.0)
-							})
-							.sum::<f32>())
-						.min(128.0);
+					) + 58.0 + 18.0 * lines.min(128.0);
+					if grouped(prior, m, self.unread_boundary) && !deleted {
+						estimate = (estimate - GROUPED_ROW_SAVINGS).max(24.0);
+					}
 					let height = self
 						.heights
 						.get(&m.id)
@@ -1408,8 +1432,9 @@ impl TimelineView {
 			let area = ui.available_rect_before_wrap().intersect(ui.clip_rect());
 			loading_messages(ui);
 			session.bind(ui, ui.scope_id().with(("timeline", state.selected)), area);
-			if state.can_jump_unread() {
-				let (jump_unread, _) = history_banner(ui, banner_rect(area), true, false);
+			if state.show_missed_banner() {
+				let (jump_unread, _) =
+					history_banner(ui, banner_rect(area), true, state.can_jump_unread(), false);
 				if jump_unread {
 					self.unread_jump = true;
 					self.browse_away();
@@ -1622,15 +1647,7 @@ impl TimelineView {
 				(viewport.height() - lead_packed).max(0.0)
 			};
 			ui.add_space(lead);
-			// Initial bottom alignment can expose more rows after estimates shrink.
-			// Grouped rows measure much shorter than the estimate. On the first
-			// pass at the live edge, look far enough above the window that the
-			// corrected offset does not uncover a new band on the next paint.
-			let overscan = if channel_changed && self.following {
-				viewport.height() * 2.0
-			} else {
-				100.0
-			};
+			let overscan = 100.0;
 			let (first, _, top) = visible_range(
 				&self.rows,
 				(viewport.min.y - overscan - lead).max(0.0),
@@ -2034,41 +2051,79 @@ impl TimelineView {
 										);
 										surface.keep(&deleted);
 									} else {
-										ui.add_enabled_ui(
-											state.can_open_reply_target(reply),
-											|ui| {
-												let mut preview = egui::text::LayoutJob::default();
-												if let Some(original) = state.timeline.get(reply) {
-													let reply_avatar = avatars.show(
-														ui,
-														&original.author,
-														16.0,
-														state.demo,
-													);
-													if reply_avatar.clicked() {
-														self.request_reply_target(reply);
-													}
-													surface.keep(&reply_avatar);
-													preview.append(
-														&format!(
-															"@{}  ",
-															state.message_author_name(original)
-														),
-														0.0,
-														egui::TextFormat {
-															font_id: egui::FontId::new(
-																13.0,
-																crate::design::semibold_family(
-																	ui.ctx(),
-																),
-															),
-															color: colors.muted,
-															..Default::default()
-														},
-													);
-													if crate::embeds::has_spoilers(original) {
+										ui.scope(|ui| {
+											ui.visuals_mut().disabled_alpha = 1.0;
+											ui.add_enabled_ui(
+												state.can_open_reply_target(reply),
+												|ui| {
+													let mut preview =
+														egui::text::LayoutJob::default();
+													if let Some(original) =
+														state.timeline.get(reply)
+													{
+														let reply_avatar = avatars.show(
+															ui,
+															&original.author,
+															16.0,
+															state.demo,
+														);
+														if reply_avatar.clicked() {
+															self.request_reply_target(reply);
+														}
+														surface.keep(&reply_avatar);
 														preview.append(
-															"Spoiler",
+															&format!(
+																"@{}  ",
+																state.message_author_name(original)
+															),
+															0.0,
+															egui::TextFormat {
+																font_id: egui::FontId::new(
+																	13.0,
+																	crate::design::semibold_family(
+																		ui.ctx(),
+																	),
+																),
+																color: colors.muted,
+																..Default::default()
+															},
+														);
+														if crate::embeds::has_spoilers(original) {
+															preview.append(
+																"Spoiler",
+																0.0,
+																egui::TextFormat {
+																	font_id:
+																		egui::FontId::proportional(
+																			13.0,
+																		),
+																	color: colors.muted,
+																	..Default::default()
+																},
+															);
+														} else {
+															let source =
+																crate::mentions::MentionSource {
+																	state,
+																	channel: original.channel,
+																};
+															self.formatted
+																.get(reply, &original.content)
+																.append_inline_preview(
+																	&mut preview,
+																	ui,
+																	&original.mentions,
+																	Some(&source),
+																	crate::mentions::known_roles(
+																		state,
+																		original.channel,
+																	),
+																	&state.channels,
+																);
+														}
+													} else {
+														preview.append(
+															"Earlier message · View original",
 															0.0,
 															egui::TextFormat {
 																font_id: egui::FontId::proportional(
@@ -2078,56 +2133,27 @@ impl TimelineView {
 																..Default::default()
 															},
 														);
-													} else {
-														let source =
-															crate::mentions::MentionSource {
-																state,
-																channel: original.channel,
-															};
-														self.formatted
-															.get(reply, &original.content)
-															.append_inline_preview(
-																&mut preview,
-																ui,
-																&original.mentions,
-																Some(&source),
-																crate::mentions::known_roles(
-																	state,
-																	original.channel,
-																),
-																&state.channels,
-															);
 													}
-												} else {
-													preview.append(
-														"Earlier message · View original",
-														0.0,
-														egui::TextFormat {
-															font_id: egui::FontId::proportional(
-																13.0,
-															),
-															color: colors.muted,
-															..Default::default()
-														},
-													);
-												}
-												let reply_preview = ui
-													.add(
-														egui::Label::new(preview)
-															.truncate()
-															.sense(egui::Sense::click()),
-													)
-													.on_hover_cursor(egui::CursorIcon::PointingHand)
-													.on_hover_text("View original message")
-													.on_disabled_hover_text(
-														"Wait for readable, current message history",
-													);
-												surface.keep(&reply_preview);
-												if reply_preview.clicked() {
-													self.request_reply_target(reply);
-												}
-											},
-										);
+													let reply_preview = ui
+														.add(
+															egui::Label::new(preview)
+																.truncate()
+																.sense(egui::Sense::click()),
+														)
+														.on_hover_cursor(
+															egui::CursorIcon::PointingHand,
+														)
+														.on_hover_text("View original message")
+														.on_disabled_hover_text(
+															"Wait for readable, current message history",
+														);
+													surface.keep(&reply_preview);
+													if reply_preview.clicked() {
+														self.request_reply_target(reply);
+													}
+												},
+											);
+										});
 									}
 								});
 							}
@@ -2591,8 +2617,7 @@ impl TimelineView {
 							surface.finish(ui);
 						});
 					let rect = row.response.rect;
-					let mentioned =
-						mentions_viewer(message, state.user.as_ref().map(|user| user.id));
+					let mentioned = mentions_viewer(message, state);
 					if mentioned {
 						ui.painter().set(
 							background,
@@ -3100,23 +3125,29 @@ impl TimelineView {
 		let browsing_history = state.history_targeted
 			|| state.history_before.is_some()
 			|| state.history_after.is_some();
-		let jump_ready = state.can_jump_unread();
+		let missed = state.show_missed_banner();
 		let opening_unread =
-			jump_ready && state.freshness == model::Freshness::Loading && state.history_pending;
-		let can_jump_unread = jump_ready
+			missed && state.freshness == model::Freshness::Loading && state.history_pending;
+		let show_unread = missed
 			&& (state.timeline.iter().next().is_some() || opening_unread)
 			&& (opening_unread
 				|| !(self.following
 					&& self.at_current_latest
 					&& !browsing_history
 					&& ui.input(|input| input.focused)));
+		let can_jump_unread = show_unread && state.can_jump_unread();
 		// Latest-message metadata can outlive a deleted message. A complete, visible
 		// latest page has nowhere useful to jump; targeted pages still need navigation.
-		if (can_jump_unread || can_load_newer)
+		if (show_unread || can_load_newer)
 			&& (!whole_conversation_visible || browsing_history || opening_unread)
 		{
-			let (jump_unread, load_newer) =
-				history_banner(ui, banner_rect(area), can_jump_unread, can_load_newer);
+			let (jump_unread, load_newer) = history_banner(
+				ui,
+				banner_rect(area),
+				show_unread,
+				can_jump_unread,
+				can_load_newer,
+			);
 			if jump_unread {
 				self.unread_jump = true;
 				self.browse_away();
@@ -3132,7 +3163,7 @@ impl TimelineView {
 		let detached_page = state.history_targeted || state.history_after.is_some();
 		let unread = state
 			.selected
-			.is_some_and(|channel| state.unread(channel) == Some(true));
+			.is_some_and(|channel| state.missed(channel) == Some(true));
 		self.present_control = None;
 		if (!self.following && distance_from_bottom > PRESENT_CONTROL_SCREENS * area.height())
 			|| (self.target_browsing && !(at_bottom && unread))
@@ -3763,9 +3794,9 @@ mod tests {
 	#[test]
 	fn mass_mentions_highlight_every_viewer() {
 		let mut message = text_message(1);
-		assert!(!mentions_viewer(&message, Some(Id(7))));
+		assert!(!mentions_viewer(&message, &State::default()));
 		message.mention_everyone = true;
-		assert!(mentions_viewer(&message, Some(Id(7))));
+		assert!(mentions_viewer(&message, &State::default()));
 	}
 	#[test]
 	fn forwarded_audio_keeps_sender_label_and_player_in_narrow_and_wide_rows() {
@@ -6925,5 +6956,140 @@ mod tests {
 				.collect();
 			assert!(late.is_empty(), "{label} moved after settle: {late:?}");
 		}
+	}
+
+	fn channel_messages(channel: u64, count: u64) -> State {
+		let mut state = State {
+			selected: Some(Id(channel)),
+			revision: 1,
+			demo: true,
+			older_exhausted: true,
+			freshness: model::Freshness::Fresh,
+			channels: vec![model::Channel {
+				id: Id(channel),
+				guild: None,
+				parent_id: None,
+				position: 0,
+				name: "general".into(),
+				kind: 1,
+				recipients: vec![],
+				member_list_id: None,
+				message_count: None,
+				icon: None,
+				last_message: (count > 0).then_some(Id(count)),
+			}],
+			..Default::default()
+		};
+		for id in 1..=count {
+			let mut message = text_message(id);
+			message.channel = Id(channel);
+			message.content = format!("Row {id}");
+			state.timeline.insert(message, false, false).unwrap();
+		}
+		state
+	}
+
+	fn paint_timeline(
+		ctx: &egui::Context,
+		view: &mut TimelineView,
+		state: &mut State,
+		frame: u32,
+	) -> BTreeMap<String, f32> {
+		let mut avatars = crate::avatars::Avatars::default();
+		let output = ctx.run_ui(
+			egui::RawInput {
+				screen_rect: Some(egui::Rect::from_min_size(
+					egui::Pos2::ZERO,
+					egui::vec2(900.0, 600.0),
+				)),
+				time: Some(f64::from(frame) / 60.0),
+				focused: true,
+				..Default::default()
+			},
+			|ui| {
+				view.show(
+					ui,
+					state,
+					&mut None,
+					&mut None,
+					(&mut avatars, &mut None),
+					None,
+				);
+			},
+		);
+		let labels = label_ys(&output);
+		output.drop_without_applying_deltas();
+		labels
+	}
+
+	fn newest_y(labels: &BTreeMap<String, f32>, count: u64) -> Option<f32> {
+		labels.get(&format!("Row {count}")).copied()
+	}
+
+	#[test]
+	fn live_edge_snap_paints_the_tail_in_place() {
+		let ctx = egui::Context::default();
+		crate::design::apply(&ctx);
+		let mut state = channel_messages(21, 48);
+		let mut view = TimelineView::default();
+		let mut settled = None;
+		for frame in 0..6 {
+			settled = newest_y(&paint_timeline(&ctx, &mut view, &mut state, frame), 48);
+		}
+		let settled = settled.expect("settled tail");
+
+		view.heights.retain(|id, _| id.0 <= 12);
+		view.following = false;
+		view.target_browsing = true;
+		view.jump = false;
+		view.anchor = Some((Id(1), 0.0));
+		view.revision = u64::MAX;
+		paint_timeline(&ctx, &mut view, &mut state, 20);
+		view.follow_latest();
+		let mut ack = Vec::new();
+		for frame in 0..6 {
+			ack.push(newest_y(
+				&paint_timeline(&ctx, &mut view, &mut state, 30 + frame),
+				48,
+			));
+		}
+		assert!(
+			ack.iter()
+				.all(|y| y.is_some_and(|y| (y - settled).abs() < 1.0)),
+			"ack to the bottom walked the tail {ack:?}, settled at {settled}"
+		);
+
+		let mut loading = channel_messages(22, 48);
+		loading.timeline.clear();
+		loading.freshness = model::Freshness::Loading;
+		loading.history_pending = true;
+		loading.older_exhausted = false;
+		loading.channels[0].last_message = None;
+		let mut opened = TimelineView::default();
+		paint_timeline(&ctx, &mut opened, &mut loading, 60);
+		for id in 1..=48 {
+			let mut message = text_message(id);
+			message.channel = Id(22);
+			message.content = format!("Row {id}");
+			loading.timeline.insert(message, false, false).unwrap();
+		}
+		loading.freshness = model::Freshness::Fresh;
+		loading.history_pending = false;
+		loading.older_exhausted = true;
+		loading.channels[0].last_message = Some(Id(48));
+		loading.revision += 1;
+		let mut arrived = Vec::new();
+		for frame in 0..6 {
+			arrived.push(newest_y(
+				&paint_timeline(&ctx, &mut opened, &mut loading, 70 + frame),
+				48,
+			));
+		}
+		assert!(
+			arrived
+				.iter()
+				.all(|y| y.is_some_and(|y| (y - settled).abs() < 1.0)),
+			"opening onto loaded history walked the tail {arrived:?}, settled at {settled}"
+		);
 	}
 }
