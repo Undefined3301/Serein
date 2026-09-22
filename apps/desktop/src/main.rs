@@ -17,7 +17,13 @@ mod credentials;
 mod dm_demo;
 mod downloads;
 mod emoji_upload;
+mod extension_app;
 mod extension_bridge;
+mod extension_data_events;
+mod extension_events;
+mod extension_forum_data;
+mod extension_member_details;
+mod extension_message_content;
 mod extensions;
 mod game_activity;
 mod gpu;
@@ -4952,7 +4958,28 @@ impl Desktop {
 				)) {
 				self.notifications.dismiss();
 			}
+			let data_changes = extension_data_events::Changes::capture(&self.state, &event);
+			let extension_events = if self.extensions.has_message_events(&self.state) {
+				extension_events::capture(&self.state, &event.event)
+			} else {
+				Vec::new()
+			};
+			if event.generation == self.state.generation
+				&& (event.event.changes_access()
+					|| matches!(event.event, Event::Disconnected)
+					|| matches!(&event.event, Event::HistoryFailed { channel, request, failure: Failure::Forbidden }
+						if Some(*channel) == self.state.selected && *request == self.state.request && self.state.history_pending))
+			{
+				self.extensions.access_changed(&mut self.messaging);
+			}
 			self.state.apply(event);
+			self.extensions.data_changed(data_changes);
+			self.extensions.cancel_stale_message_events(&self.state);
+			for candidate in extension_events {
+				if let Some(event) = candidate.admit(&self.state) {
+					self.extensions.message_event(&self.state, event);
+				}
+			}
 			if user_action_was_pending
 				&& !self.state.user_action_pending()
 				&& let Some((level, text)) = user_action_notice
@@ -5776,6 +5803,7 @@ impl eframe::App for Desktop {
 				self.messaging.notification_sound_status = "Could not save device notification settings. Changes apply only until restart.";
 			}
 			let mut commands = self.messaging.show(ui, &mut self.state);
+			self.extensions.cancel_stale_message_events(&self.state);
 			self.choose_interaction_files(&ctx);
 			if let Some(command) = self.captcha.sync(
 				&mut self.state,
