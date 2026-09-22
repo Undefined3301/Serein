@@ -42,13 +42,17 @@ fn frame(
 }
 
 fn worst(before: &[(String, f32)], after: &[(String, f32)]) -> f32 {
+	if before.is_empty() || before.len() != after.len() {
+		return f32::INFINITY;
+	}
 	before
 		.iter()
-		.filter_map(|(label, y)| {
+		.map(|(label, y)| {
 			after
 				.iter()
 				.find(|(next, _)| next == label)
 				.map(|(_, next)| (y - next).abs())
+				.unwrap_or(f32::INFINITY)
 		})
 		.fold(0.0, f32::max)
 }
