@@ -1419,7 +1419,10 @@ async fn run_inner(
 											user: ready.user.into_model(), guilds, channels, permissions,
 											read_state: client_core::read_state::Event::Snapshot {entries:read_entries,version:read_version,partial},
 											notifications, session_dnd: ready.sessions.as_ref().and_then(|s| s.dnd()), warnings,
-										}.prepare()?)))?; was_ready = true;
+										}.prepare()?)))?;
+										// A new session does not replay settings changed while disconnected.
+										if was_ready { emit(Event::AccountSettings { status: true, folders: true })?; }
+										was_ready = true;
 
 										let nicknames = ready.relationships.as_ref().map(|s| s.nicknames());
 										let spam_requests = ready.relationships.as_ref().map(|s| s.spam_incoming_ids());
@@ -1563,9 +1566,15 @@ async fn run_inner(
 										let sessions=decode::<discord_protocol::notifications::Sessions>(packet.d.get().as_bytes()).map_err(|_|Failure::Protocol)?;
 										emit(Event::NotificationPreferences(client_core::notifications::Event::Presence(sessions.dnd())))?;
 									}
-									// Status and appearance live here. Channel and guild mutes live on
-									// user guild settings, so this event must not clear them.
-									"USER_SETTINGS_PROTO_UPDATE" => {}
+									// Status, appearance and server folders live here. Channel and guild
+									// mutes live on user guild settings, so this event must not clear them.
+									"USER_SETTINGS_PROTO_UPDATE" => {
+										if let Some(touched) = discord_protocol::settings_update::decode(packet.d.get().as_bytes()).unwrap_or(Some(discord_protocol::settings_update::Touched { status: true, folders: true }))
+											&& (touched.status || touched.folders)
+										{
+											emit(Event::AccountSettings { status: touched.status, folders: touched.folders })?;
+										}
+									}
 									"INTERACTION_SUCCESS" | "INTERACTION_FAILURE" | "INTERACTION_MODAL_CREATE" => { if let Some(event) = interactions::event(packet.t.as_deref().unwrap_or_default(),packet.d.get().as_bytes())? { emit(event)?; } },
 									"MESSAGE_CREATE" => {
 										let message = decode::<MessageDto>(packet.d.get().as_bytes()).map_err(|_| Failure::Protocol)?.into_model();

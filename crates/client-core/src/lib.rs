@@ -101,7 +101,13 @@ pub enum Command {
 		request: u64,
 	},
 	/// None loads the current settings; Some saves the complete folder layout.
-	GuildFolders(Option<model::guild_folders::Settings>),
+	/// Load, or save `(loaded base, desired)` if Discord still has the base folders.
+	GuildFolders(
+		Option<(
+			model::guild_folders::Settings,
+			model::guild_folders::Settings,
+		)>,
+	),
 	GroupAction {
 		action: group_actions::Action,
 		request: u64,
@@ -417,6 +423,11 @@ pub enum Event {
 	},
 	GuildJoined(Guild),
 	GuildFolders(Result<model::guild_folders::Settings, auth::Failure>),
+	/// Discord says another session (or this one) changed account settings.
+	AccountSettings {
+		status: bool,
+		folders: bool,
+	},
 	UserAction(user_actions::Event),
 	ServerAction(server_actions::Event),
 	GroupAction(group_actions::Event),
@@ -605,6 +616,8 @@ pub struct State {
 	pub guild_folders: Option<model::guild_folders::Settings>,
 	pub folders_pending: bool,
 	pub folders_error: Option<&'static str>,
+	/// Discord reported a folder change since the last load.
+	pub folders_stale: bool,
 	pub user_actions: user_actions::Actions,
 	pub server_actions: server_actions::Actions,
 	pub channel_actions: channel_actions::Actions,
@@ -813,6 +826,7 @@ impl Default for State {
 			guild_folders: None,
 			folders_pending: false,
 			folders_error: None,
+			folders_stale: false,
 			user_actions: user_actions::Actions::default(),
 			server_actions: server_actions::Actions::default(),
 			channel_actions: channel_actions::Actions::default(),
@@ -2261,6 +2275,10 @@ impl State {
 			}
 			Event::GuildFolders(result) => {
 				self.apply_guild_folders(result);
+				Ok(())
+			}
+			Event::AccountSettings { folders, .. } => {
+				self.folders_stale |= folders && self.guild_folders.is_some();
 				Ok(())
 			}
 			Event::Typing(_) => unreachable!("typing is handled before timeline invalidation"),

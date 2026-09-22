@@ -3016,9 +3016,9 @@ impl Desktop {
 					request,
 					edit,
 				} => server_settings_demo::execute(&self.state, guild, request, edit),
-				Command::GuildFolders(settings) => {
-					Event::GuildFolders(Ok(settings.unwrap_or_default()))
-				}
+				Command::GuildFolders(settings) => Event::GuildFolders(Ok(settings
+					.map(|(_, settings)| settings)
+					.unwrap_or_default())),
 				Command::SendServerInvite {
 					guild,
 					user,
