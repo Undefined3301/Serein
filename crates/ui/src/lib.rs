@@ -145,6 +145,7 @@ pub struct MessagingUi {
 	join_server: join_server::JoinDialog,
 	folder_ui: guild_folders::FolderUi,
 	rail_cache: notifications::RailCache,
+	member_scroll_at: Option<(Id, usize)>,
 	composer_layout: composer_text::Layout,
 	channel_cache: categories::Cache,
 	channel_move: Option<(Id, client_core::channel_actions::Action)>,
@@ -964,6 +965,7 @@ impl MessagingUi {
 	}
 	fn member_rows(&mut self, ui: &mut egui::Ui, state: &mut State, commands: &mut Vec<Command>) {
 		let colors = design::palette(ui);
+		let cached = state.members_cached();
 		let Some(list) = state
 			.members
 			.as_ref()
@@ -973,12 +975,7 @@ impl MessagingUi {
 			ui.label(RichText::new("Choose a conversation to see its people.").color(colors.muted));
 			return;
 		};
-		let has_entry = list.slots.iter().any(|slot| {
-			matches!(
-				slot,
-				Some(model::MemberSlot::Person(_)) | Some(model::MemberSlot::Group(_))
-			)
-		});
+		let has_entry = list.slots.iter().any(|slot| slot.is_some()) || cached;
 		if !has_entry {
 			ui.add_space(8.0);
 			if list.freshness != Freshness::Fresh {
@@ -1018,11 +1015,13 @@ impl MessagingUi {
 				visible = range.clone();
 				for index in range {
 					let slot = if lazy {
-						if index >= start {
-							list.slots.get(index - start).and_then(|s| s.as_ref())
-						} else {
-							None
-						}
+						state.member_slot(index).or_else(|| {
+							if index >= start {
+								list.slots.get(index - start).and_then(|slot| slot.as_ref())
+							} else {
+								None
+							}
+						})
 					} else {
 						list.slots.get(index).and_then(|s| s.as_ref())
 					};
@@ -1219,7 +1218,11 @@ impl MessagingUi {
 		if lazy && !visible.is_empty() {
 			let first = visible.start;
 			let last = visible.end.saturating_sub(1);
-			if let Some(cmd) = state.focus_member_ranges(first, last) {
+			let toward_up = self.member_scroll_at.and_then(|(id, previous)| {
+				(id == channel && first != previous).then_some(first < previous)
+			});
+			self.member_scroll_at = Some((channel, first));
+			if let Some(cmd) = state.focus_member_ranges(first, last, toward_up) {
 				commands.push(cmd);
 			}
 		}

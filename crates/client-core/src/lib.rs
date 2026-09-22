@@ -633,6 +633,7 @@ pub struct State {
 	pub auth: auth::AuthState,
 	pub user: Option<User>,
 	pub members: Option<MemberList>,
+	pub member_chunks: MemberChunks,
 	pub member_search: [member_search::View; 2],
 	pub member_search_nonce: u64,
 	pub direct_presences: Vec<MemberPresence>,
@@ -673,6 +674,96 @@ pub struct State {
 	pub demo: bool,
 	#[doc(hidden)]
 	pub trail: Trail,
+}
+
+const MEMBER_CHUNK: usize = 100;
+const MEMBER_CACHE_BYTES: usize = 1024 * 1024;
+const MEMBER_CACHE_CHUNKS: usize = 32;
+
+/// Decoded member-list chunks for the open request. The gateway subscription stays on the
+/// viewport. This cache is what the sidebar paints when the user scrolls back.
+#[derive(Default)]
+pub struct MemberChunks {
+	request: u64,
+	viewport: usize,
+	chunks: BTreeMap<usize, Vec<Option<MemberSlot>>>,
+}
+
+impl MemberChunks {
+	fn clear(&mut self) {
+		*self = Self::default();
+	}
+
+	fn slot(&self, index: usize) -> Option<&MemberSlot> {
+		let start = (index / MEMBER_CHUNK) * MEMBER_CHUNK;
+		self.chunks.get(&start)?.get(index - start)?.as_ref()
+	}
+
+	fn occupied(&self) -> bool {
+		self.chunks
+			.values()
+			.any(|chunk| chunk.iter().any(|slot| slot.is_some()))
+	}
+
+	fn bytes(&self) -> usize {
+		self.chunks
+			.values()
+			.flat_map(|chunk| chunk.iter().flatten())
+			.map(MemberSlot::bytes)
+			.sum()
+	}
+
+	fn merge(&mut self, list: &MemberList) {
+		if !list.lazy {
+			return;
+		}
+		if self.request != list.request {
+			self.chunks.clear();
+			self.request = list.request;
+		}
+		let pending_holes =
+			list.freshness != Freshness::Fresh && list.slots.iter().all(|slot| slot.is_none());
+		if !pending_holes {
+			for (offset, slot) in list.slots.iter().enumerate() {
+				let absolute = list.start.saturating_add(offset);
+				let start = (absolute / MEMBER_CHUNK) * MEMBER_CHUNK;
+				let chunk = self
+					.chunks
+					.entry(start)
+					.or_insert_with(|| vec![None; MEMBER_CHUNK]);
+				let relative = absolute - start;
+				if relative < chunk.len() {
+					chunk[relative] = slot.clone();
+				}
+			}
+		}
+	}
+
+	fn look_at(&mut self, index: usize, ranges: &[[usize; 2]]) {
+		self.viewport = index;
+		self.evict(ranges);
+	}
+
+	fn evict(&mut self, ranges: &[[usize; 2]]) {
+		let protected = |start: usize| {
+			ranges
+				.iter()
+				.any(|[from, to]| start <= *to && start + MEMBER_CHUNK > *from)
+		};
+		let viewport_chunk = (self.viewport / MEMBER_CHUNK) * MEMBER_CHUNK;
+		while self.chunks.len() > MEMBER_CACHE_CHUNKS || self.bytes() > MEMBER_CACHE_BYTES {
+			let Some(victim) = self
+				.chunks
+				.keys()
+				.copied()
+				.filter(|start| !protected(*start))
+				.max_by_key(|start| start.abs_diff(viewport_chunk))
+			else {
+				break;
+			};
+			self.chunks.remove(&victim);
+		}
+	}
 }
 
 /// Result of a back/forward step that landed. `command` is the optional history fetch.
@@ -734,6 +825,7 @@ impl Default for State {
 			auth: auth::AuthState::Unauthenticated,
 			user: None,
 			members: None,
+			member_chunks: MemberChunks::default(),
 			member_search: Default::default(),
 			member_search_nonce: 0,
 			direct_presences: vec![],
@@ -1085,6 +1177,7 @@ impl State {
 		let index = self.channel_index(self.selected?)?;
 		let channel = &self.channels[index];
 		self.member_request = self.member_request.wrapping_add(1);
+		self.member_chunks.clear();
 		if !self.can_view(channel.id) {
 			return None;
 		}
@@ -1155,6 +1248,7 @@ impl State {
 	}
 	pub fn close_members(&mut self) -> Command {
 		self.member_request = self.member_request.wrapping_add(1);
+		self.member_chunks.clear();
 		self.members = None;
 		Command::Members {
 			thread: false,
@@ -1165,7 +1259,24 @@ impl State {
 			ranges: vec![],
 		}
 	}
-	pub fn focus_member_ranges(&mut self, first: usize, last: usize) -> Option<Command> {
+	pub fn member_slot(&self, index: usize) -> Option<&MemberSlot> {
+		let list = self.members.as_ref()?;
+		if !list.lazy || self.member_chunks.request != list.request {
+			return None;
+		}
+		self.member_chunks.slot(index)
+	}
+	pub fn members_cached(&self) -> bool {
+		self.members.as_ref().is_some_and(|list| {
+			list.lazy && self.member_chunks.request == list.request && self.member_chunks.occupied()
+		})
+	}
+	pub fn focus_member_ranges(
+		&mut self,
+		first: usize,
+		last: usize,
+		toward_up: Option<bool>,
+	) -> Option<Command> {
 		let list = self.members.as_ref()?;
 		if !list.lazy
 			|| Some(list.channel) != self.selected
@@ -1202,19 +1313,28 @@ impl State {
 				ranges.push(last_chunk);
 			}
 		} else {
-			let chunk_end = ranges[0][1];
-			if last + 25 >= chunk_end && chunk_end < max_idx {
-				let next_start = chunk_end + 1;
-				ranges.push([next_start, next_start + 99]);
+			let start = ranges[0][0];
+			match toward_up {
+				Some(true) if start >= MEMBER_CHUNK => {
+					ranges.insert(0, [start - MEMBER_CHUNK, start - 1]);
+				}
+				Some(false) if ranges[0][1] < max_idx => {
+					let next = ranges[0][1] + 1;
+					ranges.push([next, next + 99]);
+				}
+				_ => {}
 			}
 		}
-		if ranges == list.ranges {
+		let unchanged = ranges == list.ranges;
+		if unchanged {
+			self.member_chunks.look_at(first, &ranges);
 			return None;
 		}
 		let request = list.request;
 		let guild = list.guild;
 		let channel_id = list.channel;
 		self.members.as_mut()?.ranges = ranges.clone();
+		self.member_chunks.look_at(first, &ranges);
 		Some(Command::Members {
 			thread: false,
 			guild,
@@ -2505,14 +2625,11 @@ impl State {
 				{
 					return;
 				}
-				if self.members.as_ref().is_some_and(|current| {
+				let ranges_left = self.members.as_ref().is_some_and(|current| {
 					!current.ranges.is_empty()
 						&& !list.ranges.is_empty()
 						&& current.ranges != list.ranges
-				}) {
-					return;
-				}
-				let kept_ranges = self.members.as_ref().map(|m| m.ranges.clone());
+				});
 				let invalid = list.slots.len() > 200
 					|| list.slots.iter().flatten().any(|slot| match slot {
 						MemberSlot::Person(row) => {
@@ -2522,8 +2639,21 @@ impl State {
 					}) || list.slot_bytes() > 256 * 1024
 					|| list.groups.len() > 64;
 				if invalid {
-					self.members.as_mut().unwrap().freshness = Freshness::Unavailable;
+					if !ranges_left {
+						self.members.as_mut().unwrap().freshness = Freshness::Unavailable;
+					}
+				} else if ranges_left {
+					if list.freshness == Freshness::Fresh {
+						let protect = self
+							.members
+							.as_ref()
+							.map(|current| current.ranges.clone())
+							.unwrap_or_default();
+						self.member_chunks.merge(&list);
+						self.member_chunks.evict(&protect);
+					}
 				} else {
+					let kept_ranges = self.members.as_ref().map(|m| m.ranges.clone());
 					for slot in list.slots.iter().flatten() {
 						if let MemberSlot::Person(member) = slot {
 							self.timeline.apply_author_membership(
@@ -2539,6 +2669,8 @@ impl State {
 					{
 						list.ranges = ranges;
 					}
+					self.member_chunks.merge(&list);
+					self.member_chunks.evict(&list.ranges);
 					self.members = Some(list);
 				}
 				Ok(())
@@ -3143,6 +3275,7 @@ impl State {
 	fn invalidate_members(&mut self) {
 		self.member_search = Default::default();
 		self.member_request = self.member_request.wrapping_add(1);
+		self.member_chunks.clear();
 		if let Some(list) = &mut self.members {
 			list.request = self.member_request;
 			list.slots.clear();
@@ -4776,6 +4909,85 @@ mod tests {
 			},
 		);
 		assert_eq!(state.members.as_ref().unwrap().slots.len(), 1);
+		let user = state.members.as_ref().unwrap().slots[0]
+			.as_ref()
+			.and_then(|slot| match slot {
+				MemberSlot::Person(member) => Some(member.user.clone()),
+				MemberSlot::Group(_) => None,
+			})
+			.unwrap();
+		let kept = MemberList {
+			guild: Some(Id(10)),
+			channel: Id(1),
+			request: 7,
+			start: 0,
+			slots: vec![Some(MemberSlot::Person(Member {
+				roles: vec![],
+				user: user.clone(),
+				nick: Some("Kept".into()),
+				status: None,
+				custom_status: None,
+				activities: vec![],
+			}))],
+			total: 250,
+			lazy: true,
+			freshness: Freshness::Fresh,
+			groups: vec![],
+			ranges: vec![[0, 99]],
+		};
+		state.members = Some(kept.clone());
+		state.member_chunks.merge(&kept);
+		let holes = MemberList {
+			start: 100,
+			slots: vec![None; 100],
+			ranges: vec![[100, 199]],
+			freshness: Freshness::Loading,
+			..kept.clone()
+		};
+		apply(&mut state, Event::Members(holes));
+		match state.member_slot(0) {
+			Some(MemberSlot::Person(member)) => assert_eq!(member.nick.as_deref(), Some("Kept")),
+			_ => panic!("loading snapshot keeps the scrolled-away chunk"),
+		}
+		assert_eq!(state.members.as_ref().unwrap().ranges, vec![[0, 99]]);
+		let mut later_slots = vec![None; 100];
+		later_slots[0] = Some(MemberSlot::Person(Member {
+			roles: vec![],
+			user: user.clone(),
+			nick: Some("Later".into()),
+			status: None,
+			custom_status: None,
+			activities: vec![],
+		}));
+		apply(
+			&mut state,
+			Event::Members(MemberList {
+				start: 100,
+				slots: later_slots,
+				ranges: vec![[100, 199]],
+				freshness: Freshness::Fresh,
+				..kept.clone()
+			}),
+		);
+		match state.member_slot(100) {
+			Some(MemberSlot::Person(member)) => assert_eq!(member.nick.as_deref(), Some("Later")),
+			_ => panic!("a snapshot for a left range stays in the cache"),
+		}
+		assert_eq!(state.members.as_ref().unwrap().ranges, vec![[0, 99]]);
+		apply(
+			&mut state,
+			Event::Members(MemberList {
+				start: 0,
+				slots: vec![None; 100],
+				ranges: vec![[0, 99]],
+				freshness: Freshness::Loading,
+				..kept
+			}),
+		);
+		match state.member_slot(0) {
+			Some(MemberSlot::Person(member)) => assert_eq!(member.nick.as_deref(), Some("Kept")),
+			_ => panic!("a loading snapshot for the open range keeps the cached row"),
+		}
 	}
 	#[test]
 	fn channel_restoration_requires_known_guild_and_preserves_existing_patch_state() {
