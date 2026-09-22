@@ -48,10 +48,11 @@ impl<'de> Deserialize<'de> for Rows {
 					if entry.user_id != entry.member.user.id || !seen.insert(entry.user_id) {
 						return Err(serde::de::Error::custom("Invalid thread member identity"));
 					}
-					if entry.presence.is_some() {
-						entry.member.presence = entry.presence;
+					if let Some(presence) = entry.presence.take() {
+						entry.member.presence = model::Patch::Value(presence);
 					}
 					let member = MemberItem::Member {
+						presence: model::Patch::Absent,
 						member: Box::new(entry.member),
 					}
 					.into_model()

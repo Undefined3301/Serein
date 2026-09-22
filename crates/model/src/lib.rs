@@ -727,7 +727,7 @@ pub struct MemberList {
 	/// Guild channel lazy list. Scrollbar length is `total`. DMs and threads are false and scroll `slots.len()`.
 	pub lazy: bool,
 	pub freshness: Freshness,
-	/// id -> count from the update's top-level groups array. Display only. At most 64.
+	/// id -> count from the update's top-level groups array. At most MAX_ROLES + 2.
 	pub groups: Vec<(String, u64)>,
 	/// Ranges last requested for a lazy guild list.
 	pub ranges: Vec<[usize; 2]>,

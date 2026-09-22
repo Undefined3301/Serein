@@ -1472,7 +1472,7 @@ pub struct MemberDto {
 	#[serde(default)]
 	pub nick: Option<String>,
 	#[serde(default)]
-	pub presence: Option<PresenceDto>,
+	pub presence: Patch<PresenceDto>,
 }
 #[derive(Deserialize)]
 pub struct PresenceDto {
@@ -1489,14 +1489,36 @@ impl PresenceDto {
 #[derive(Deserialize)]
 #[serde(untagged)]
 pub enum MemberItem {
-	Member { member: Box<MemberDto> },
-	Group { group: MemberGroup },
+	Member {
+		member: Box<MemberDto>,
+		#[serde(default)]
+		presence: Patch<PresenceDto>,
+	},
+	Group {
+		group: MemberGroup,
+	},
 }
 #[derive(Deserialize)]
 pub struct MemberGroup {
 	pub id: String,
 }
 impl MemberItem {
+	pub fn preserve_presence(&mut self, previous: &model::Member) {
+		if let Self::Member { member, presence } = self
+			&& member.user.id == previous.user.id
+			&& matches!(member.presence, Patch::Absent)
+			&& matches!(presence, Patch::Absent)
+			&& let Some(status) = &previous.status
+		{
+			member.presence = Patch::Value(PresenceDto {
+				status: status.clone(),
+				activities: presence::Activities(
+					previous.custom_status.clone(),
+					previous.activities.clone(),
+				),
+			});
+		}
+	}
 	pub fn into_model(self) -> Option<model::Member> {
 		match self.into_slot()? {
 			model::MemberSlot::Person(member) => Some(member),
@@ -1511,25 +1533,36 @@ impl MemberItem {
 				}
 				Some(model::MemberSlot::Group(group.id))
 			}
-			Self::Member { member: mut m } => Some(model::MemberSlot::Person(model::Member {
-				roles: m.roles,
-				user: m.user.into_model(),
-				nick: m.nick.map(|n| n.chars().take(128).collect()),
-				custom_status: m
-					.presence
-					.as_ref()
-					.filter(|p| p.status != "offline")
-					.and_then(PresenceDto::custom_status),
-				activities: m
-					.presence
-					.as_mut()
-					.filter(|p| p.status != "offline")
-					.map_or_else(Vec::new, |p| std::mem::take(&mut p.activities.1)),
-				status: m.presence.and_then(|p| match p.status.as_str() {
-					"online" | "idle" | "dnd" | "offline" => Some(p.status),
+			Self::Member {
+				member: m,
+				presence,
+			} => {
+				let presence = match presence {
+					Patch::Absent => m.presence,
+					other => other,
+				};
+				let mut presence = match presence {
+					Patch::Value(value) => Some(value),
 					_ => None,
-				}),
-			})),
+				};
+				Some(model::MemberSlot::Person(model::Member {
+					roles: m.roles,
+					user: m.user.into_model(),
+					nick: m.nick.map(|n| n.chars().take(128).collect()),
+					custom_status: presence
+						.as_ref()
+						.filter(|p| p.status != "offline")
+						.and_then(PresenceDto::custom_status),
+					activities: presence
+						.as_mut()
+						.filter(|p| p.status != "offline")
+						.map_or_else(Vec::new, |p| std::mem::take(&mut p.activities.1)),
+					status: presence.and_then(|p| match p.status.as_str() {
+						"online" | "idle" | "dnd" | "offline" => Some(p.status),
+						_ => None,
+					}),
+				}))
+			}
 		}
 	}
 }
@@ -1561,10 +1594,9 @@ pub struct MemberGroupCount {
 pub struct MemberUpdate {
 	pub guild_id: Id,
 	pub id: String,
-	pub member_count: u64,
+	pub member_count: Option<u64>,
 	pub ops: Vec<MemberOp>,
-	#[serde(default)]
-	pub groups: Vec<MemberGroupCount>,
+	pub groups: Option<Vec<MemberGroupCount>>,
 }
 
 #[cfg(test)]

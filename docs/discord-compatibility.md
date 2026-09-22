@@ -1703,3 +1703,24 @@ can fail independently. The picker reports per-destination sending, sent, failed
 outcomes. Writes are never automatically retried; existing composer drafts are preserved.
 Destinations are limited to loaded text conversations, not a server-wide discovery search.
 The local synthetic debug check does not establish live normal-account compatibility.
+
+### Member list recovery — September 22, 2026
+
+The bounded Gateway mirror accepts omitted member counts/group summaries on incremental
+updates and presence both inside and beside a member, matching the shapes used by
+[SakuraCord's member decoder](https://github.com/SakuraCordApp/SakuraCord/blob/f9953d6086d4090dd1d63c0ecef2b0107ba199ad/Packages/DiscordProtocol/Sources/DiscordProtocol/GuildMemberListUpdateDTO.swift).
+Member-only UPDATE preserves omitted presence for the same user; explicit null/offline
+still clears it. List length includes supplied group headers and visible group counts.
+Up to 512 role groups plus online/offline fit the existing role-catalog limit.
+
+Malformed operations leave the last valid snapshot intact. Invalidation keeps cached rows
+while awaiting a SYNC; other incremental updates cannot cancel that recovery. A stalled
+subscription resets its channel ranges at the existing 15-second interval before requesting
+them again. An empty reply only completes loading when the service explicitly reports zero
+members. Guild presence remains visible during range loading and transient reconnects;
+unavailable/access-revoked state still hides it. All caches remain session/request scoped.
+
+Offline examples `discord-gateway --example member_lists` and `ui --example member_flicker`
+exercise decoding, partial presence, failed-update rollback, recovery state and retained
+activity rendering. No live server verification or performance measurement was performed
+in this fast pass; external client source is wire evidence, not proof of compatibility.

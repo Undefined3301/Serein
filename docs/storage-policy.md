@@ -1310,3 +1310,11 @@ message or attachment is copied into a new cache. Forward and optional-note writ
 64-item / MAX_DRAFT_BYTES pending-send budget and existing serial write queue. Closing the picker
 releases its input; account generation and source navigation changes invalidate it. No new disk
 schema or persistence is introduced.
+
+Member-list recovery (September 22): the lazy Gateway mirror retains at most 200 slots /
+256 KiB of row metadata, plus at most 514 group IDs of up to 32 bytes each. Applying a
+member-list packet stages one bounded copy so malformed operations cannot erase the last
+valid list; that copy is released before the next packet. The existing 1 MiB core member
+chunk cache is unchanged. Cached guild presence survives loading/reconnect while access
+remains available; session reset, permission loss and explicit offline/clear retain their
+existing invalidation behavior. No new persistence, directory fetch or background worker.

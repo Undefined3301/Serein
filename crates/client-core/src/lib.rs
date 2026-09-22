@@ -2772,7 +2772,7 @@ impl State {
 						}
 						MemberSlot::Group(id) => id.is_empty() || id.len() > 32,
 					}) || list.slot_bytes() > 256 * 1024
-					|| list.groups.len() > 64;
+					|| list.groups.len() > model::permissions::MAX_ROLES + 2;
 				if invalid {
 					if !ranges_left {
 						self.members.as_mut().unwrap().freshness = Freshness::Unavailable;

@@ -265,12 +265,14 @@ fn subscription_packet(
 	Frame::Text(serde_json::json!({"op":37,"d":{"subscriptions":{guild.to_string():{"typing":typing,"threads":false,"activities":true,"members":[],"channels":channels,"thread_member_lists":threads}}}}).to_string().into())
 }
 
+#[derive(Clone)]
 struct ActiveMembers {
 	subscription: MemberSubscription,
 	start: usize,
 	slots: Vec<Option<model::MemberSlot>>,
 	lazy: bool,
 	synced: bool,
+	awaiting_sync: bool,
 	total: u64,
 	groups: Vec<(String, u64)>,
 	pending_presence: BTreeMap<Id, model::MemberPresence>,
@@ -352,6 +354,80 @@ pub fn debug_thread_member_check(guild: Id, channel: Id, request: u64) -> Member
 	list
 }
 
+/// Synthetic member stream used by the offline example; never opens a connection.
+#[cfg(debug_assertions)]
+pub fn debug_member_list_check() {
+	use serde_json::json;
+	let mut active = ActiveMembers::new(MemberSubscription {
+		thread: false,
+		guild: Id(1),
+		channel: Id(2),
+		request: 1,
+		list_id: "everyone".into(),
+		ranges: vec![[0, 99]],
+	});
+	let read =
+		|value: serde_json::Value| decode::<MemberUpdate>(value.to_string().as_bytes()).unwrap();
+	active
+		.update(read(
+			json!({"guild_id":"1","id":"everyone","ops":[{"op":"SYNC","range":[0,99],"items":[]}]}),
+		))
+		.unwrap();
+	assert!(
+		!active.synced && active.awaiting_sync,
+		"ambiguous empty replies must keep retrying"
+	);
+	let groups: Vec<_> = (1..=100)
+		.map(|id| json!({"id":id.to_string(),"count":1}))
+		.collect();
+	active.update(read(json!({"guild_id":"1","id":"everyone","member_count":1,"groups":groups,"ops":[{"op":"SYNC","range":[0,99],"items":[{"member":{"user":{"id":"3","username":"Synthetic"},"roles":["1"]},"presence":{"status":"online","activities":[{"type":0,"name":"Synthetic game"}]}}]}]}))).unwrap();
+	assert!(active.synced && !active.awaiting_sync);
+	assert_eq!(
+		active.people().next().unwrap().status.as_deref(),
+		Some("online")
+	);
+	assert_eq!(
+		active.people().next().unwrap().activities[0].name,
+		"Synthetic game"
+	);
+	active.update(read(json!({"guild_id":"1","id":"everyone","ops":[{"op":"UPDATE","index":0,"item":{"member":{"user":{"id":"3","username":"Renamed"},"roles":["2"]}}}]}))).unwrap();
+	assert_eq!(active.total, 200);
+	assert_eq!(active.groups.len(), 100);
+	assert_eq!(
+		active.people().next().unwrap().activities[0].name,
+		"Synthetic game"
+	);
+	assert_eq!(active.people().next().unwrap().roles, vec![Id(2)]);
+	assert!(active.update(read(json!({"guild_id":"1","id":"everyone","ops":[{"op":"DELETE","index":0},{"op":"SYNC","range":[9,1],"items":[]}]}))).is_err());
+	assert_eq!(
+		active.people().next().unwrap().user.name,
+		"Renamed",
+		"failed operations must be atomic"
+	);
+	active
+		.update(read(
+			json!({"guild_id":"1","id":"everyone","ops":[{"op":"INVALIDATE","range":[0,99]}]}),
+		))
+		.unwrap();
+	assert!(active.awaiting_sync && active.synced);
+	active.update(read(json!({"guild_id":"1","id":"everyone","ops":[{"op":"UPDATE","index":0,"item":{"member":{"user":{"id":"3","username":"Renamed"}},"presence":{"status":"offline","activities":[]}}}]}))).unwrap();
+	assert!(
+		active.awaiting_sync,
+		"incremental updates cannot cancel recovery"
+	);
+	assert_eq!(
+		active.people().next().unwrap().status.as_deref(),
+		Some("offline")
+	);
+	assert!(active.people().next().unwrap().activities.is_empty());
+	active.update(read(json!({"guild_id":"1","id":"everyone","ops":[{"op":"UPDATE","index":0,"item":{"member":{"user":{"id":"3","username":"Renamed"}},"presence":null}}]}))).unwrap();
+	assert!(active.people().next().unwrap().status.is_none());
+	active.retarget_ranges(vec![[200, 299]]);
+	active.update(read(json!({"guild_id":"1","id":"everyone","member_count":0,"groups":[],"ops":[{"op":"SYNC","range":[200,299],"items":[]}]}))).unwrap();
+	assert_eq!(active.total, 0);
+	assert!(active.synced && !active.awaiting_sync && active.people().next().is_none());
+}
+
 impl ActiveMembers {
 	fn new(subscription: MemberSubscription) -> Self {
 		let (start, slots, lazy) = if subscription.thread {
@@ -366,6 +442,7 @@ impl ActiveMembers {
 			slots,
 			lazy,
 			synced: false,
+			awaiting_sync: true,
 			total: 0,
 			groups: vec![],
 			pending_presence: BTreeMap::new(),
@@ -415,11 +492,12 @@ impl ActiveMembers {
 		if !has_people {
 			self.synced = false;
 		}
+		self.awaiting_sync = true;
 	}
 	fn parse_groups(
 		groups: Vec<discord_protocol::MemberGroupCount>,
 	) -> Result<Vec<(String, u64)>, Failure> {
-		if groups.len() > 64 {
+		if groups.len() > model::permissions::MAX_ROLES + 2 {
 			return Err(Failure::Protocol);
 		}
 		let mut out = Vec::with_capacity(groups.len());
@@ -465,14 +543,28 @@ impl ActiveMembers {
 		{
 			return Ok(false);
 		}
+		// Stage the bounded mirror so a bad item cannot partially erase a valid list.
+		let mut next = self.clone();
+		next.apply_update(update)?;
+		*self = next;
+		Ok(true)
+	}
+	fn apply_update(&mut self, update: MemberUpdate) -> Result<(), Failure> {
 		// The emitted full snapshot includes the mirror's latest statuses, so a
 		// separate queued delta must not race it or reference a removed row.
 		self.clear_presence();
 		if update.ops.len() > 200 {
 			return Err(Failure::Capacity);
 		}
-		self.groups = Self::parse_groups(update.groups)?;
-		self.total = update.member_count;
+		if let Some(groups) = update.groups {
+			self.groups = Self::parse_groups(groups)?;
+			// List positions include group headers and only the members visible in this list.
+			self.total = self.groups.iter().fold(0u64, |total, (_, count)| {
+				total.saturating_add(count.saturating_add(1))
+			});
+		} else if let Some(total) = update.member_count {
+			self.total = total;
+		}
 		let span_start = self.start;
 		let span_end = self.span_end();
 		for op in update.ops {
@@ -490,8 +582,11 @@ impl ActiveMembers {
 					if end < span_start || start > span_end {
 						continue;
 					}
-					if items.is_empty() {
+					if items.is_empty() && update.member_count != Some(0) {
 						continue;
+					}
+					if !items.is_empty() {
+						self.total = self.total.max(start.saturating_add(items.len()) as u64);
 					}
 					let clear_from = start.max(span_start);
 					let clear_to = end.min(span_end);
@@ -502,6 +597,7 @@ impl ActiveMembers {
 						self.write_slot(start + index, item)?;
 					}
 					self.synced = true;
+					self.awaiting_sync = false;
 				}
 				MemberOp::Invalidate {
 					range: [start, end],
@@ -509,11 +605,19 @@ impl ActiveMembers {
 					if start > end {
 						return Err(Failure::Protocol);
 					}
+					if start <= span_end && end >= span_start {
+						self.awaiting_sync = true;
+					}
 					// The range is stale, not permission to blank the sidebar. The next SYNC
 					// replaces these slots. Clearing them here is what made the pane go empty.
 				}
-				MemberOp::Update { index, item } => {
+				MemberOp::Update { index, mut item } => {
 					if self.synced && index >= span_start && index <= span_end {
+						if let Some(model::MemberSlot::Person(previous)) =
+							&self.slots[index - span_start]
+						{
+							item.preserve_presence(previous);
+						}
 						self.write_slot(index, item)?;
 					}
 				}
@@ -559,7 +663,10 @@ impl ActiveMembers {
 		if self.slots.len() > 200 || self.slot_bytes() > MEMBER_LIST_BYTES {
 			return Err(Failure::Capacity);
 		}
-		Ok(true)
+		if self.people().any(|member| !member.valid()) {
+			return Err(Failure::Protocol);
+		}
+		Ok(())
 	}
 	fn thread_update(&mut self, bytes: &[u8]) -> Result<bool, Failure> {
 		if !self.subscription.thread {
@@ -589,6 +696,7 @@ impl ActiveMembers {
 		self.groups = vec![];
 		self.total = list.total;
 		self.synced = true;
+		self.awaiting_sync = false;
 		Ok(true)
 	}
 	fn clear_presence(&mut self) {
@@ -974,12 +1082,12 @@ async fn run_inner(
 						}
 						active.subscription = subscription;
 						active.clear_presence();
-						let freshness = if active.synced {
+						let freshness = if active.synced && !active.awaiting_sync {
 							Freshness::Fresh
 						} else {
 							Freshness::Loading
 						};
-						if !active.synced {
+						if active.awaiting_sync {
 							members_deadline = Some(Instant::now() + Duration::from_secs(15));
 						}
 						emit(Event::Members(active.snapshot(freshness)))?;
@@ -1086,7 +1194,7 @@ async fn run_inner(
 							active.subscription.request = next.request;
 							active.subscription.list_id = next.list_id.clone();
 							active.clear_presence();
-							if !active.synced {
+							if active.awaiting_sync {
 								members_deadline = Some(Instant::now() + Duration::from_secs(15));
 							}
 							range_only = true;
@@ -1103,9 +1211,12 @@ async fn run_inner(
 					}
 				}
 				_=tokio::time::sleep_until(members_deadline.unwrap_or(ready_deadline)), if members_deadline.is_some() => {
-					member_diagnostics.record("timeout: no populated member SYNC within 15 seconds; subscribing again");
+					member_diagnostics.record("timeout: resetting stalled member subscription");
+					if let Some(active) = &active_members
+						&& !matches!(timeout(Duration::from_secs(5), socket.send(subscription_packet(active.subscription.guild, true, None, active.subscription.thread))).await, Ok(Ok(()))) { break; }
+					if let Some(active) = &mut active_members { active.awaiting_sync = true; }
 					sent_members = false;
-					members_deadline=None;
+					members_deadline=Some(Instant::now()+Duration::from_secs(15));
 				}
 				_=tokio::time::sleep_until(presence_deadline.unwrap_or(ready_deadline)), if presence_deadline.is_some() => {
 					if let Some(active)=&mut active_members {
@@ -1281,6 +1392,12 @@ async fn run_inner(
 									"GUILD_MEMBER_LIST_UPDATE" => {
 										if let Some(active)=&mut active_members && !active.subscription.thread {
 											let decoded = decode::<MemberUpdate>(packet.d.get().as_bytes());
+											if decoded.is_err() {
+												#[derive(serde::Deserialize)]
+												struct Scope { guild_id: Id, id: String }
+												if let Ok(scope) = decode::<Scope>(packet.d.get().as_bytes())
+													&& (scope.guild_id != active.subscription.guild || scope.id != active.subscription.list_id) { continue; }
+											}
 											match &decoded {
 												Err(_) => member_diagnostics.record("reply decode failed: unsupported member payload"),
 												Ok(update) if update.guild_id != active.subscription.guild || update.id != active.subscription.list_id => member_diagnostics.record("reply ignored: different guild or list identity"),
@@ -1288,11 +1405,10 @@ async fn run_inner(
 												Ok(update) if update.ops.iter().any(|op| matches!(op, MemberOp::Sync {items, ..} if items.is_empty())) => member_diagnostics.record("reply: empty SYNC received"),
 												Ok(_) => member_diagnostics.record("reply: incremental operations only; no SYNC"),
 											}
-											let refresh = decoded.as_ref().ok().is_some_and(|update| update.ops.iter().any(|op| matches!(op, MemberOp::Invalidate { .. })) && !update.ops.iter().any(|op| matches!(op, MemberOp::Sync { items, .. } if !items.is_empty())));
 											match decoded.map_err(|_|Failure::Protocol).and_then(|update|active.update(update)) {
-												Ok(true)=>{member_diagnostics.record(if active.synced {"snapshot synchronized"} else {"snapshot still awaiting populated SYNC"});let freshness=if active.synced {Freshness::Fresh}else{Freshness::Loading};emit(Event::Members(active.snapshot(freshness)))?;if refresh && members_deadline.is_none() {sent_members=false;members_deadline=Some(Instant::now()+Duration::from_secs(15));} else if active.synced {members_deadline=None;} else {members_deadline.get_or_insert(Instant::now()+Duration::from_secs(15));}},
+												Ok(true)=>{member_diagnostics.record(if active.synced {"snapshot synchronized"} else {"snapshot still awaiting populated SYNC"});let freshness=if active.synced && !active.awaiting_sync {Freshness::Fresh}else{Freshness::Loading};emit(Event::Members(active.snapshot(freshness)))?;if active.awaiting_sync {members_deadline.get_or_insert(Instant::now()+Duration::from_secs(15));} else {members_deadline=None;}},
 												Ok(false)=>{},
-												Err(_)=>{member_diagnostics.record("snapshot unavailable: decode, range or capacity failure");active.clear_presence();active.slots.fill(None);active.synced=false;emit(Event::Members(active.snapshot(Freshness::Unavailable)))?;members_deadline=None;}
+												Err(_)=>{member_diagnostics.record("member update rejected; retaining last valid snapshot and scheduling retry");active.awaiting_sync=true;let freshness=if active.synced {Freshness::Stale}else{Freshness::Loading};emit(Event::Members(active.snapshot(freshness)))?;members_deadline.get_or_insert(Instant::now()+Duration::from_secs(15));}
 											}
 										}
 									}
@@ -2798,7 +2914,7 @@ mod member_tests {
 		);
 		assert_eq!(person(&list, 1).user.id, Id(3));
 		assert_eq!(list.groups, vec![("online".into(), 1)]);
-		assert_eq!(list.snapshot(Freshness::Fresh).total, 1);
+		assert_eq!(list.snapshot(Freshness::Fresh).total, 2);
 	}
 	#[test]
 	fn member_operations_preserve_indices_scope_and_bounds() {
