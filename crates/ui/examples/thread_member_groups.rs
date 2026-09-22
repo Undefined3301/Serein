@@ -190,6 +190,13 @@ fn thread_uses_parent_list_role_headers() {
 	let mut view = ui::MessagingUi::default();
 	view.reading_preferences.show_members = true;
 	let _ = paint(&mut view, &mut state);
+	state.selected = Some(Id(21));
+	{
+		let list = state.members.as_mut().unwrap();
+		list.channel = Id(21);
+		list.groups = vec![("online".into(), 3)];
+	}
+	let _ = paint(&mut view, &mut state);
 	state.selected = Some(thread);
 	{
 		let list = state.members.as_mut().unwrap();

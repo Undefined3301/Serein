@@ -321,7 +321,7 @@ pub struct MessagingUi {
 	members_narrow_open: bool,
 	/// Only the open member request's revealed prefix; member data stays in the bounded core cache.
 	member_extent: Option<((u64, Id, u64), usize)>,
-	parent_member_groups: Option<(Id, Vec<String>)>,
+	parent_member_groups: Vec<(Id, Vec<String>)>,
 	guild: Option<Id>,
 	navigation_channel: Option<Id>,
 	pub logout_requested: bool,
@@ -1115,18 +1115,27 @@ impl MessagingUi {
 				.channel(list.channel)
 				.is_some_and(|channel| matches!(channel.kind, 10..=12));
 		if !thread && !list.groups.is_empty() {
-			self.parent_member_groups = Some((
-				list.channel,
-				list.groups.iter().map(|(id, _)| id.clone()).collect(),
-			));
+			let groups = list.groups.iter().map(|(id, _)| id.clone()).collect();
+			if let Some((_, cached)) = self
+				.parent_member_groups
+				.iter_mut()
+				.find(|(channel, _)| *channel == list.channel)
+			{
+				*cached = groups;
+			} else {
+				if self.parent_member_groups.len() >= 32 {
+					self.parent_member_groups.remove(0);
+				}
+				self.parent_member_groups.push((list.channel, groups));
+			}
 		}
 		let parent = state
 			.channel(list.channel)
 			.and_then(|channel| channel.parent_id);
 		let parent_groups = self
 			.parent_member_groups
-			.as_ref()
-			.filter(|(channel, _)| thread && Some(*channel) == parent)
+			.iter()
+			.find(|(channel, _)| thread && Some(*channel) == parent)
 			.map(|(_, groups)| groups.as_slice())
 			.unwrap_or(&[]);
 		let thread_rows = thread.then(|| thread_member_rows(state, list, parent_groups));
