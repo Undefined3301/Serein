@@ -1298,8 +1298,9 @@ impl Formatted {
 								format!("{label}, user profile"),
 							)
 						});
+						crate::profiles::arm_profile_opener(ui, &response);
 						if response.clicked() {
-							*render.profile = Some(user.cloned().unwrap_or(model::User {
+							let opened = user.cloned().unwrap_or(model::User {
 								id,
 								name: format!("User {id}"),
 								avatar: None,
@@ -1307,7 +1308,8 @@ impl Formatted {
 								kind: Default::default(),
 								discriminator: 0,
 								primary_guild: None,
-							}));
+							});
+							crate::profiles::toggle_profile(render.profile, &opened);
 						}
 						start += 1;
 						continue;

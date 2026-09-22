@@ -980,8 +980,9 @@ fn show_system(
 					.on_hover_cursor(egui::CursorIcon::PointingHand);
 				surface.keep(&response);
 				crate::user_menu::show(&response, state, user, profile, user_action);
+				crate::profiles::arm_profile_opener(ui, &response);
 				if response.clicked() {
-					*profile = Some(user.clone());
+					crate::profiles::toggle_profile(profile, user);
 				}
 			}
 			if let Some((_, parent)) = thread {
@@ -2112,8 +2113,9 @@ impl TimelineView {
 										profile,
 										&mut self.user_action,
 									);
+									crate::profiles::arm_profile_opener(ui, &avatar);
 									if avatar.clicked() {
-										*profile = Some(message.author.clone());
+										crate::profiles::toggle_profile(profile, &message.author);
 									}
 									surface.keep(&avatar);
 								}
@@ -2151,8 +2153,12 @@ impl TimelineView {
 													profile,
 													&mut self.user_action,
 												);
+												crate::profiles::arm_profile_opener(ui, &author);
 												if author.clicked() {
-													*profile = Some(message.author.clone());
+													crate::profiles::toggle_profile(
+														profile,
+														&message.author,
+													);
 												}
 												surface.keep(&author);
 												let time = timestamp(id);
