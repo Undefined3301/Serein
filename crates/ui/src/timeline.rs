@@ -7568,6 +7568,16 @@ mod tests {
 		let ctx = egui::Context::default();
 		crate::design::apply(&ctx);
 		let mut state = channel_messages(20, 36);
+		let boundary = 86_400_000_u64 << 22;
+		let first = boundary - 24;
+		state.timeline.clear();
+		for (offset, id) in (first..first + 36).enumerate() {
+			let mut message = text_message(id);
+			message.channel = Id(20);
+			message.content = format!("Row {}", offset + 1);
+			state.timeline.insert(message, false, false).unwrap();
+		}
+		state.channels[0].last_message = Some(Id(first + 35));
 		state.set_preserve_deleted_messages(true);
 		let mut view = TimelineView::default();
 		let mut frame = 0u32;
@@ -7581,7 +7591,7 @@ mod tests {
 		}
 		let before: f32 = view.rows.iter().map(|(_, height)| height).sum();
 		let before_y = labels["Row 36"];
-		for id in 1..=24 {
+		for id in first..first + 24 {
 			state.timeline.delete(Id(id)).unwrap();
 			state.revision += 1;
 			labels = paint(&mut view, &mut state);
@@ -7596,15 +7606,31 @@ mod tests {
 			"successive deletes moved the floor: y={before_y:.1}->{end_y:.1} content={before:.1}->{after:.1} offset={:.1}",
 			view.scroll_offset
 		);
+		let previous = state.timeline.get_display(Id(boundary - 1)).unwrap();
+		let successor = state.timeline.get_display(Id(boundary)).unwrap();
+		assert!(!grouped(Some(previous), successor, None));
 		view.following = false;
 		view.jump = false;
-		view.anchor = Some((Id(1), 0.0));
+		view.anchor = Some((Id(first), 0.0));
 		view.revision = u64::MAX;
 		for _ in 0..4 {
 			labels = paint(&mut view, &mut state);
 		}
-		let dates = labels.keys().filter(|text| text.contains("2015")).count();
-		assert_eq!(dates, 1, "successive deletes opened extra day headers");
+		let first_day = labels
+			.keys()
+			.filter(|text| text.contains("January 1,"))
+			.count();
+		assert_eq!(first_day, 1, "successive deletes opened extra day headers");
+		view.anchor = Some((Id(boundary), 0.0));
+		view.revision = u64::MAX;
+		for _ in 0..4 {
+			labels = paint(&mut view, &mut state);
+		}
+		let next_day = labels
+			.keys()
+			.filter(|text| text.contains("January 2,"))
+			.count();
+		assert_eq!(next_day, 1, "successive deletes lost the day boundary");
 	}
 
 	/// Idle frames at the live edge. A moving label is a bounce the reader can see.
