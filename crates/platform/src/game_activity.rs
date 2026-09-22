@@ -289,7 +289,7 @@ mod native {
 
 	impl Listener {
 		/// Bind the first free standard slot in the SDK's selected runtime/temp directory.
-		/// Existing sockets (including stale ones) are never removed or replaced.
+		/// Live sockets are never replaced; only this user's unanswered leftovers are removed.
 		pub fn bind() -> io::Result<Self> {
 			let directory = ["XDG_RUNTIME_DIR", "TMPDIR", "TMP", "TEMP"]
 				.into_iter()
@@ -324,7 +324,14 @@ mod native {
 					));
 				}
 			}
-			let listener = UnixListener::bind(path)?;
+			let listener = match UnixListener::bind(path) {
+				Err(error)
+					if error.kind() == io::ErrorKind::AddrInUse && remove_stale(path, uid) =>
+				{
+					UnixListener::bind(path)?
+				}
+				result => result?,
+			};
 			let metadata = fs::symlink_metadata(path)?;
 			let owned = Self {
 				listener,
@@ -339,14 +346,17 @@ mod native {
 		}
 
 		pub async fn accept(&mut self) -> io::Result<Stream> {
-			let (stream, _) = self.listener.accept().await?;
-			if stream.peer_cred()?.uid() != self.uid {
-				return Err(io::Error::new(
-					io::ErrorKind::PermissionDenied,
-					"IPC peer belongs to another user",
-				));
+			loop {
+				let (stream, _) = self.listener.accept().await?;
+				// Other users and already-closed peers (such as another client's stale-slot
+				// probe) are dropped without ending the listener.
+				if stream
+					.peer_cred()
+					.is_ok_and(|credentials| credentials.uid() == self.uid)
+				{
+					return Ok(stream);
+				}
 			}
-			Ok(stream)
 		}
 	}
 
@@ -360,6 +370,19 @@ mod native {
 				let _ = fs::remove_file(&self.path);
 			}
 		}
+	}
+
+	/// Remove this user's socket left by a killed or crashed client, as arRPC does. Flatpak keeps
+	/// its private runtime directory across app restarts, so leftovers otherwise fill every slot.
+	fn remove_stale(path: &Path, uid: u32) -> bool {
+		let Ok(metadata) = fs::symlink_metadata(path) else {
+			return false;
+		};
+		metadata.file_type().is_socket()
+			&& metadata.uid() == uid
+			&& std::os::unix::net::UnixStream::connect(path)
+				.is_err_and(|error| error.kind() == io::ErrorKind::ConnectionRefused)
+			&& fs::remove_file(path).is_ok()
 	}
 
 	#[allow(unsafe_code)]
@@ -406,7 +429,11 @@ mod native {
 			fs::write(&path, b"replacement").unwrap();
 			drop(listener);
 			assert_eq!(fs::read(&path).unwrap(), b"replacement");
-			fs::remove_file(path).unwrap();
+			fs::remove_file(&path).unwrap();
+			drop(std::os::unix::net::UnixListener::bind(&path).unwrap());
+			assert!(path.exists(), "an unclean exit leaves the socket behind");
+			drop(Listener::bind_named(&path).unwrap());
+			assert!(!path.exists());
 		}
 	}
 }
