@@ -1092,7 +1092,9 @@ impl State {
 		self.typing.clear();
 		self.select_resident(channel);
 		self.history_targeted = false;
-		self.members = None;
+		if self.shared_member_list_id(channel).is_none() {
+			self.members = None;
+		}
 		self.member_search = Default::default();
 		self.selected = Some(channel);
 		self.clear_search();
@@ -1207,8 +1209,42 @@ impl State {
 		}
 	}
 
+	fn shared_member_list_id(&self, next: Id) -> Option<String> {
+		if self.freshness == Freshness::Unavailable {
+			return None;
+		}
+		let list = self.members.as_ref()?;
+		if list.channel == next || !list.lazy || list.freshness == Freshness::Unavailable {
+			return None;
+		}
+		let next_channel = self.channel(next)?.clone();
+		if next_channel.guild != list.guild || matches!(next_channel.kind, 10..=12) {
+			return None;
+		}
+		let next_id = self.member_list_id(&next_channel)?;
+		let current = self.channel(list.channel)?.clone();
+		self.member_list_id(&current)
+			.filter(|current| current == &next_id)
+	}
+
 	pub fn request_members(&mut self) -> Option<Command> {
 		let index = self.channel_index(self.selected?)?;
+		let channel_id = self.channels[index].id;
+		if let Some(list_id) = self.shared_member_list_id(channel_id) {
+			let (request, ranges, guild) = {
+				let list = self.members.as_mut()?;
+				list.channel = channel_id;
+				(list.request, list.ranges.clone(), list.guild)
+			};
+			return Some(Command::Members {
+				thread: false,
+				guild,
+				channel: Some(channel_id),
+				request,
+				list_id: Some(list_id),
+				ranges,
+			});
+		}
 		let channel = &self.channels[index];
 		self.member_request = self.member_request.wrapping_add(1);
 		self.member_chunks.clear();
