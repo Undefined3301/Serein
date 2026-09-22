@@ -1460,6 +1460,20 @@ reducer and local HTTP tests cover bounds, scope, permissions and write reconcil
 normal-account compatibility and service-side concurrent edits remain live-unverified.
 
 
+### Channel integrations (September 22, 2026)
+
+Channel Settings > Integrations reuses the native webhook and followed-channel
+pages with a channel-scoped snapshot. Manage Webhooks plus View Channel on that
+channel permits entry without Manage Channels or server-wide Manage Webhooks.
+The [documented channel webhook endpoint](https://docs.discord.com/developers/resources/webhook#get-channel-webhooks)
+loads only that channel's metadata; create defaults to that channel, and rename,
+move to another permitted channel, and confirmed delete reuse the existing worker.
+Moving a webhook refreshes the original channel and removes it from that list.
+Guild-wide app integrations remain under Server Settings. Scope and permissions
+are rechecked for responses and writes; existing item/byte limits still apply.
+The shared editor supports explicit Copy Webhook URL for incoming webhooks; avatar uploads remain unsupported.
+Synthetic checks do not establish live normal-account interoperability.
+
 ### Server integrations (September 12, 2026)
 
 Server Settings > Integrations loads the guild integration list on demand with
@@ -1484,9 +1498,12 @@ Integration reads retain at most 50 integrations and 1,000 webhooks within a
 combined 1 MiB metadata budget; HTTP responses are capped at 2 MiB. The service's
 50-integration endpoint limit is not presented as a complete count for larger
 guilds. Missing metadata stays absent; last synchronization is not represented as
-an installation date. Webhook execution tokens and URLs are discarded by decoding
-and are never exposed, copied, logged or persisted by this view. OAuth command
-permission editing, webhook execution URL copying, avatar uploads, and creator
+an installation date. List decoding discards webhook execution tokens and URLs.
+Copy Webhook URL performs an authenticated read, capped at 64 KiB, validates the
+webhook identity and current channel permission, and hands a zeroizing URL to the
+clipboard once. Tokens are bounded to 256 URL-safe bytes; neither tokens nor URLs
+are logged or persisted. OAuth command
+permission editing, avatar uploads, and creator
 subscription settings are not part of this slice.
 
 ### Server audit log (September 12, 2026)
