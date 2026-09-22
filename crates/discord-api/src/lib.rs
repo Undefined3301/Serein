@@ -906,6 +906,35 @@ impl DiscordApi {
 						})
 				},
 			},
+			Command::Forward {
+				source,
+				message,
+				guild,
+				channel,
+				nonce,
+			} => {
+				let result = if source.0 == 0
+					|| message.0 == 0
+					|| channel.0 == 0
+					|| guild.is_some_and(|id| id.0 == 0)
+				{
+					Err(Failure::Protocol)
+				} else {
+					let mut reference =
+						serde_json::json!({"type":1,"channel_id":source,"message_id":message});
+					if let Some(guild) = guild {
+						reference["guild_id"] = serde_json::json!(guild);
+					}
+					self.request(Method::POST, &format!("/channels/{channel}/messages"), Some(serde_json::json!({
+						"message_reference":reference,"nonce":nonce,"allowed_mentions":{"parse":[],"replied_user":false}
+					}))).await.and_then(|bytes| {
+						let message = decode::<MessageDto>(&bytes).map_err(|_| Failure::Ambiguous)?;
+						if message.channel_id != channel { return Err(Failure::Ambiguous); }
+						Ok(message.into_model())
+					})
+				};
+				Event::SendResult { nonce, result }
+			}
 			Command::Send {
 				sticker,
 				channel,

@@ -61,6 +61,17 @@ const SIGN_IN_HEADER_HEIGHT: f32 = if cfg!(target_os = "windows") {
 fn main() -> eframe::Result {
 	#[cfg(all(debug_assertions, feature = "demo"))]
 	if std::env::args().any(|arg| arg == "--demo")
+		&& std::env::args().any(|arg| arg == "--demo-check-forward")
+	{
+		let mut state = test_support::demo_state();
+		ui::debug_forward_check(&mut state);
+		println!(
+			"Forward debug check passed: picker, bounded destinations, optional note, draft preservation and queue rejection."
+		);
+		return Ok(());
+	}
+	#[cfg(all(debug_assertions, feature = "demo"))]
+	if std::env::args().any(|arg| arg == "--demo")
 		&& std::env::args().any(|arg| arg == "--demo-check-notification-click")
 	{
 		let mut state = test_support::demo_state();
@@ -3447,6 +3458,35 @@ impl Desktop {
 						.cloned()
 						.ok_or(Failure::Protocol),
 				},
+				Command::Forward {
+					message,
+					channel,
+					nonce,
+					..
+				} => {
+					self.synthetic_id += 1;
+					let result = self
+						.state
+						.timeline
+						.get(message)
+						.cloned()
+						.ok_or(Failure::Protocol)
+						.map(|mut m| {
+							m.id = model::Id(self.synthetic_id);
+							m.channel = channel;
+							m.author = self.state.user.clone().unwrap();
+							m.author_nick = None;
+							m.author_roles.clear();
+							m.nonce = Some(nonce.clone());
+							m.reply_to = None;
+							m.reply_deleted = false;
+							m.kind = 0;
+							m.forwarded = true;
+							m.reactions = None;
+							m
+						});
+					Event::SendResult { nonce, result }
+				}
 				Command::Send {
 					sticker,
 					channel,

@@ -772,7 +772,7 @@ impl MessageDto {
 		let snapshot = self.message_snapshots.0.take().filter(|snapshot| {
 			self.kind == 0
 				&& self.message_reference.as_ref().is_some_and(|r| r.kind == 1)
-				&& matches!(snapshot.message.kind, 0 | 19 | 20)
+				&& matches!(snapshot.message.kind, 0 | 19 | 20 | 23)
 				&& snapshot.message.content.len() <= 64 * 1024
 		});
 		let forwarded = snapshot.is_some();

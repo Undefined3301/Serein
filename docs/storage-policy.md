@@ -1118,3 +1118,13 @@ no network sender, recording or persistent storage. Device choices stay session-
 discovery retains at most 32 IDs/names (136 KiB). Closing Voice & Audio, changing the
 camera, joining a call or logout releases the preview; asynchronous native teardown
 keeps the worker slot reserved until it finishes.
+
+### Forward picker
+
+One session-bound picker retains source IDs, a search query (256 characters / 1024 UTF-8 bytes),
+an optional note (MAX_CONTENT characters), at most five destination IDs and ten send nonces.
+The source preview is limited to 240 characters and conceals spoiler-containing text. No source
+message or attachment is copied into a new cache. Forward and optional-note writes share the
+64-item / MAX_DRAFT_BYTES pending-send budget and existing serial write queue. Closing the picker
+releases its input; account generation and source navigation changes invalidate it. No new disk
+schema or persistence is introduced.

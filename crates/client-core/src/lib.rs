@@ -13,6 +13,7 @@ pub use permissions::ChannelAccess;
 #[cfg(test)]
 mod permissions_tests;
 
+mod forwarding;
 pub mod interactions;
 pub mod invites;
 pub mod member_search;
@@ -203,6 +204,13 @@ pub enum Command {
 		before: Option<Id>,
 		after: Option<Id>,
 		request: u64,
+	},
+	Forward {
+		source: Id,
+		message: Id,
+		guild: Option<Id>,
+		channel: Id,
+		nonce: String,
 	},
 	Send {
 		sticker: Option<Id>,
@@ -1630,7 +1638,7 @@ impl State {
 		if matches!(&command, Command::History { request, .. } if *request == self.request) {
 			self.cancel_history();
 		}
-		if let Command::Send { nonce, .. } = command {
+		if let Command::Send { nonce, .. } | Command::Forward { nonce, .. } = command {
 			self.apply(Envelope {
 				generation: self.generation,
 				event: Event::SendResult {

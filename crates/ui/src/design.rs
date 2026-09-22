@@ -2292,6 +2292,95 @@ pub fn segmented(ui: &mut egui::Ui, labels: &[&str], selected: usize) -> Option<
 	clicked
 }
 
+/// Compact multi-select row with a leading image, two text lines and an outlined checkbox.
+/// The entire row is one keyboard-accessible target; `leading` only paints inside its rect.
+pub fn selection_row(
+	ui: &mut egui::Ui,
+	selected: bool,
+	title: &str,
+	detail: &str,
+	leading: impl FnOnce(&mut egui::Ui, egui::Rect),
+) -> egui::Response {
+	let p = palette(ui);
+	let (rect, response) =
+		ui.allocate_exact_size(egui::vec2(ui.available_width(), 56.0), egui::Sense::click());
+	response.widget_info(|| {
+		egui::WidgetInfo::selected(
+			egui::Role::CheckBox,
+			ui.is_enabled(),
+			selected,
+			format!("{title}, {detail}"),
+		)
+	});
+	if !ui.is_rect_visible(rect) {
+		return response;
+	}
+	if selected || response.hovered() || response.has_focus() {
+		ui.painter()
+			.rect_filled(rect, 8, if selected { p.selected } else { p.hover });
+	}
+	if response.has_focus() {
+		ui.painter().rect_stroke(
+			rect.shrink(1.0),
+			8,
+			Stroke::new(1.0, p.accent),
+			egui::StrokeKind::Inside,
+		);
+	}
+	leading(
+		ui,
+		egui::Rect::from_center_size(
+			egui::pos2(rect.left() + 26.0, rect.center().y),
+			egui::Vec2::splat(32.0),
+		),
+	);
+	let marker = egui::Rect::from_center_size(
+		egui::pos2(rect.right() - 20.0, rect.center().y),
+		egui::Vec2::splat(20.0),
+	);
+	ui.painter()
+		.rect_filled(marker, 5, if selected { p.accent } else { p.base });
+	ui.painter().rect_stroke(
+		marker,
+		5,
+		Stroke::new(1.5, if selected { p.accent } else { p.muted }),
+		egui::StrokeKind::Inside,
+	);
+	if selected {
+		crate::icons::paint(
+			ui.painter(),
+			crate::icons::Icon::Check,
+			marker.shrink(3.0),
+			p.accent_text,
+		);
+	}
+	let left = rect.left() + 52.0;
+	let right = marker.left() - 12.0;
+	let text_width = (right - left).max(40.0);
+	let title_color = if ui.is_enabled() {
+		p.text_strong
+	} else {
+		p.muted
+	};
+	let title = ui.painter().layout(
+		title.to_owned(),
+		FontId::new(15.0, semibold_family(ui.ctx())),
+		title_color,
+		text_width,
+	);
+	let detail = ui.painter().layout(
+		detail.to_owned(),
+		FontId::proportional(12.0),
+		p.muted,
+		text_width,
+	);
+	ui.painter()
+		.galley(egui::pos2(left, rect.top() + 9.0), title, title_color);
+	ui.painter()
+		.galley(egui::pos2(left, rect.top() + 30.0), detail, p.muted);
+	response
+}
+
 /// Settings row: title and optional detail on the left, `control` laid out right-to-left on
 /// the right. Combo boxes, colour wells and buttons all sit on the same baseline this way.
 pub fn row<R>(

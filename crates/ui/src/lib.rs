@@ -4,6 +4,7 @@ mod account_badge;
 mod account_menu;
 mod archives;
 mod audio;
+mod forwarding;
 pub use audio::{AudioCommand, AudioState, AudioUi};
 mod video;
 pub use video::{VideoCommand, VideoState, VideoUi};
@@ -120,6 +121,7 @@ enum MemberRow {
 
 #[derive(Default)]
 pub struct MessagingUi {
+	forwarding: forwarding::ForwardDialog,
 	pub image_sharing_enabled: bool,
 	pub image_share_requested: Option<model::ImageShare>,
 	pub interaction_file_request: Option<String>,
@@ -3758,6 +3760,12 @@ impl MessagingUi {
 			commands.push(command);
 		}
 
+		if let Some(message) = self.timeline.forward_request.take() {
+			self.forwarding.open(state, message);
+		}
+		self.forwarding
+			.show(&ctx, state, &mut self.avatars, &mut commands);
+
 		if let Some((message, custom_id, values)) = self.timeline.component_action.take()
 			&& let Some(command) = state.prepare_component(message, &custom_id, values)
 		{
@@ -6955,4 +6963,89 @@ pub fn debug_suggestion_pointer_check(state: &mut State, channel: Id) {
 #[cfg(debug_assertions)]
 pub fn debug_role_mentions_check(state: &mut State) {
 	mentions::debug_role_mentions_check(state);
+}
+
+#[cfg(debug_assertions)]
+pub fn debug_forward_check(state: &mut State) {
+	let source = state
+		.timeline
+		.row_ids()
+		.find(|id| state.can_forward(*id))
+		.expect("forwardable fixture");
+	let target = state.selected.unwrap();
+	let draft = state.drafts.get(&target).cloned();
+	let mut dialog = forwarding::ForwardDialog::default();
+	dialog.open(state, source);
+	let ctx = egui::Context::default();
+	let mut avatars = avatars::Avatars::default();
+	for _ in 0..2 {
+		ctx.run_ui(egui::RawInput::default(), |ui| {
+			dialog.show(ui.ctx(), state, &mut avatars, &mut Vec::new())
+		})
+		.drop_without_applying_deltas();
+	}
+	// Exercise the shared row through its text area, not just the checkbox.
+	let row_ctx = egui::Context::default();
+	let mut selected = false;
+	let mut row = egui::Rect::NOTHING;
+	let mut draw = |events| {
+		row_ctx
+			.run_ui(
+				egui::RawInput {
+					events,
+					..Default::default()
+				},
+				|ui| {
+					ui.set_width(320.0);
+					let response =
+						design::selection_row(ui, selected, "Destination", "Server", |_, _| {});
+					row = response.rect;
+					assert_eq!(row.height(), 56.0);
+					if response.clicked() {
+						selected = !selected;
+					}
+					icons::button(ui, icons::Icon::Forward, 28.0, "Forward message");
+				},
+			)
+			.drop_without_applying_deltas();
+	};
+	draw(Vec::new());
+	draw(Vec::new());
+	let point = egui::pos2(90.0, 22.0);
+	for pressed in [true, false] {
+		draw(vec![
+			egui::Event::PointerMoved(point),
+			egui::Event::PointerButton {
+				pos: point,
+				button: egui::PointerButton::Primary,
+				pressed,
+				modifiers: egui::Modifiers::NONE,
+			},
+		]);
+	}
+	assert!(selected, "Clicking the row label selects the destination");
+	assert!(state.prepare_forward(source, &[target; 6], "").is_empty());
+	assert!(
+		state
+			.prepare_forward(source, &[target, target], "")
+			.is_empty()
+	);
+	let commands = state.prepare_forward(source, &[target], "Optional note");
+	assert_eq!(commands.len(), 2);
+	assert!(
+		matches!(&commands[0], Command::Forward { message, channel, .. } if *message == source && *channel == target)
+	);
+	assert!(
+		matches!(&commands[1], Command::Send { content, reply: None, .. } if content == "Optional note")
+	);
+	assert_eq!(state.drafts.get(&target).cloned(), draft);
+	for command in commands {
+		state.command_rejected(command);
+	}
+	assert!(
+		state
+			.pending
+			.iter()
+			.all(|p| p.delivery != model::Delivery::Sending)
+	);
 }

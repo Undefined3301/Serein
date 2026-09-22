@@ -29,6 +29,7 @@ struct RevealScroll {
 
 #[derive(Default)]
 pub struct TimelineView {
+	pub(super) forward_request: Option<Id>,
 	pub(super) sticker_request: Option<Id>,
 	pub(super) browse_sticker: Option<model::Sticker>,
 	pub(super) component_viewing: Option<(Id, u64)>,
@@ -690,6 +691,7 @@ fn message_actions(
 	deleting: &mut Option<(Id, Id)>,
 	pin: (bool, bool, &mut Option<(Id, Id, bool)>),
 	thread: (bool, &mut Option<(Id, Id)>),
+	forward: (bool, &mut Option<Id>),
 	view_reactions: Option<(
 		model::ReactionEmoji,
 		&mut Option<(Id, model::ReactionEmoji, bool)>,
@@ -727,6 +729,13 @@ fn message_actions(
 			.clicked()
 		{
 			*reply = Some(message.id);
+			ui.close();
+		}
+		if ui
+			.add_enabled(forward.0, egui::Button::new("Forward"))
+			.clicked()
+		{
+			*forward.1 = Some(message.id);
 			ui.close();
 		}
 		if can_thread && ui.button("Create Thread\u{2026}").clicked() {
@@ -2712,10 +2721,10 @@ impl TimelineView {
 							.is_some_and(|u| u.id == message.author.id);
 						let toolbar_rect = egui::Rect::from_min_size(
 							egui::pos2(
-								rect.right() - if own { 136.0 } else { 106.0 },
+								rect.right() - if own { 166.0 } else { 136.0 },
 								rect.top() - 10.0,
 							),
-							egui::vec2(if own { 120.0 } else { 90.0 }, 28.0),
+							egui::vec2(if own { 150.0 } else { 120.0 }, 28.0),
 						);
 						// A child overlay keeps hover from changing wrapping or cached row heights.
 						let mut toolbar = ui.new_child(
@@ -2760,6 +2769,15 @@ impl TimelineView {
 							.clicked()
 						{
 							selected_reply = Some(id);
+						}
+						if toolbar
+							.add_enabled_ui(state.can_forward(id), |ui| {
+								action_button(ui, crate::icons::Icon::Forward, "Forward message")
+							})
+							.inner
+							.clicked()
+						{
+							self.forward_request = Some(id);
 						}
 						if own
 							&& toolbar
@@ -2835,6 +2853,7 @@ impl TimelineView {
 										&& state.thread_of(message).is_none(),
 									&mut self.thread_request,
 								),
+								(state.can_forward(id), &mut self.forward_request),
 								message
 									.reactions
 									.as_ref()
@@ -3935,6 +3954,7 @@ mod tests {
 							&mut deleting,
 							(false, false, &mut None),
 							(own, &mut thread_request),
+							(false, &mut None),
 							None,
 						)
 					},
@@ -4860,7 +4880,7 @@ mod tests {
 				vec![egui::Event::PointerMoved(row.center())],
 			);
 			assert!(hovered.iter().any(|(t, _)| t == "00:01"));
-			assert_eq!(view.toolbar.unwrap().1.width(), 120.0);
+			assert_eq!(view.toolbar.unwrap().1.width(), 150.0);
 			assert_eq!(view.heights, heights);
 			let point = view.toolbar.unwrap().1.left_top() + egui::vec2(44.0, 14.0);
 			for pressed in [true, false] {

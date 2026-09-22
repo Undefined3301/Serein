@@ -1576,3 +1576,19 @@ only a 40-character hexadecimal image ID can resolve to `https://i.scdn.co/image
 Artwork uses the existing credential-free, redirect-free bounded image worker and
 account-isolated image cache, with the existing 1024px decode limit for media previews.
 Normal-account behavior and live artwork delivery remain unverified.
+
+### Outgoing message forwarding
+
+The message toolbar and context menu open a native searchable destination picker for up to
+five already-loaded, writable conversations. Forward creation uses the documented
+[`message_reference` type 1](https://github.com/discord/discord-api-docs/blob/main/developers/resources/message.mdx),
+including the source channel/message and guild when known. The service captures the snapshot;
+Serein does not download and re-upload source attachments. Basic supported message types are
+eligible; ephemeral, poll and unsupported payloads are excluded. Forwarded context-menu command
+snapshots (type 23) use the existing bounded renderer too.
+
+An optional note is an independent ordinary message queued after each forward, so either write
+can fail independently. The picker reports per-destination sending, sent, failed and ambiguous
+outcomes. Writes are never automatically retried; existing composer drafts are preserved.
+Destinations are limited to loaded text conversations, not a server-wide discovery search.
+The local synthetic debug check does not establish live normal-account compatibility.
