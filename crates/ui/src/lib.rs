@@ -3276,11 +3276,13 @@ impl MessagingUi {
 					ui.painter().rect_filled(ui.max_rect(), 0, message_surface);
 				}
 				let warnings = state.startup_warnings;
+				if !warnings.presence {
+					self.friends.presence_warning_dismissed = None;
+				}
 				let unavailable: Vec<_> = [
 					(warnings.read_state, "read status"),
 					(warnings.notifications, "notification settings"),
 					(warnings.sessions, "session status"),
-					(warnings.presence, "friend presence"),
 					(warnings.emojis, "some server emoji"),
 					(warnings.stickers, "some server stickers"),
 				]
