@@ -83,6 +83,7 @@ pub fn show(
 				reaction_button(ui.ctx(), media.0, &reaction.emoji, reaction.count, media.1);
 			let response = ui.add_enabled(
 				!writing
+					&& !refreshing
 					&& reaction.emoji.name.is_some()
 					&& can_react(&reaction.emoji, !reaction.me),
 				button
