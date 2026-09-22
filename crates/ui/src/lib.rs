@@ -1009,7 +1009,8 @@ impl MessagingUi {
 		let lazy = list.lazy;
 		let start = list.start;
 		let guild = list.guild;
-		let member_key = (state.generation, channel, list.request);
+		let guild_or_channel = guild.unwrap_or(channel);
+		let member_key = (state.generation, guild_or_channel, list.request);
 		let reset_scroll = self.member_extent.is_none_or(|(key, _)| key != member_key);
 		if reset_scroll {
 			self.member_extent = Some((member_key, 100));
@@ -1027,11 +1028,10 @@ impl MessagingUi {
 		if reset_scroll {
 			area = area.vertical_scroll_offset(0.0);
 		}
-		let output = self.scroll.attach(ui, ("people", channel), area).show_rows(
-			ui,
-			42.0,
-			row_count,
-			|ui, range| {
+		let output = self
+			.scroll
+			.attach(ui, ("people", guild_or_channel, list.request), area)
+			.show_rows(ui, 42.0, row_count, |ui, range| {
 				visible = range.clone();
 				for index in range {
 					let slot = if lazy {
@@ -1233,8 +1233,7 @@ impl MessagingUi {
 						}
 					}
 				}
-			},
-		);
+			});
 		ui.spacing_mut().item_spacing.y = row_spacing;
 		if lazy && !visible.is_empty() {
 			let first = visible.start;
