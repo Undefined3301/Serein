@@ -423,7 +423,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 						test_support::seed_stickers(&mut state);
 						messaging.preview_sticker_picker();
 					}
-					state.set_preserve_deleted_messages(output.preserve_deleted_messages);
 					if output.preserve_deleted_messages {
 						let channel = state.selected.unwrap();
 						state.apply(client_core::Envelope {

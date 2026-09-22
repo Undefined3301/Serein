@@ -230,9 +230,12 @@ pub fn demo_check_examples() -> Result<bool, String> {
 			return Err(error);
 		}
 		if manifest.kind == ExtensionKind::Plugin {
-			if !(manifest.id == "message-delete-protector" && summary.preserve_deleted_messages
-				|| manifest.id == "emoji-sticker-images" && summary.image_sharing)
-			{
+			let ok = match manifest.id.as_str() {
+				"message-delete-protector" => summary.error.is_none(),
+				"emoji-sticker-images" => summary.image_sharing,
+				_ => false,
+			};
+			if !ok {
 				return Err("Bundled plugin did not activate".into());
 			}
 			activated = true;

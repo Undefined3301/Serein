@@ -4347,6 +4347,7 @@ mod composer_tests {
 					channel: Id(10),
 					author: user,
 					content: "Original".into(),
+					prior_contents: Default::default(),
 					edited: false,
 					edited_at: None,
 					revision: 0,

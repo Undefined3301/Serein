@@ -802,6 +802,7 @@ mod navigation_tests {
 				discriminator: 0,
 			},
 			content: "Synthetic unread message".into(),
+			prior_contents: Default::default(),
 			reactions: Some(vec![]),
 			author_nick: None,
 			author_roles: vec![],

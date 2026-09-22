@@ -109,7 +109,6 @@ impl Bridge {
 		}
 		let scope = (state.generation, account.clone());
 		if self.scope.as_ref() != Some(&scope) {
-			state.set_preserve_deleted_messages(false);
 			self.cancel_previews(messaging);
 			self.host.as_mut().unwrap().cancel();
 			self.pending.retain(|_, pending| pending.cleanup);
@@ -659,14 +658,6 @@ impl Bridge {
 					&& !self.disabled.contains(&entry.manifest.id)
 					&& entry.image_sharing
 			});
-		state.set_preserve_deleted_messages(
-			account.is_some()
-				&& self.installed.iter().any(|entry| {
-					entry.error.is_none()
-						&& !self.disabled.contains(&entry.manifest.id)
-						&& entry.preserve_deleted_messages
-				}),
-		);
 		let max_texture = ctx.input(|input| input.max_texture_side);
 		if self
 			.installed
