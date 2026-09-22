@@ -263,8 +263,7 @@ pub struct MessagingUi {
 	reading_zoom_draft: Option<u16>,
 	friend_removal: Option<(u64, model::User)>,
 	members_narrow_open: bool,
-	/// Only the open member request's revealed prefix; member data stays in the bounded core cache.
-	member_extent: Option<((u64, Id, u64), usize)>,
+	member_pane_key: Option<(u64, Id, u64)>,
 	guild: Option<Id>,
 	navigation_channel: Option<Id>,
 	pub logout_requested: bool,
@@ -1022,6 +1021,7 @@ impl MessagingUi {
 			});
 	}
 	fn member_rows(&mut self, ui: &mut egui::Ui, state: &mut State, commands: &mut Vec<Command>) {
+		let scroll_rows = state.member_scroll_rows();
 		let colors = design::palette(ui);
 		let cached = state.members_cached();
 		let Some(list) = state
@@ -1036,7 +1036,19 @@ impl MessagingUi {
 		let has_entry = list.slots.iter().any(|slot| slot.is_some()) || cached;
 		if !has_entry {
 			ui.add_space(8.0);
-			if list.freshness != Freshness::Fresh {
+			let online: u64 = list
+				.groups
+				.iter()
+				.filter(|(id, _)| id != "offline")
+				.map(|(_, count)| *count)
+				.sum();
+			if online > 0 {
+				ui.label(
+					RichText::new(format!("Online - {online}"))
+						.small()
+						.color(colors.muted),
+				);
+			} else if list.freshness != Freshness::Fresh {
 				let text = if list.freshness == Freshness::Unavailable {
 					"People aren't available in this conversation."
 				} else {
@@ -1063,15 +1075,16 @@ impl MessagingUi {
 		let guild = list.guild;
 		let guild_or_channel = guild.unwrap_or(channel);
 		let member_key = (state.generation, guild_or_channel, list.request);
-		let reset_scroll = self.member_extent.is_none_or(|(key, _)| key != member_key);
+		let reset_scroll = self.member_pane_key.is_none_or(|key| key != member_key);
 		if reset_scroll {
-			self.member_extent = Some((member_key, 100));
+			self.member_pane_key = Some(member_key);
 		}
-		let total = list.total.min(250_000) as usize;
-		let row_count = if lazy {
-			self.member_extent.unwrap().1.min(total)
-		} else {
+		let row_count = if !lazy {
 			thread_rows.as_ref().map_or(list.slots.len(), Vec::len)
+		} else if has_entry {
+			scroll_rows.max(list.slots.len())
+		} else {
+			0
 		};
 		let row_spacing = ui.spacing().item_spacing.y;
 		ui.spacing_mut().item_spacing.y = 0.0;
@@ -1080,7 +1093,7 @@ impl MessagingUi {
 		if reset_scroll {
 			area = area.vertical_scroll_offset(0.0);
 		}
-		let output = self
+		let _output = self
 			.scroll
 			.attach(ui, ("people", guild_or_channel, list.request), area)
 			.show_rows(ui, 42.0, row_count, |ui, range| {
@@ -1293,23 +1306,7 @@ impl MessagingUi {
 		ui.spacing_mut().item_spacing.y = row_spacing;
 		if lazy && !visible.is_empty() {
 			let first = visible.start;
-			let mut last = visible.end.saturating_sub(1);
-			if row_count < total
-				&& output.state.offset.y > 0.0
-				&& output.state.offset.y + output.inner_rect.height() >= output.content_size.y - 1.0
-			{
-				// Keep requesting the next chunk while at the bottom, without exposing
-				// another page of empty rows before its first entry arrives.
-				last = row_count;
-				if state.member_slot(row_count).is_some()
-					|| row_count
-						.checked_sub(start)
-						.is_some_and(|index| list.slots.get(index).is_some_and(Option::is_some))
-				{
-					self.member_extent = Some((member_key, (row_count + 100).min(total)));
-					ui.ctx().request_repaint();
-				}
-			}
+			let last = visible.end.saturating_sub(1);
 			if let Some(cmd) = state.focus_member_ranges(first, last) {
 				commands.push(cmd);
 			}
