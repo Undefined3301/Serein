@@ -110,7 +110,7 @@ impl Components {
 				opening,
 				&message.mentions,
 				Some(&source),
-				&mut None,
+				&mut crate::profiles::ProfileSession::default(),
 				(
 					&state.channels,
 					&mut None,
@@ -452,7 +452,7 @@ impl Components {
 							opening,
 							&message.mentions,
 							Some(&source),
-							&mut None,
+							&mut crate::profiles::ProfileSession::default(),
 							(
 								&state.channels,
 								&mut None,
@@ -1055,7 +1055,7 @@ fn field(
 						opening,
 						&[],
 						Some(&source),
-						&mut None,
+						&mut crate::profiles::ProfileSession::default(),
 						(&state.channels, &mut None, &state.guilds, &[]),
 						(avatars, state.demo, revealed.entry(key).or_default()),
 						&mut surface,

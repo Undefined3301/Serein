@@ -1539,7 +1539,7 @@ pub fn debug_role_mentions_check(state: &mut State) {
 			);
 			assert_eq!(preview.text, "@Role check");
 			assert_eq!(preview.sections[0].format.color, role_color);
-			let mut profile = None;
+			let mut profile = crate::profiles::ProfileSession::default();
 			let mut surface = crate::select::Surface::new(ui, "mention-test");
 			parsed.show_references(
 				ui,
@@ -1552,7 +1552,7 @@ pub fn debug_role_mentions_check(state: &mut State) {
 				&mut surface,
 			);
 			surface.finish(ui);
-			assert!(profile.is_none());
+			assert!(profile.open_user().is_none());
 			let galley = composer.galley(
 				ui,
 				&thread_draft,
