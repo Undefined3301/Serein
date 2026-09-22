@@ -8,7 +8,7 @@ channels and 100 joined guilds; the selected channel has at most 32 loaded
 recipients. Timeline, members/presence and voice limits remain 50 ordinary loaded
 messages, 100 entries each and 64 participant IDs respectively. A simultaneous
 `message_details` grant lowers the timeline row limit to 20, retaining its 20-KiB
-byte budget and the unchanged Wasm fuel limit; valid wire size alone does not
+byte budget and the shared 10-million Wasm fuel limit; valid wire size alone does not
 guarantee execution fits the fuel budget. Collector budgets
 include item overhead and escaped text: 10 KiB channels, 20 KiB timeline, 6 KiB
 each members/presence/channel-detail recipients, and 8 KiB guilds. Names are
