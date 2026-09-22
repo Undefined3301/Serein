@@ -332,7 +332,6 @@ fn layout_key(message: &Message) -> u64 {
 	key.finish()
 }
 pub(crate) const MESSAGE_LINE: f32 = 22.0;
-/// A grouped row drops the author header. A one-line full row measures this much taller.
 const GROUPED_ROW_SAVINGS: f32 = 52.0;
 
 pub(crate) fn fill_header_line(ui: &mut egui::Ui, compact: bool, text_line: egui::Rect) {
@@ -6993,8 +6992,6 @@ mod tests {
 		labels.get(&format!("Row {count}")).copied()
 	}
 
-	/// Jumping to the bottom, or history arriving after the channel is already open,
-	/// must paint the tail where it will stay.
 	#[test]
 	fn live_edge_snap_paints_the_tail_in_place() {
 		let ctx = egui::Context::default();
