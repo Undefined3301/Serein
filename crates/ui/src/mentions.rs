@@ -224,42 +224,29 @@ pub fn mention_label(id: Id, mentions: &[User], source: Option<&MentionSource<'_
 	}
 }
 
-pub fn directory_fingerprint(state: &State, channel: Id) -> u64 {
+pub fn presentation_fingerprint(state: &State, message: &model::Message) -> u64 {
 	let mut hasher = std::collections::hash_map::DefaultHasher::new();
-	state.relationship_view().hash(&mut hasher);
-	let hash_user = |hasher: &mut std::collections::hash_map::DefaultHasher, user: &User| {
-		user.id.hash(hasher);
-		user.name.hash(hasher);
+	state.message_author_name(message).hash(&mut hasher);
+	state.message_author_color(message).hash(&mut hasher);
+	let source = MentionSource {
+		state,
+		channel: message.channel,
 	};
-	if let Some(user) = &state.user {
-		hash_user(&mut hasher, user);
-	}
-	for user in state.friends() {
-		hash_user(&mut hasher, user);
-	}
-	if let Some(channel) = state.channel(channel) {
-		for user in &channel.recipients {
-			hash_user(&mut hasher, user);
-		}
-	}
-	if let Some(list) = state
-		.members
-		.as_ref()
-		.filter(|list| list.channel == channel)
-	{
-		for member in list.rows.iter().flatten() {
-			hash_user(&mut hasher, &member.user);
-			member.nick.hash(&mut hasher);
-		}
-	}
-	if let Some(request) = &state.member_search[0].request
-		&& request.channel == channel
-		&& state.can_view(channel)
-	{
-		for member in &state.member_search[0].rows {
-			hash_user(&mut hasher, &member.user);
-			member.nick.hash(&mut hasher);
-		}
+	let mut rest = message.content.as_str();
+	let mut seen = 0usize;
+	while seen < model::MAX_MENTIONS {
+		let Some(start) = rest.find('<') else {
+			break;
+		};
+		rest = &rest[start..];
+		let Some((id, len)) = model::user_mention_prefix(rest) else {
+			let skip = rest.chars().next().map_or(1, char::len_utf8);
+			rest = &rest[skip..];
+			continue;
+		};
+		mention_label(id, &message.mentions, Some(&source)).hash(&mut hasher);
+		rest = &rest[len..];
+		seen += 1;
 	}
 	hasher.finish()
 }
@@ -1316,8 +1303,42 @@ pub fn debug_role_mentions_check(state: &mut State) {
 				vec![(user.clone(), "synthetic.username".into())],
 			))),
 		});
+		let mut author = user.clone();
+		author.id = Id(user.id.0.wrapping_add(1));
+		author.name = "Other".into();
+		let message = model::Message {
+			sticker_items: vec![],
+			id: Id(2),
+			channel,
+			author,
+			content: format!("<@{}>", user.id),
+			edited: false,
+			edited_at: None,
+			revision: 0,
+			nonce: None,
+			reply_to: None,
+			kind: 0,
+			reply_deleted: false,
+			forwarded: false,
+			unsupported: false,
+			extra_content: Default::default(),
+			components: vec![],
+			application_id: None,
+			ephemeral: false,
+			flags: 0,
+			embeds: vec![],
+			attachments: vec![],
+			author_nick: None,
+			author_roles: vec![],
+			mention_roles: vec![],
+			mention_everyone: false,
+			suppress_notifications: false,
+			mentions: vec![user.clone()],
+			reactions: Some(vec![]),
+			embeds_suppressed: false,
+		};
 		for nickname in ["Private name", "Changed name", ""] {
-			let before = directory_fingerprint(&names, channel);
+			let before = presentation_fingerprint(&names, &message);
 			names.apply(client_core::Envelope {
 				generation: names.generation,
 				event: client_core::Event::UserAction(client_core::user_actions::Event::Nickname {
@@ -1330,7 +1351,7 @@ pub fn debug_role_mentions_check(state: &mut State) {
 			} else {
 				nickname
 			};
-			assert_ne!(directory_fingerprint(&names, channel), before);
+			assert_ne!(presentation_fingerprint(&names, &message), before);
 			assert_eq!(
 				mention_label(
 					user.id,
