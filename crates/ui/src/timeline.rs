@@ -1333,11 +1333,12 @@ impl TimelineView {
 			self.initial_read_checked = true;
 			if unread {
 				self.mark_read = None;
-				let first_text_open = state
-					.channel(channel)
-					.is_some_and(|channel| channel.supports_text())
-					&& state.reading(channel).is_none();
-				if first_text_open && state.timeline.iter().next().is_some() {
+				let arrived_on_live_edge = self.following
+					&& state
+						.channel(channel)
+						.is_some_and(|channel| channel.supports_text())
+					&& state.timeline.iter().next().is_some();
+				if arrived_on_live_edge {
 					self.hold_read_ack = true;
 				}
 			}
@@ -5498,6 +5499,218 @@ mod tests {
 			assert!(!view.target_browsing);
 			assert_eq!(view.mark_read.take(), Some(Id(20)));
 		}
+	}
+
+	fn unread_servers() -> State {
+		use model::permissions as p;
+		let channels = [(10, 1), (11, 1), (20, 2)]
+			.into_iter()
+			.map(|(id, guild)| model::Channel {
+				id: Id(id),
+				guild: Some(Id(guild)),
+				parent_id: None,
+				position: id as i32,
+				name: format!("synthetic-{id}"),
+				kind: 0,
+				recipients: vec![],
+				member_list_id: None,
+				message_count: None,
+				icon: None,
+				last_message: None,
+			})
+			.collect::<Vec<_>>();
+		let permission_channels = channels
+			.iter()
+			.filter_map(|channel| {
+				channel.guild.map(|guild| p::Channel {
+					id: channel.id,
+					guild,
+					overwrites: Some(vec![]),
+				})
+			})
+			.collect();
+		let mut state = State {
+			auth: client_core::auth::AuthState::Authenticated,
+			gateway_connected: true,
+			user: Some(model::User {
+				id: Id(999),
+				name: "Synthetic".into(),
+				avatar: None,
+				webhook: false,
+				kind: Default::default(),
+				discriminator: 0,
+				primary_guild: None,
+			}),
+			guilds: [1, 2]
+				.into_iter()
+				.map(|id| model::Guild {
+					stickers: None,
+					emojis: None,
+					id: Id(id),
+					name: format!("Server {id}"),
+					icon: None,
+				})
+				.collect(),
+			channels,
+			..State::default()
+		};
+		state
+			.permissions
+			.replace(p::Snapshot {
+				guilds: (1..=2)
+					.map(|id| p::Guild {
+						id: Id(id),
+						owner: Some(Id(999)),
+						member: Some(p::Member {
+							roles: vec![],
+							timeout_until: None,
+						}),
+						roles: Some(vec![p::Role {
+							id: Id(id),
+							name: String::new(),
+							color: 0,
+							position: 0,
+							hoist: false,
+							bits: p::VIEW_CHANNEL | p::READ_MESSAGE_HISTORY,
+						}]),
+					})
+					.collect(),
+				channels: permission_channels,
+			})
+			.unwrap();
+		state
+			.apply_read_state(client_core::read_state::Event::Snapshot {
+				entries: Some(vec![
+					(Id(10), Some(Id(1)), 0),
+					(Id(11), Some(Id(1)), 0),
+					(Id(20), Some(Id(1)), 0),
+				]),
+				version: Some(1),
+				partial: false,
+			})
+			.unwrap();
+		state
+	}
+
+	fn deliver_unread(state: &mut State, channel: Id, latest: u64) {
+		assert_eq!(state.selected, Some(channel));
+		assert!(state.history_pending);
+		let messages = [latest - 1, latest]
+			.into_iter()
+			.map(|id| {
+				let mut message = test_support::message(id, channel);
+				message.content = "Synthetic tall unread row\n\n".repeat(40);
+				message
+			})
+			.collect();
+		state.apply(client_core::Envelope {
+			generation: state.generation,
+			event: client_core::Event::History {
+				channel,
+				request: state.request,
+				older: false,
+				messages,
+			},
+		});
+		assert_eq!(state.freshness, model::Freshness::Fresh);
+		assert_eq!(state.unread(channel), Some(true));
+	}
+
+	fn settle_banner(
+		ctx: &egui::Context,
+		view: &mut TimelineView,
+		state: &mut State,
+	) -> Vec<(String, egui::Rect)> {
+		let mut labels = vec![];
+		for _ in 0..4 {
+			labels = banner_frame(ctx, view, state, vec![], false);
+		}
+		labels
+	}
+
+	fn expect_unread_held(view: &TimelineView, labels: &[(String, egui::Rect)], step: &str) {
+		assert!(
+			view.hold_read_ack && view.mark_read.is_none() && view.following,
+			"{step}: hold={} following={} mark_read={:?}",
+			view.hold_read_ack,
+			view.following,
+			view.mark_read
+		);
+		assert!(
+			labels.iter().any(|(text, _)| text == "Unread messages"),
+			"{step} removed the unread banner: {labels:?}"
+		);
+	}
+
+	#[test]
+	fn server_switch_keeps_the_unread_banner_until_a_downward_scroll() {
+		let ctx = egui::Context::default();
+		let mut state = unread_servers();
+		let mut view = TimelineView::default();
+
+		assert!(matches!(
+			state.select(Id(10)),
+			Some(client_core::Command::History { .. })
+		));
+		deliver_unread(&mut state, Id(10), 101);
+		let labels = settle_banner(&ctx, &mut view, &mut state);
+		expect_unread_held(&view, &labels, "channel open");
+
+		assert!(matches!(
+			state.select(Id(11)),
+			Some(client_core::Command::History { .. })
+		));
+		deliver_unread(&mut state, Id(11), 201);
+		let labels = settle_banner(&ctx, &mut view, &mut state);
+		expect_unread_held(&view, &labels, "channel switch");
+
+		assert!(matches!(
+			state.select(Id(10)),
+			Some(client_core::Command::History { .. })
+		));
+		deliver_unread(&mut state, Id(10), 101);
+		let labels = settle_banner(&ctx, &mut view, &mut state);
+		expect_unread_held(&view, &labels, "channel return");
+
+		assert!(matches!(
+			state.select_guild(Id(2)),
+			Some(client_core::Command::History {
+				channel: Id(20),
+				..
+			})
+		));
+		deliver_unread(&mut state, Id(20), 301);
+		let labels = settle_banner(&ctx, &mut view, &mut state);
+		expect_unread_held(&view, &labels, "server open");
+
+		assert!(matches!(
+			state.select_guild(Id(1)),
+			Some(client_core::Command::History {
+				channel: Id(10),
+				..
+			})
+		));
+		deliver_unread(&mut state, Id(10), 101);
+		let labels = settle_banner(&ctx, &mut view, &mut state);
+		expect_unread_held(&view, &labels, "server return");
+
+		banner_frame(
+			&ctx,
+			&mut view,
+			&mut state,
+			vec![
+				egui::Event::PointerMoved(egui::pos2(450.0, 300.0)),
+				egui::Event::MouseWheel {
+					unit: egui::MouseWheelUnit::Point,
+					delta: egui::vec2(0.0, -80.0),
+					modifiers: egui::Modifiers::NONE,
+					phase: egui::TouchPhase::Move,
+				},
+			],
+			false,
+		);
+		assert_eq!(view.mark_read, Some(Id(101)));
+		assert!(!view.hold_read_ack);
 	}
 
 	#[test]
