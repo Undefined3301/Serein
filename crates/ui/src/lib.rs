@@ -6111,7 +6111,11 @@ mod composer_tests {
 				request: 1,
 				total: 100,
 				lazy: false,
-				groups: vec![],
+				groups: vec![
+					("8".into(), 2),
+					("online".into(), 1),
+					("offline".into(), 97),
+				],
 				ranges: vec![],
 				freshness: Freshness::Fresh,
 				start: 0,
@@ -6187,6 +6191,9 @@ mod composer_tests {
 		if let Some(model::MemberSlot::Person(m)) = slots[2].as_mut() {
 			m.user.webhook = true;
 		}
+		slots.insert(0, Some(model::MemberSlot::Group("offline".into())));
+		slots.insert(0, Some(model::MemberSlot::Group("online".into())));
+		slots.insert(0, Some(model::MemberSlot::Group("8".into())));
 		let mut messaging = MessagingUi::default();
 		let context = egui::Context::default();
 		let output = context.run_ui(
@@ -6210,9 +6217,9 @@ mod composer_tests {
 			"BOT",
 			"APP",
 			"WEBHOOK",
-			"Founders — 2",
-			"Online — 1",
-			"Offline — 97",
+			"Founders - 2",
+			"Online - 1",
+			"Offline - 97",
 		] {
 			assert!(
 				text.iter().any(|label| label == heading),
