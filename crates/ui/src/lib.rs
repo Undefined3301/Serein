@@ -145,7 +145,6 @@ pub struct MessagingUi {
 	join_server: join_server::JoinDialog,
 	folder_ui: guild_folders::FolderUi,
 	rail_cache: notifications::RailCache,
-	member_scroll_at: Option<(Id, usize)>,
 	composer_layout: composer_text::Layout,
 	channel_cache: categories::Cache,
 	channel_move: Option<(Id, client_core::channel_actions::Action)>,
@@ -1218,11 +1217,7 @@ impl MessagingUi {
 		if lazy && !visible.is_empty() {
 			let first = visible.start;
 			let last = visible.end.saturating_sub(1);
-			let toward_up = self.member_scroll_at.and_then(|(id, previous)| {
-				(id == channel && first != previous).then_some(first < previous)
-			});
-			self.member_scroll_at = Some((channel, first));
-			if let Some(cmd) = state.focus_member_ranges(first, last, toward_up) {
+			if let Some(cmd) = state.focus_member_ranges(first, last) {
 				commands.push(cmd);
 			}
 		}

@@ -686,6 +686,7 @@ const MEMBER_CACHE_CHUNKS: usize = 32;
 pub struct MemberChunks {
 	request: u64,
 	viewport: usize,
+	anchor: Option<usize>,
 	chunks: BTreeMap<usize, Vec<Option<MemberSlot>>>,
 }
 
@@ -719,11 +720,15 @@ impl MemberChunks {
 		}
 		if self.request != list.request {
 			self.chunks.clear();
+			self.anchor = None;
 			self.request = list.request;
 		}
 		let pending_holes =
 			list.freshness != Freshness::Fresh && list.slots.iter().all(|slot| slot.is_none());
 		if !pending_holes {
+			if self.anchor.is_none() && list.slots.iter().any(|slot| slot.is_some()) {
+				self.anchor = Some((list.start / MEMBER_CHUNK) * MEMBER_CHUNK);
+			}
 			for (offset, slot) in list.slots.iter().enumerate() {
 				let absolute = list.start.saturating_add(offset);
 				let start = (absolute / MEMBER_CHUNK) * MEMBER_CHUNK;
@@ -745,10 +750,12 @@ impl MemberChunks {
 	}
 
 	fn evict(&mut self, ranges: &[[usize; 2]]) {
+		let anchor = self.anchor;
 		let protected = |start: usize| {
-			ranges
-				.iter()
-				.any(|[from, to]| start <= *to && start + MEMBER_CHUNK > *from)
+			anchor == Some(start)
+				|| ranges
+					.iter()
+					.any(|[from, to]| start <= *to && start + MEMBER_CHUNK > *from)
 		};
 		let viewport_chunk = (self.viewport / MEMBER_CHUNK) * MEMBER_CHUNK;
 		while self.chunks.len() > MEMBER_CACHE_CHUNKS || self.bytes() > MEMBER_CACHE_BYTES {
@@ -1271,12 +1278,7 @@ impl State {
 			list.lazy && self.member_chunks.request == list.request && self.member_chunks.occupied()
 		})
 	}
-	pub fn focus_member_ranges(
-		&mut self,
-		first: usize,
-		last: usize,
-		toward_up: Option<bool>,
-	) -> Option<Command> {
+	pub fn focus_member_ranges(&mut self, first: usize, last: usize) -> Option<Command> {
 		let list = self.members.as_ref()?;
 		if !list.lazy
 			|| Some(list.channel) != self.selected
@@ -1311,18 +1313,6 @@ impl State {
 				ranges = vec![[start, start + 99], last_chunk];
 			} else {
 				ranges.push(last_chunk);
-			}
-		} else {
-			let start = ranges[0][0];
-			match toward_up {
-				Some(true) if start >= MEMBER_CHUNK => {
-					ranges.insert(0, [start - MEMBER_CHUNK, start - 1]);
-				}
-				Some(false) if ranges[0][1] < max_idx => {
-					let next = ranges[0][1] + 1;
-					ranges.push([next, next + 99]);
-				}
-				_ => {}
 			}
 		}
 		let unchanged = ranges == list.ranges;

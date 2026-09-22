@@ -924,17 +924,29 @@ async fn run_inner(
 					if !subscription.thread && !validate_member_ranges(&subscription.ranges) {
 						return Err(Failure::Protocol);
 					}
-					let typing = subscription_packet(subscription.guild, true, None, false);
 					let ranges = subscription_packet(
 						subscription.guild,
 						true,
 						Some((subscription.channel, subscription.ranges.as_slice())),
 						subscription.thread,
 					);
+					// The empty-channels frame is only the first guild subscribe. Sending it
+					// again replaces the open channel and drops the history stream.
+					let guild_open = active_members.as_ref().is_some_and(|active| {
+						active.subscription.guild == subscription.guild
+							&& !active.subscription.thread
+							&& !subscription.thread
+					});
+					if !guild_open {
+						let typing = subscription_packet(subscription.guild, true, None, false);
+						if !matches!(
+							timeout(Duration::from_secs(5), socket.send(typing)).await,
+							Ok(Ok(()))
+						) {
+							break;
+						}
+					}
 					if !matches!(
-						timeout(Duration::from_secs(5), socket.send(typing)).await,
-						Ok(Ok(()))
-					) || !matches!(
 						timeout(Duration::from_secs(5), socket.send(ranges)).await,
 						Ok(Ok(()))
 					) {
@@ -2857,11 +2869,11 @@ mod member_tests {
                         break;
                     }
                     if subscription["channels"]==json!({}) && subscription["thread_member_lists"]==json!([]) {
+                        assert!(!subscribed, "cleared the open channel subscription while scrolling");
                         typing_ready=true;
                         continue;
                     }
                     assert!(typing_ready, "channel ranges before the guild typing subscription");
-                    typing_ready=false;
                     if !subscribed {
                         assert_eq!(subscription["typing"],true);assert_eq!(subscription["channels"],json!({"2":[[0,99]]}));subscribed=true;
                         socket.send(Frame::Text(json!({"op":0,"t":"GUILD_MEMBER_LIST_UPDATE","s":2,"d":{"guild_id":"1","id":"everyone","member_count":1,"ops":[{"op":"SYNC","range":[0,99],"items":[{"member":{"user":{"id":"3","username":"Visible","avatar":"0123456789abcdef0123456789abcdef"}}}]}]}}).to_string().into())).await.unwrap();

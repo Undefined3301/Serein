@@ -880,11 +880,12 @@ or long-running capacity behavior.
 ### Member role display
 
 The active server member pane follows the gateway member-list index. Scrollbar length is
-`member_count` (`total` on lazy guild lists). The subscription follows the visible chunk and one
-neighbor in the direction the scrollbar is moving, at most two ranges, so Discord stops streaming
-ranges that left the viewport. Chunks already decoded stay in a 1 MiB cache and paint immediately
-when the user scrolls back. A loading snapshot does not erase them. A fresh snapshot for a range
-the user already left is still stored there. Group headers and person rows come from those slots.
+`member_count` (`total` on lazy guild lists). The live subscription is the visible chunk, or two
+chunks when the pane spans a boundary. A viewport move sends those ranges only. It does not clear
+the guild channel subscription. The chunk loaded when the channel opened stays in a 1 MiB cache
+and paints immediately on the way back. A loading snapshot does not erase it. A fresh snapshot
+for a range the user already left is still stored there. Group headers and person rows come from
+those slots.
 The pane does not regroup loaded members or show a partial-list hint. Highest nonzero role color
 sets online names independently of the hoisted role used for grouping on the gateway. Offline
 names remain muted. Unknown role group ids fall back to the label Role. Role changes/removals
