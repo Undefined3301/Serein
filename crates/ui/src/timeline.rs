@@ -95,6 +95,7 @@ pub struct TimelineView {
 	width: f32,
 	rows: Vec<(Id, f32)>,
 	revision: u64,
+	layout_fingerprint: u64,
 	channel: Option<Id>,
 	anchor: Option<(Id, f32)>,
 	scroll_offset: f32,
@@ -1348,10 +1349,29 @@ impl TimelineView {
 				&& state.older_exhausted
 		});
 		let starter_id = starter.map(|m| m.id);
-		let changed =
-			self.revision != state.revision || dimensions_changed || self.starter_row != starter_id;
+		let mut layout_changed = false;
+		if self.revision != state.revision {
+			// Member/presence and other unrelated updates must not restore the scroll
+			// anchor or reintroduce estimates for already settled message geometry.
+			let mut fingerprint = DefaultHasher::new();
+			let mut previous = None;
+			for message in starter.into_iter().chain(state.timeline.display_iter()) {
+				let deleted = state.timeline.is_deleted(message.id);
+				message.id.hash(&mut fingerprint);
+				row_key(message, previous, self.unread_boundary, state).hash(&mut fingerprint);
+				deleted.hash(&mut fingerprint);
+				previous = (!deleted).then_some(message);
+			}
+			let fingerprint = fingerprint.finish();
+			layout_changed = self.layout_fingerprint != fingerprint;
+			self.layout_fingerprint = fingerprint;
+		}
+		let changed = self.revision == u64::MAX
+			|| layout_changed
+			|| dimensions_changed
+			|| self.starter_row != starter_id;
 		self.starter_row = starter_id;
-		if changed || self.width != width {
+		if changed || self.revision != state.revision || self.width != width {
 			self.measured_rows.clear();
 		}
 		let mut offset = None;
@@ -1432,13 +1452,13 @@ impl TimelineView {
 				})
 				.collect();
 			lead_rows = Some(lead_basis);
-			self.revision = state.revision;
 			if !self.following
 				&& let Some((id, inset)) = self.anchor
 			{
 				offset = Some(anchor_offset(&self.rows, id, inset));
 			}
 		}
+		self.revision = state.revision;
 		let history_available = state
 			.selected
 			.is_some_and(|channel| state.can_read_history(channel));
@@ -6617,7 +6637,7 @@ mod tests {
 		let short_height = view.heights[&Id(1)].1;
 		view.following = false;
 		view.anchor = Some((Id(2), 400.0));
-		state.revision += 1;
+		view.revision = u64::MAX;
 		for _ in 0..3 {
 			render(&mut view, &mut state, &mut images);
 		}
@@ -6644,7 +6664,7 @@ mod tests {
 		);
 		view.following = false;
 		view.anchor = Some((Id(1), 0.0));
-		state.revision += 1;
+		view.revision = u64::MAX;
 		for _ in 0..3 {
 			render(&mut view, &mut state, &mut images);
 		}
