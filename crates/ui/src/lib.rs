@@ -2865,17 +2865,6 @@ impl MessagingUi {
                         }
                         self.mention_lookup.text = self.mention_menu.member_query().to_owned();
                         self.mention_lookup.sync(ctx, state, channel, 0, commands);
-                        if !self.mention_lookup.text.is_empty() && state.channel(channel).and_then(|c| c.guild).is_some() {
-                            let search = &state.member_search[0];
-                            if let Some(error) = search.error {
-                                ui.small(error);
-                                if ui.small_button("Retry member search").clicked() { self.mention_lookup.retry(); }
-                            } else if !search.finished {
-                                ui.small("Searching server members…");
-                            } else if search.rows.is_empty() {
-                                ui.small("No server matches. Try a username, nickname, or user ID.");
-                            }
-                        }
                         if !editing_here && (!new_draft.is_empty() || restore_empty_draft) {
                             state.drafts.insert(channel, new_draft);
                         }
