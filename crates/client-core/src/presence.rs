@@ -346,6 +346,7 @@ impl State {
 		if projected_bytes > 128 * 1024 {
 			return;
 		}
+		let mut changed = false;
 		for row in list
 			.slots
 			.iter_mut()
@@ -362,7 +363,13 @@ impl State {
 				row.status = update.status.clone();
 				row.custom_status = update.custom_status.clone();
 				row.activities = update.activities.clone();
+				changed = true;
 			}
+		}
+		if changed && list.lazy {
+			// The sidebar paints cached chunks before the live subscription rows.
+			self.member_chunks.merge(list);
+			self.member_chunks.evict(&list.ranges);
 		}
 	}
 }

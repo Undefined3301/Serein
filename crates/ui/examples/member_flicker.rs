@@ -95,21 +95,68 @@ fn main() {
 		}
 		let settled = frame(&ctx, &mut view, &mut state);
 		assert!(!settled.is_empty());
+		assert!(state.members_cached());
+		let revision = state.revision;
+		for status in [
+			Some("idle"),
+			Some("dnd"),
+			Some("offline"),
+			None,
+			Some("online"),
+		] {
+			let online = matches!(status, Some("online" | "idle" | "dnd"));
+			let update = model::MemberPresence {
+				user: Id(1),
+				status: status.map(str::to_owned),
+				custom_status: online.then(|| "Synthetic status".into()),
+				activities: if online {
+					vec![model::RichActivity {
+						kind: 0,
+						name: "Synthetic game".into(),
+						details: None,
+						state: None,
+						image: None,
+						small_image: None,
+						ends_at: None,
+						started_at: None,
+					}]
+				} else {
+					vec![]
+				},
+			};
+			state.apply(Envelope {
+				generation: state.generation,
+				event: Event::MemberPresence {
+					guild: list.guild.unwrap(),
+					channel,
+					request: list.request,
+					updates: vec![update.clone()],
+				},
+			});
+			let model::MemberSlot::Person(cached) = state.member_slot(0).unwrap() else {
+				panic!("expected cached person");
+			};
+			assert_eq!(cached.status, update.status);
+			assert_eq!(cached.custom_status, update.custom_status);
+			assert_eq!(cached.activities, update.activities);
+			assert_eq!(state.revision, revision);
+			assert_eq!(frame(&ctx, &mut view, &mut state), settled);
+		}
+		// Returning to a cached page must retain the latest presence while SYNC is pending.
+		let mut pending = state.members.clone().unwrap();
+		pending.start = 100;
+		pending.slots = vec![None; 100];
+		pending.freshness = Freshness::Loading;
 		state.apply(Envelope {
 			generation: state.generation,
-			event: Event::MemberPresence {
-				guild: list.guild.unwrap(),
-				channel,
-				request: list.request,
-				updates: vec![model::MemberPresence {
-					user: Id(1),
-					status: Some("idle".into()),
-					custom_status: Some("Synthetic status".into()),
-					activities: vec![],
-				}],
-			},
+			event: Event::Members(pending),
 		});
-		assert_eq!(frame(&ctx, &mut view, &mut state), settled);
+		let model::MemberSlot::Person(cached) = state.member_slot(0).unwrap() else {
+			panic!("expected cached person");
+		};
+		assert_eq!(cached.status.as_deref(), Some("online"));
+		assert_eq!(cached.custom_status.as_deref(), Some("Synthetic status"));
+		assert_eq!(cached.activities[0].name, "Synthetic game");
 		for step in 0..3 {
 			match step {
 				0 => match list.slots[0].as_mut().unwrap() {
@@ -154,5 +201,7 @@ fn main() {
 				.any(|(text, _)| text.contains("edited"))
 		);
 	}
-	println!("Message positions stay stable across synthetic member updates.");
+	println!(
+		"Cached status/activity stays current and clears; member updates keep chat stable (offline)."
+	);
 }
