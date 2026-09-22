@@ -1116,7 +1116,11 @@ impl MessagingUi {
 							let member = list.rows[*member_index]
 								.as_ref()
 								.expect("cached member row");
-							let name = member.nick.as_deref().unwrap_or(&member.user.name);
+							let name = member
+								.nick
+								.as_deref()
+								.filter(|nick| !nick.is_empty())
+								.unwrap_or_else(|| state.user_display_name(&member.user));
 							let (status, custom, activities) =
 								profiles::member_presence(state, member, list.guild);
 							let subtitle = profiles::subtitle(custom, activities);
