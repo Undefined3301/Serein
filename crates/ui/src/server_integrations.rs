@@ -422,7 +422,7 @@ impl IntegrationsUi {
 							.max_rect(rect.shrink2(Vec2::new(16.0, 16.0))),
 						|ui| {
 							ui.horizontal(|ui| {
-								icon(
+								icons::inline(
 									ui,
 									if follows {
 										icons::Icon::Threads
@@ -430,6 +430,7 @@ impl IntegrationsUi {
 										icons::Icon::Link
 									},
 									32.0,
+									design::palette(ui).muted,
 								);
 								let text_width = (ui.available_width() - 90.0).max(48.0);
 								ui.allocate_ui_with_layout(
@@ -760,10 +761,6 @@ fn primary(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
 	})
 	.inner
 }
-fn icon(ui: &mut egui::Ui, glyph: icons::Icon, size: f32) {
-	let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), egui::Sense::hover());
-	icons::paint(ui.painter(), glyph, rect, design::palette(ui).muted);
-}
 fn app_avatar(ui: &mut egui::Ui, integration: &Integration, avatars: &mut Avatars, demo: bool) {
 	if let Some(bot) = integration
 		.application
@@ -772,7 +769,7 @@ fn app_avatar(ui: &mut egui::Ui, integration: &Integration, avatars: &mut Avatar
 	{
 		avatars.show(ui, bot, 44.0, demo);
 	} else {
-		icon(ui, icons::Icon::Activities, 44.0);
+		icons::inline(ui, icons::Icon::Activities, 44.0, design::palette(ui).muted);
 	}
 }
 fn chip(ui: &mut egui::Ui, text: &str) {
@@ -793,12 +790,11 @@ fn card_contents(
 }
 fn summary_card(ui: &mut egui::Ui, glyph: icons::Icon, name: &str, subtitle: &str) -> bool {
 	let colors = design::palette(ui);
-	let response = ui.add_sized(
-		[ui.available_width(), 88.0],
-		egui::Button::new(()).fill(colors.raised).corner_radius(8),
-	);
+	let (rect, response) =
+		ui.allocate_exact_size(Vec2::new(ui.available_width(), 88.0), egui::Sense::click());
+	let frame = design::interactive_card_frame(ui, &response);
+	ui.painter().add(frame.paint(rect));
 	response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), name));
-	let rect = response.rect;
 	icons::paint(
 		ui.painter(),
 		glyph,

@@ -1501,9 +1501,8 @@ impl Picker {
 					}
 					GifMode::Favorites => {
 						if state.gifs.favorites.is_empty() {
-							empty_state(
+							crate::design::empty_state(
 								ui,
-								colors,
 								crate::icons::Icon::Star,
 								"No favorites yet",
 								"Hover a GIF and press the star to keep it here.",
@@ -1540,9 +1539,8 @@ impl Picker {
 									.map(|page| page.gifs.as_slice())
 									.unwrap_or_default();
 								if gifs.is_empty() {
-									empty_state(
+									crate::design::empty_state(
 										ui,
-										colors,
 										crate::icons::Icon::Gif,
 										"No GIFs found",
 										"Try a different search term.",
@@ -1590,26 +1588,6 @@ fn status_row(ui: &mut egui::Ui, colors: &crate::design::Palette, spinner: bool,
 			ui.add_space(8.0);
 		}
 		ui.label(egui::RichText::new(text).color(colors.muted));
-	});
-}
-
-fn empty_state(
-	ui: &mut egui::Ui,
-	colors: &crate::design::Palette,
-	icon: crate::icons::Icon,
-	title: &str,
-	detail: &str,
-) {
-	ui.add_space(48.0);
-	ui.vertical_centered(|ui| {
-		let (rect, _) = ui.allocate_exact_size(egui::Vec2::splat(64.0), egui::Sense::hover());
-		ui.painter()
-			.circle_filled(rect.center(), 32.0, colors.raised);
-		crate::icons::paint(ui.painter(), icon, rect.shrink(18.0), colors.muted);
-		ui.add_space(12.0);
-		ui.label(crate::design::semibold(ui, title, 16.0).color(colors.text_strong));
-		ui.add_space(4.0);
-		ui.label(egui::RichText::new(detail).color(colors.muted));
 	});
 }
 
