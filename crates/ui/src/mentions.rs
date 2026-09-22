@@ -237,12 +237,11 @@ pub fn mention_label(id: Id, mentions: &[User], source: Option<&MentionSource<'_
 
 pub fn presentation_fingerprint(state: &State, message: &model::Message) -> u64 {
 	let mut hasher = std::collections::hash_map::DefaultHasher::new();
-	state.message_author_name(message).hash(&mut hasher);
-	state.message_author_color(message).hash(&mut hasher);
 	let source = MentionSource {
 		state,
 		channel: message.channel,
 	};
+	let roles = known_roles(state, message.channel);
 	let mut rest = message.content.as_str();
 	let mut seen = 0usize;
 	while seen < model::MAX_MENTIONS {
@@ -250,13 +249,34 @@ pub fn presentation_fingerprint(state: &State, message: &model::Message) -> u64 
 			break;
 		};
 		rest = &rest[start..];
-		let Some((id, len)) = model::user_mention_prefix(rest) else {
+		if let Some((id, len)) = model::user_mention_prefix(rest) {
+			mention_label(id, &message.mentions, Some(&source)).hash(&mut hasher);
+			rest = &rest[len..];
+		} else if let Some((id, len)) = model::role_mention_prefix(rest) {
+			let name = roles
+				.iter()
+				.find(|role| role.id == id)
+				.map_or_else(|| format!("unknown-role ({id})"), |role| role.name.clone());
+			format!("@{name}").hash(&mut hasher);
+			rest = &rest[len..];
+		} else if let Some((id, len)) = model::channel_mention_prefix(rest) {
+			let label = match state.channels.iter().find(|channel| channel.id == id) {
+				Some(channel)
+					if channel.guild.is_some()
+						&& matches!(channel.kind, 0 | 5 | 10..=12 | 15 | 16) =>
+				{
+					format!("#{}", channel.name)
+				}
+				Some(_) => String::new(),
+				None => "#unknown-channel".into(),
+			};
+			label.hash(&mut hasher);
+			rest = &rest[len..];
+		} else {
 			let skip = rest.chars().next().map_or(1, char::len_utf8);
 			rest = &rest[skip..];
 			continue;
-		};
-		mention_label(id, &message.mentions, Some(&source)).hash(&mut hasher);
-		rest = &rest[len..];
+		}
 		seen += 1;
 	}
 	hasher.finish()

@@ -231,6 +231,11 @@ Chat author membership (schema 18): `author_roles` JSON (at most 512 IDs, 16 KiB
 and optional `author_nick` (512 UTF-8 bytes / 128 characters) travel with each
 cached message row. Schema-17 and older binaries cannot reopen this upgraded cache.
 
+Reaction pills (schema 23): nullable `reactions` JSON, at most 16 KiB, stores the last
+known emoji set and counts so a reopened channel can place the strip before history
+returns. NULL means unknown and paints no strip. History replaces the row. Schema-22
+and older binaries cannot reopen this upgraded cache.
+
 Reading motion (schema 19): one checked application-wide boolean stores whether wheel,
 message-target and jump-to-present scrolling animate. Existing databases migrate to enabled;
 disabling changes only local rendering and adds no account data or timeline storage.
