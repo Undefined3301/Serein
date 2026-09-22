@@ -46,6 +46,7 @@ enum Candidate {
 	},
 	User {
 		user: User,
+		name: String,
 	},
 	Mass {
 		name: &'static str,
@@ -74,7 +75,7 @@ impl Candidate {
 	#[cfg(test)]
 	fn id(&self) -> Id {
 		match self {
-			Candidate::User { user } => user.id,
+			Candidate::User { user, .. } => user.id,
 			Candidate::Role { id, .. }
 			| Candidate::Channel { id, .. }
 			| Candidate::Custom { id, .. } => *id,
@@ -84,7 +85,7 @@ impl Candidate {
 	fn token(&self) -> String {
 		match self {
 			Candidate::Role { id, .. } => format!("<@&{id}> "),
-			Candidate::User { user } => user_mention_token(user.id),
+			Candidate::User { user, .. } => user_mention_token(user.id),
 			Candidate::Mass { name } => format!("@{name} "),
 			Candidate::Channel { id, .. } => format!("<#{id}> "),
 			Candidate::Unicode { text, .. } => format!("{text} "),
@@ -215,13 +216,17 @@ pub fn mention_label(id: Id, mentions: &[User], source: Option<&MentionSource<'_
 		return format!("@{nick}");
 	}
 	match find_user(id, mentions, source) {
-		Some(user) => format!("@{}", user.name),
+		Some(user) => format!(
+			"@{}",
+			source.map_or(user.name.as_str(), |s| s.state.user_display_name(user))
+		),
 		None => format!("@{id}"),
 	}
 }
 
 pub fn directory_fingerprint(state: &State, channel: Id) -> u64 {
 	let mut hasher = std::collections::hash_map::DefaultHasher::new();
+	state.relationship_view().hash(&mut hasher);
 	let hash_user = |hasher: &mut std::collections::hash_map::DefaultHasher, user: &User| {
 		user.id.hash(hasher);
 		user.name.hash(hasher);
@@ -409,7 +414,14 @@ impl Menu {
 				let mut ranked = users
 					.iter()
 					.filter_map(|user| {
-						rank(&query, &user.name, user.id)
+						let label = mention_label(
+							user.id,
+							std::slice::from_ref(user),
+							Some(&MentionSource { state, channel }),
+						);
+						let name = label.strip_prefix('@').unwrap_or(&label);
+						rank(&query, name, user.id)
+							.or_else(|| rank(&query, &user.name, user.id))
 							.or_else(|| {
 								let search = &state.member_search[0];
 								(search.request.as_ref().is_some_and(|r| {
@@ -417,7 +429,15 @@ impl Menu {
 								}) && search.rows.iter().any(|m| m.user.id == user.id))
 								.then_some(0)
 							})
-							.map(|r| ((r, 0, 0), Candidate::User { user: user.clone() }))
+							.map(|r| {
+								(
+									(r, 0, 0),
+									Candidate::User {
+										user: user.clone(),
+										name: name.to_owned(),
+									},
+								)
+							})
 					})
 					.collect::<Vec<_>>();
 				for role in known_roles(state, channel)
@@ -692,10 +712,10 @@ fn row(
 		_ => None,
 	};
 	let primary = match candidate {
-		Candidate::User { user } => {
+		Candidate::User { user, name } => {
 			let mut child = ui.new_child(egui::UiBuilder::new().max_rect(icon));
 			avatars.show(&mut child, user, 24.0, demo);
-			user.name.clone()
+			name.clone()
 		}
 		Candidate::Mass { .. } | Candidate::Role { .. } => {
 			let name = match candidate {
@@ -790,7 +810,7 @@ fn row(
 			true,
 			selected,
 			match candidate {
-				Candidate::User { user } => user.name.clone(),
+				Candidate::User { name, .. } => name.clone(),
 				Candidate::Mass { name } => format!("@{name}"),
 				Candidate::Role { name, .. } => format!("@{name}, role"),
 				Candidate::Channel { name, .. } => name.clone(),
@@ -1286,6 +1306,67 @@ pub(crate) fn debug_pointer_check(state: &mut State, channel: Id) {
 
 #[cfg(debug_assertions)]
 pub fn debug_role_mentions_check(state: &mut State) {
+	{
+		let user = state.user.as_ref().unwrap().clone();
+		let channel = Id(1);
+		let mut names = State::default();
+		names.apply(client_core::Envelope {
+			generation: names.generation,
+			event: client_core::Event::UserAction(client_core::user_actions::Event::Friends(Some(
+				vec![(user.clone(), "synthetic.username".into())],
+			))),
+		});
+		for nickname in ["Private name", "Changed name", ""] {
+			let before = directory_fingerprint(&names, channel);
+			names.apply(client_core::Envelope {
+				generation: names.generation,
+				event: client_core::Event::UserAction(client_core::user_actions::Event::Nickname {
+					user: user.id,
+					text: nickname.into(),
+				}),
+			});
+			let expected = if nickname.is_empty() {
+				user.name.as_str()
+			} else {
+				nickname
+			};
+			assert_ne!(directory_fingerprint(&names, channel), before);
+			assert_eq!(
+				mention_label(
+					user.id,
+					std::slice::from_ref(&user),
+					Some(&MentionSource {
+						state: &names,
+						channel
+					})
+				),
+				format!("@{expected}")
+			);
+			let mut menu = Menu::default();
+			let mut draft = format!("@{}", expected.split_whitespace().next().unwrap());
+			menu.refresh(
+				&names,
+				channel,
+				&draft,
+				Some(draft.chars().count()),
+				std::slice::from_ref(&user),
+			);
+			assert!(
+				matches!(&menu.candidates[0], Candidate::User { name, .. } if name == expected)
+			);
+			insert(&mut draft, menu.pick(0).unwrap()).unwrap();
+			assert_eq!(draft, user_mention_token(user.id));
+			let original = format!("@{}", user.name.split_whitespace().next().unwrap());
+			menu.refresh(
+				&names,
+				channel,
+				&original,
+				Some(original.chars().count()),
+				std::slice::from_ref(&user),
+			);
+			assert!(!menu.candidates.is_empty());
+		}
+	}
 	let channel = state
 		.channels
 		.iter()
