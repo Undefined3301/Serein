@@ -3208,9 +3208,11 @@ impl TimelineView {
 			if was_following && !user_scrolling {
 				self.following = true;
 				self.jump = true;
-			}
-			if !user_scrolling && (!dimensions_changed || channel_changed) {
-				ui.ctx().request_discard("Timeline message heights settled");
+				// An anchored reader keeps this frame's places. The next frame
+				// applies the new leading height through the scroll anchor.
+				if !dimensions_changed || channel_changed {
+					ui.ctx().request_discard("Timeline message heights settled");
+				}
 			}
 			ui.ctx().request_repaint();
 		}
