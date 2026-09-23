@@ -1132,7 +1132,7 @@ fn decode_motion_video(
 		let mut stride = 1usize;
 		let mut index = 0usize;
 		loop {
-			if index >= 600 || started.elapsed() > Duration::from_secs(3) {
+			if frames.len() >= 2 && (index >= 600 || started.elapsed() > Duration::from_secs(3)) {
 				break;
 			}
 			match decoder.poll_video() {
@@ -1252,8 +1252,8 @@ fn decode_animation(
 		let mut total = 0;
 		let mut stride = 1;
 		for (index, frame) in animation_frames(bytes)?.enumerate() {
-			if index == 600 || started.elapsed() > Duration::from_secs(3) {
-				return (frames.len() >= 2).then_some(frames);
+			if frames.len() >= 2 && (index == 600 || started.elapsed() > Duration::from_secs(3)) {
+				return Some(frames);
 			}
 			let frame = frame.ok()?;
 			let (numerator, denominator) = frame.delay().numer_denom_ms();
