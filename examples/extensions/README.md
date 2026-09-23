@@ -1,5 +1,9 @@
 # Build your first Serein plugin
 
+> **Preview SDK — PR #405, not yet released.** The branch adds approved reply,
+> sticker, forward, channel, server, role, moderation and host-mediated media
+> actions. Install a matching host build before using those grants or variants.
+
 A plugin is a function: Serein passes it JSON, it returns JSON, and the host renders
 native controls or presents an action for the user to apply. Each call gets a fresh
 Wasm instance. Save persistent choices through `storage`, not global variables.
@@ -10,13 +14,38 @@ app; return the appropriate output or host action instead.
 
 | I want to… | Read this |
 | --- | --- |
+| Understand what plugins can do | [SDK overview](../../docs/extension-sdk-overview.md) |
 | Build and run a first plugin | Follow this page |
+| Diagnose an import, handler or Apply failure | [Troubleshooting](../../docs/extension-sdk-troubleshooting.md) |
 | Understand handler input and reactive events | [Inputs and events](../../docs/extension-sdk-reference.md#invocation-and-events) |
 | Read channels, messages, members, voice or settings | [App data fields](../../docs/extension-sdk-reference.md#app-data) |
 | Navigate, change settings or control the current call | [Outputs and host actions](../../docs/extension-sdk-actions.md#outputs-and-host-actions) |
 | Build a form and save its values | [Panels and storage](../../docs/extension-sdk-actions.md#panels-and-storage) |
 | Choose permissions | [Capability reference](../../docs/extensions.md#capability-reference) |
 | Change colors or native control sizes | [Theme fields](../../docs/theme-api.md) |
+
+## Before you start
+
+You need a Serein source checkout, Rust installed through `rustup`, and Python 3
+available as `python`. Run commands in that checkout so Rust uses its pinned
+`rust-toolchain.toml`. Building the native demo also needs the platform build
+prerequisites in the [repository README](../../README.md). No Discord account or
+credentials are needed for this tutorial.
+
+You will create **Hello Context**, a small panel that displays the selected
+synthetic channel. The steps are: copy the manifest, copy the handler, build a
+Wasm module, package it, then import and enable it in the offline demo. A manifest
+declares permissions and entry points; it does not contain the plugin's code.
+
+Check your tools from the repository root:
+
+```powershell
+rustup show active-toolchain
+python --version
+```
+
+The first command should show the checkout's pinned toolchain, and the second
+Python 3. The first Rust command can install a missing pinned toolchain.
 
 ## Start with a working example
 
@@ -45,7 +74,8 @@ once in the copied workspace to update its lockfile. Review and commit that
 
 ## Configure the manifest
 
-This complete manifest defines one tool that displays the current channel:
+Step 1: replace `examples/extensions/app-toolbox/manifest.json` with this complete
+manifest. It defines one tool that displays the current channel:
 
 ```json
 {
@@ -76,7 +106,7 @@ Replace the example author and source URL before publishing.
 | `license` | string | License label; include the actual license in your source too. |
 | `source` | string | Public HTTPS source link, at most 2,048 UTF-8 bytes, without embedded credentials. It is metadata, not code to execute. |
 | `kind` | string | `plugin` for Wasm; declarative themes use `theme`. |
-| `capabilities` | string array | Only the permissions needed. Each requires consent; names must be known and unique. At most 32 declarations, with 32 supported today. |
+| `capabilities` | string array | Only the permissions needed. Each requires consent; names must be known and unique. At most 64 declarations, with 42 supported today. |
 | `actions` | object array | Entry points invoked by users or the host. Plugins need 1–16 actions with unique IDs. |
 
 `name`, `version`, `author` and `license` must be nonempty, at most 128 UTF-8 bytes,
@@ -159,7 +189,8 @@ older hosts can reject capabilities accepted by a newer checker.
 
 ## Write the handler
 
-Put this in `app-toolbox/src/lib.rs`:
+Step 2: replace `examples/extensions/app-toolbox/src/lib.rs` with this handler.
+The `show` action matches the manifest above:
 
 ```rust
 use serein_extension_sdk::{AppInvocation, AppOutput, Element, Output};
@@ -191,7 +222,7 @@ serein_extension_sdk::export!(handle);
 
 ## Build and package
 
-For the tutorial above, run from `examples/extensions/`:
+Step 3: open a terminal in `examples/extensions/` and run:
 
 ```powershell
 rustup target add wasm32-unknown-unknown
@@ -199,20 +230,35 @@ cargo build --locked --release --target wasm32-unknown-unknown -p app-toolbox
 python pack.py app-toolbox/manifest.json target/wasm32-unknown-unknown/release/app_toolbox.wasm packages/hello-context.serein-extension
 ```
 
-`pack.py` combines compiled Wasm and the manifest into one JSON package. Python is
-an authoring tool, not an end-user dependency. The filename may differ from the ID.
+The build creates `target/wasm32-unknown-unknown/release/app_toolbox.wasm`.
+`pack.py` prints the package path, byte count and SHA-256, and creates
+`packages/hello-context.serein-extension`. It combines compiled Wasm and the
+manifest into one JSON package. Python is an authoring tool, not an end-user
+dependency. The package filename may differ from the manifest ID.
 
-From the repository root, start the offline app:
+If you set `CARGO_TARGET_DIR`, use that build directory in the Wasm path passed
+to `pack.py`; Cargo will not necessarily write into this example's `target/`.
+
+Step 4: return to the repository root and start the offline app:
 
 ```powershell
 cargo run --locked -p serein -- --demo
 ```
 
-In **Settings > Extensions**, import the package, review the `app_context` grant
-and enable it. On the **Hello Context** card, choose **Open tool**, then
+Step 5: in **Settings > Extensions**, import
+`examples/extensions/packages/hello-context.serein-extension`, review the
+`app_context` grant and enable it. On the **Hello Context** card, choose **Open tool**, then
 **Show current channel**. It displays
 the selected synthetic channel, or the unavailable-context message. Import alone
 does not grant permissions or execute the plugin.
+
+Success means the native panel shows `You are in ... (ID ...).` or
+`No accessible channel is selected.` Neither result sends a message. If the tool
+is missing or reports an error, use the [troubleshooting checklist](../../docs/extension-sdk-troubleshooting.md).
+
+After editing the handler, rebuild and repackage, then import the new package and
+review its grants again. Replacing Rust source alone does not update an installed
+Wasm module.
 
 For an unchanged example, use its own manifest and matching compiled filename:
 `app_toolbox.wasm`, `guild_inspector.wasm`, `conversation_inspector.wasm`, `message_counter.wasm`, `message_delete_protector.wasm`, or
@@ -220,7 +266,7 @@ For an unchanged example, use its own manifest and matching compiled filename:
 
 ## Test and develop locally
 
-Append this test to the tutorial handler:
+Step 6: append this offline test to the tutorial handler:
 
 ```rust
 #[test]
@@ -239,6 +285,10 @@ Run from the repository root:
 cargo test --manifest-path examples/extensions/Cargo.toml --workspace --locked
 cargo clippy --manifest-path examples/extensions/Cargo.toml --workspace --all-targets --locked -- -D warnings
 ```
+
+Expect the `missing_channel_is_handled` test to pass. A passing native test proves
+this handler can decode the synthetic input and return the expected text; it does
+not prove Wasm imports, fuel limits or native UI behavior.
 
 `dispatch` handles `Invocation`; `dispatch_typed` supports wrappers. Both exercise
 JSON decoding/encoding and the 256 KiB I/O bound without raw pointers. Errors are
@@ -276,6 +326,37 @@ Generate Rust API docs with:
 cargo doc --manifest-path examples/extensions/Cargo.toml --locked -p serein-extension-sdk --no-deps
 ```
 
+## Choose your next step
+
+- Add a native form and a Save button with [Panels and storage](../../docs/extension-sdk-actions.md#panels-and-storage).
+- Read another granted group with [App data fields](../../docs/extension-sdk-reference.md#app-data).
+- Propose navigation or a settings change with [Outputs and host actions](../../docs/extension-sdk-actions.md#outputs-and-host-actions).
+- Choose a smaller starting example with the [SDK overview](../../docs/extension-sdk-overview.md).
+
+Keep the first plugin working before adding more permissions. The sections below
+explain existing examples and the ABI; they are references, not extra tutorial steps.
+
+## Try the conversation actions example
+
+[Conversation Actions](app-actions/src/lib.rs) provides a compact form for sending,
+editing/deleting, reactions, pins, read markers and thread creation. It requests
+separate write grants and produces one proposal per click. Inspect the destination
+and text in the native confirmation before choosing Apply. Importing or opening
+the form never sends a message.
+
+From `examples/extensions`, build and package it:
+
+```powershell
+cargo test --locked -p app-actions
+cargo build --locked --release --target wasm32-unknown-unknown -p app-actions
+python pack.py app-actions/manifest.json target/wasm32-unknown-unknown/release/app_actions.wasm packages/app-actions.serein-extension
+```
+
+Use synthetic `--demo` data to check rendering and proposal validation. A demo
+build does not establish service compatibility and does not authorize live
+Discord messages or calls. The host's sandbox check exercises all ten form
+operations offline through real Wasm.
+
 ## Reactive message plugins
 
 Start with [Message Counter's manifest](message-counter/manifest.json) and
@@ -296,7 +377,15 @@ every snapshot field, including unavailable and partial data.
 explains proposals and their grants. [App Toolbox](app-toolbox/src/lib.rs)
 demonstrates loaded account profiles, joined servers, selected-channel details,
 message metadata, relationships, scrolling preferences and device-local notification
-settings, and all 12 host action types. Its passive observer requests `data_events` along
+settings, and the original 12 host-effect types.
+[Conversation Actions](app-actions/src/lib.rs) demonstrates explicit message,
+reaction, pin, read-state and thread proposals using `AppAction`. Its separate
+write grants never authorize background actions; each proposal needs Apply.
+Preview reply, loaded-sticker, forward, channel, group/DM, server, role,
+moderation and host-mediated media operations
+are listed with complete JSON fields in the
+[action reference](../../docs/extension-sdk-actions.md#app-actions).
+App Toolbox's passive observer requests `data_events` along
 with `app_events` and the relevant read grants; it stores no event counts or
 conversation data. Detailed events are coalesced invalidation hints, not a full
 change log. See [event grants and reasons](../../docs/extension-sdk-reference.md#appeventkind-why-an-app-observer-ran).
@@ -325,9 +414,10 @@ and [Panels and storage](../../docs/extension-sdk-actions.md#panels-and-storage)
 ## Activation examples
 
 [Message delete protector](message-delete-protector/src/lib.rs) is an opt-in
-activation plugin. Successful activation with the `deleted_messages` grant keeps
-loaded deleted messages in bounded session memory while enabled. No-op activation
-works; `preserve_deleted_messages` is a compatibility field. The host highlights
+activation plugin whose current handler returns `Output::default()`. The host
+interprets successful activation with the `deleted_messages` grant as consent to keep
+loaded deleted messages in bounded session memory while enabled. The handler does
+not need to return `preserve_deleted_messages`; that is a compatibility field. The host highlights
 retained text and offers local controls without calling Discord. Deleted bodies
 are never supplied to this plugin, written to disk, or recovered from before they
 were loaded. Disable, logout, permission revocation and eviction release them.

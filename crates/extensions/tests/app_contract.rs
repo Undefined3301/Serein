@@ -4,6 +4,21 @@ use serein_extension_sdk as sdk;
 #[test]
 fn sdk_manifests_round_trip_all_capabilities_and_surfaces_through_host_validation() {
 	let mut manifest = test_manifest(vec![
+		Capability::RelationshipControl,
+		Capability::AccountControl,
+		Capability::AudioSettings,
+		Capability::VoiceConnect,
+		Capability::CameraControl,
+		Capability::MessageSend,
+		Capability::MessageManage,
+		Capability::ReactionsControl,
+		Capability::ReadStateControl,
+		Capability::ThreadsControl,
+		Capability::ChannelControl,
+		Capability::ServerControl,
+		Capability::RoleControl,
+		Capability::ModerationControl,
+		Capability::MediaControl,
 		Capability::MessageContent,
 		Capability::ForumData,
 		Capability::ConversationActivity,
@@ -278,6 +293,23 @@ fn snapshot() -> AppSnapshot {
 			smooth_scrolling: Some(true),
 			scroll_speed_percent: Some(125),
 		}),
+		audio_settings: Some(AudioSettingsSnapshot {
+			input_percent: 100,
+			output_percent: 80,
+			push_to_talk: true,
+			input_profile: "custom".into(),
+			suppression: "rnnoise".into(),
+			suppression_level: 2,
+			echo_cancellation: true,
+			automatic_gain: false,
+			sensitivity_db: Some(-50),
+		}),
+		own_presence: Some(OwnPresenceSnapshot {
+			status: "idle".into(),
+			custom_status: "Synthetic status".into(),
+			expires_at_ms: Some(123456),
+			share_game_activity: false,
+		}),
 		notification_settings: Some(NotificationSettingsSnapshot {
 			new_message: true,
 			current_channel: false,
@@ -300,6 +332,8 @@ fn snapshot() -> AppSnapshot {
 
 fn read_grants() -> Vec<Capability> {
 	vec![
+		Capability::AudioSettings,
+		Capability::AccountControl,
 		Capability::MessageContent,
 		Capability::ForumData,
 		Capability::ConversationActivity,
@@ -853,9 +887,9 @@ fn discovery_is_forward_tolerant_and_does_not_change_legacy_input() {
 	assert!(old.host.is_none());
 	let caps = HostInfo::current().capabilities.to_vec();
 	test_manifest(caps.clone()).validate().unwrap();
-	assert_eq!(caps.len(), 32);
+	assert_eq!(caps.len(), 47);
 	assert_eq!(HostInfo::current().app_events.len(), 21);
-	assert_eq!(std::collections::BTreeSet::from_iter(caps).len(), 32);
+	assert_eq!(std::collections::BTreeSet::from_iter(caps).len(), 47);
 }
 
 #[test]
@@ -958,4 +992,230 @@ fn scrolling_settings_are_optional_on_older_hosts_and_validate_speed_bounds() {
 	}
 	let old_app: sdk::AppSnapshot = serde_json::from_str("{}").unwrap();
 	assert!(old_app.notification_settings.is_none());
+}
+
+#[test]
+fn app_actions_round_trip_and_require_foreground_granted_confirmation() {
+	let actions = [
+		r#"{"type":"send_message","channel_id":"2","content":"hello"}"#,
+		r#"{"type":"send_reply","channel_id":"2","message_id":"3","content":"hello","mention":true}"#,
+		r#"{"type":"send_sticker","channel_id":"2","sticker_id":"5"}"#,
+		r#"{"type":"forward_message","channel_id":"2","message_id":"3","target_channel_ids":["6","7"],"note":"FYI"}"#,
+		r#"{"type":"edit_message","channel_id":"2","message_id":"3","content":"edited"}"#,
+		r#"{"type":"delete_message","channel_id":"2","message_id":"3"}"#,
+		r#"{"type":"set_reaction","channel_id":"2","message_id":"3","emoji":"wave:4","add":true}"#,
+		r#"{"type":"set_message_pinned","channel_id":"2","message_id":"3","pinned":true}"#,
+		r#"{"type":"mark_read","channel_id":"2","message_id":"3"}"#,
+		r#"{"type":"mark_channel_read","channel_id":"2"}"#,
+		r#"{"type":"mark_unread","channel_id":"2","message_id":"3"}"#,
+		r#"{"type":"mark_guild_read","guild_id":"1"}"#,
+		r#"{"type":"jump_to_unread"}"#,
+		r#"{"type":"create_thread","channel_id":"2","name":"Thread","message_id":"3"}"#,
+		r#"{"type":"create_forum_post","parent_id":"2","title":"Post","content":"hello"}"#,
+		r#"{"type":"set_thread_archived","channel_id":"2","archived":true}"#,
+		r#"{"type":"set_thread_locked","channel_id":"2","locked":false}"#,
+		r#"{"type":"set_thread_followed","channel_id":"2","followed":true}"#,
+		r#"{"type":"set_thread_pinned","channel_id":"2","pinned":false}"#,
+		r#"{"type":"rename_thread","channel_id":"2","name":"Renamed"}"#,
+		r#"{"type":"set_channel_mute","channel_id":"2","duration_seconds":3600}"#,
+		r#"{"type":"set_channel_notifications","channel_id":"2","level":2}"#,
+		r#"{"type":"set_guild_hide_muted","guild_id":"4","hide":true}"#,
+		r#"{"type":"create_channel","guild_id":"4","name":"general","kind":"text"}"#,
+		r#"{"type":"create_category","guild_id":"4","name":"Topics"}"#,
+		r#"{"type":"duplicate_channel","channel_id":"2","name":"general-copy"}"#,
+		r#"{"type":"edit_channel","channel_id":"2","before":{"name":"general","topic":"Old","slowmode":0,"nsfw":false,"overwrites":[]},"after":{"name":"general-chat","topic":"New","slowmode":5,"nsfw":false,"overwrites":[{"id":"4","kind":0,"allow":"1024","deny":"0"}]}}"#,
+		r#"{"type":"delete_channel","channel_id":"2"}"#,
+		r#"{"type":"move_channel","channel_id":"2","parent_id":"8","position":1,"lock_permissions":true,"shifts":[{"channel_id":"9","position":2}]}"#,
+		r#"{"type":"create_server_invite","guild_id":"4","channel_id":"2","max_age":3600,"max_uses":10,"temporary":false}"#,
+		r#"{"type":"leave_server","guild_id":"4"}"#,
+		r#"{"type":"leave_group","channel_id":"2"}"#,
+		r#"{"type":"rename_group","channel_id":"2","name":"Friends"}"#,
+		r#"{"type":"close_dm","channel_id":"2"}"#,
+		r#"{"type":"set_conversation_muted","channel_id":"2","muted":true}"#,
+		r#"{"type":"open_friend_dm","user_id":"4"}"#,
+		r#"{"type":"set_friend_nickname","user_id":"4","text":"Friend"}"#,
+		r#"{"type":"set_user_note","user_id":"4","text":"Note"}"#,
+		r#"{"type":"add_friend","username":"a_friend"}"#,
+		r#"{"type":"remove_friend","user_id":"4"}"#,
+		r#"{"type":"resolve_friend_request","user_id":"4","accept":true}"#,
+		r#"{"type":"set_user_blocked","user_id":"4","blocked":true}"#,
+		r#"{"type":"set_own_profile","profile":{"bio":"Hello"}}"#,
+		r#"{"type":"set_own_presence","presence":{"status":"idle"}}"#,
+		r#"{"type":"set_activity_sharing","enabled":false}"#,
+		r#"{"type":"set_audio_settings","settings":{"input_percent":100}}"#,
+		r#"{"type":"set_participant_audio","user_id":"4","volume_percent":0,"muted":true}"#,
+		r#"{"type":"set_stream_audio","volume_percent":200,"muted":false}"#,
+		r#"{"type":"watch_stream","user_id":"4"}"#,
+		r#"{"type":"stop_watching"}"#,
+		r#"{"type":"decline_call","channel_id":"2"}"#,
+		r#"{"type":"join_voice","channel_id":"2","ring":false,"muted":true,"deafened":false}"#,
+		r#"{"type":"set_camera","enabled":false}"#,
+	];
+	for wire in actions {
+		let action: AppAction = serde_json::from_str(wire).unwrap();
+		let authored: sdk::AppAction = serde_json::from_str(wire).unwrap();
+		assert_eq!(
+			serde_json::to_value(&authored).unwrap(),
+			serde_json::to_value(&action).unwrap()
+		);
+		action.validate().unwrap();
+		let effect = HostEffect::AppAction { action };
+		let mut manifest = test_manifest(vec![effect.required_capability()]);
+		effect.validate(&manifest).unwrap();
+		assert!(matches!(
+			effect.validate(&test_manifest(vec![])),
+			Err(Error::Capability)
+		));
+		let output = Output {
+			effects: vec![effect],
+			..Default::default()
+		};
+		let input = Invocation {
+			action: "run".into(),
+			..Default::default()
+		};
+		output.validate(&manifest, &input).unwrap();
+		let authored: sdk::AppOutput =
+			serde_json::from_value(serde_json::to_value(&output).unwrap()).unwrap();
+		assert_eq!(
+			serde_json::to_value(authored.effects).unwrap(),
+			serde_json::to_value(&output.effects).unwrap()
+		);
+		for surface in [
+			Surface::Activation,
+			Surface::MessageEvent,
+			Surface::AppEvent,
+		] {
+			manifest.actions[0].surface = surface;
+			assert!(matches!(
+				output.validate(&manifest, &input),
+				Err(Error::Capability)
+			));
+		}
+		manifest.actions[0].surface = Surface::Panel;
+		let doubled = Output {
+			effects: vec![output.effects[0].clone(); 2],
+			..Default::default()
+		};
+		assert!(matches!(
+			doubled.validate(&manifest, &input),
+			Err(Error::Limit)
+		));
+	}
+}
+
+#[test]
+fn app_action_patches_reject_invalid_ranges_conflicts_and_unbounded_text() {
+	for wire in [
+		r#"{"type":"send_message","channel_id":"0","content":"hello"}"#,
+		r#"{"type":"send_message","channel_id":"2","content":" "}"#,
+		r#"{"type":"send_reply","channel_id":"2","message_id":"0","content":"hello","mention":false}"#,
+		r#"{"type":"send_sticker","channel_id":"2","sticker_id":"0"}"#,
+		r#"{"type":"forward_message","channel_id":"2","message_id":"3","target_channel_ids":[],"note":""}"#,
+		r#"{"type":"forward_message","channel_id":"2","message_id":"3","target_channel_ids":["6","6"],"note":""}"#,
+		r#"{"type":"set_reaction","channel_id":"2","message_id":"3","emoji":"wave:0","add":true}"#,
+		r#"{"type":"set_reaction","channel_id":"2","message_id":"3","emoji":"x:4","add":true}"#,
+		r#"{"type":"set_own_profile","profile":{}}"#,
+		r#"{"type":"set_own_profile","profile":{"global_name":"Name","clear_global_name":true}}"#,
+		r#"{"type":"set_own_profile","profile":{"accent_color":16777216}}"#,
+		r#"{"type":"set_own_presence","presence":{}}"#,
+		r#"{"type":"set_own_presence","presence":{"custom_status":" padded "}}"#,
+		r#"{"type":"set_user_note","user_id":"4","text":"note\rline"}"#,
+		r#"{"type":"set_own_presence","presence":{"status":"offline"}}"#,
+		r#"{"type":"set_own_presence","presence":{"clear_after_seconds":86401}}"#,
+		r#"{"type":"set_audio_settings","settings":{}}"#,
+		r#"{"type":"set_audio_settings","settings":{"input_percent":201}}"#,
+		r#"{"type":"set_audio_settings","settings":{"suppression_level":4}}"#,
+		r#"{"type":"set_audio_settings","settings":{"sensitivity_db":-81}}"#,
+		r#"{"type":"set_audio_settings","settings":{"sensitivity_db":-40,"open_microphone":true}}"#,
+		r#"{"type":"set_audio_settings","settings":{"input_profile":"unknown"}}"#,
+		r#"{"type":"set_stream_audio"}"#,
+		r#"{"type":"set_participant_audio","user_id":"4","volume_percent":201}"#,
+		r#"{"type":"add_friend","username":"invalid..name"}"#,
+		r#"{"type":"set_channel_mute","channel_id":"2","duration_seconds":60}"#,
+		r#"{"type":"set_channel_notifications","channel_id":"2","level":4}"#,
+		r#"{"type":"create_channel","guild_id":"4","name":"general","kind":"stage"}"#,
+		r#"{"type":"edit_channel","channel_id":"2","before":{"name":"general","topic":"","slowmode":0,"nsfw":false,"overwrites":[]},"after":{"name":"general","topic":"","slowmode":21601,"nsfw":false,"overwrites":[]}}"#,
+		r#"{"type":"edit_channel","channel_id":"2","before":{"name":"general","topic":"","slowmode":0,"nsfw":false,"overwrites":[]},"after":{"name":"general","topic":"","slowmode":0,"nsfw":false,"overwrites":[{"id":"4","kind":2,"allow":"0","deny":"0"}]}}"#,
+		r#"{"type":"move_channel","channel_id":"2","parent_id":null,"position":-1,"lock_permissions":false,"shifts":[]}"#,
+		r#"{"type":"move_channel","channel_id":"2","parent_id":null,"position":0,"lock_permissions":false,"shifts":[{"channel_id":"9","position":1},{"channel_id":"9","position":2}]}"#,
+		r#"{"type":"create_server_invite","guild_id":"4","channel_id":"2","max_age":2592001,"max_uses":0,"temporary":false}"#,
+		r#"{"type":"create_server_invite","guild_id":"4","channel_id":"2","max_age":0,"max_uses":101,"temporary":false}"#,
+		r#"{"type":"rename_group","channel_id":"2","name":" "}"#,
+	] {
+		let action: AppAction = serde_json::from_str(wire).unwrap();
+		assert!(action.validate().is_err(), "{wire}");
+	}
+	for wire in [
+		r#"{"type":"set_camera","enabled":true,"unknown":true}"#,
+		r#"{"type":"set_own_profile","profile":{"unknown":true}}"#,
+	] {
+		assert!(serde_json::from_str::<AppAction>(wire).is_err());
+	}
+	for size in [2000, 2001] {
+		let action = AppAction::SendMessage {
+			channel_id: "2".into(),
+			content: "a".repeat(size),
+		};
+		assert_eq!(action.validate().is_ok(), size == 2000);
+	}
+	let escaping = HostEffect::AppAction {
+		action: AppAction::SendMessage {
+			channel_id: "2".into(),
+			content: "\n".repeat(1999) + "x",
+		},
+	};
+	escaping
+		.validate(&test_manifest(vec![Capability::MessageSend]))
+		.unwrap();
+	let large = HostEffect::AppAction {
+		action: AppAction::CreateForumPost {
+			parent_id: "2".into(),
+			title: "\u{1f600}".repeat(100),
+			content: "\u{1f600}".repeat(2000),
+		},
+	};
+	assert!(matches!(
+		large.validate(&test_manifest(vec![Capability::ThreadsControl])),
+		Err(Error::Limit)
+	));
+	OwnProfilePatch {
+		clear_global_name: true,
+		clear_accent_color: true,
+		..Default::default()
+	}
+	.validate()
+	.unwrap();
+	OwnPresencePatch {
+		custom_status: Some(String::new()),
+		clear_after_seconds: Some(0),
+		..Default::default()
+	}
+	.validate()
+	.unwrap();
+	AudioSettingsPatch {
+		input_percent: Some(0),
+		output_percent: Some(200),
+		sensitivity_db: Some(-80),
+		..Default::default()
+	}
+	.validate()
+	.unwrap();
+}
+
+#[test]
+fn preference_snapshots_are_bounded_and_old_hosts_can_omit_them() {
+	let mut data = snapshot();
+	let manifest = test_manifest(read_grants());
+	data.audio_settings.as_mut().unwrap().input_percent = 201;
+	assert!(data.validate(&manifest).is_err());
+	data.audio_settings.as_mut().unwrap().input_percent = 100;
+	data.audio_settings.as_mut().unwrap().sensitivity_db = None;
+	data.validate(&manifest).unwrap();
+	data.own_presence.as_mut().unwrap().custom_status = " padded ".into();
+	assert!(data.validate(&manifest).is_err());
+	data.own_presence.as_mut().unwrap().custom_status = "x".repeat(129);
+	assert!(data.validate(&manifest).is_err());
+	let old: sdk::AppSnapshot = serde_json::from_str("{}").unwrap();
+	assert!(old.audio_settings.is_none() && old.own_presence.is_none());
 }

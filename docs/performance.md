@@ -1825,3 +1825,58 @@ exercise profile decoding or UI rendering.
 Native before/after interaction, CPU/RSS and frame timing remain unmeasured:
 Computer Use could not connect to its native pipe (`os error 2`). Headless
 profile UI tests passed but do not establish native or live Discord behavior.
+
+
+## SDK app actions - September 22, 2026
+
+Compared the SDK host at `e761bf0` with the app-action expansion on Windows,
+Rust 1.98.1, release `sdk_check`: one warmup followed by five samples of twenty
+fresh-runtime invocations, reporting the median. Both use the same 18,296-byte
+synthetic Toolbox snapshot. The task also incorporates main through `6367d3d`;
+that intervening hover change does not affect the extension host crate.
+
+| Metric | Before | After | Delta |
+| --- | ---: | ---: | ---: |
+| Committed Toolbox invocation | 5,597.285 us | 6,007.710 us | +410.425 us / +7.33% |
+| Rebuilt Toolbox invocation | 5,555.735 us | 5,981.995 us | +426.260 us / +7.67% |
+| Rebuilt Toolbox Wasm | 334,225 bytes | 359,380 bytes | +25,155 bytes / +7.53% |
+
+The host now advertises ten additional capabilities; rebuilt SDK code includes
+35 typed actions and two optional preference snapshots. This is measurable
+invocation overhead, not a claimed performance improvement. Timing is a single
+local comparison under ordinary development load, not a cross-machine guarantee,
+UI latency or snapshot-construction measurement. Existing committed plugins and
+all rebuilt examples pass the real sandbox check at unchanged fuel/memory limits.
+
+Conversation Actions is a new optional example: 346,486 Wasm bytes and a
+1,003,107-byte JSON package. It is not added to the production bundle or catalog.
+One foreground proposal remains capped at 8 KiB, snapshots at 64 KiB, ABI buffers
+at 256 KiB, and local participant overrides at 64 slots. There is no new dependency,
+worker, timer, network API or cache. Native screenshots/CPU/RSS/frame measurements
+are unavailable because Computer Use cannot connect to its native pipe (`os error 2`).
+Both standard voice-enabled Windows packages built successfully with
+`cargo xtask package`, using one build job and the same shared dependency cache.
+The changed crates were cleaned before each build to prevent stale cross-worktree
+artifacts. Baseline `7a64a4611067a11308f8e99f300631b760573608` and implementation
+`a0dbc87ccf9875f5b34ada0433a3992c7816444e` outputs were retained separately.
+
+| Package metric | Before | After | Delta |
+| --- | ---: | ---: | ---: |
+| Executable | 71,403,008 bytes | 71,844,864 bytes | +441,856 / +0.62% |
+| Installed directory | 75,505,692 bytes | 75,947,548 bytes | +441,856 / +0.59% |
+| Portable ZIP | 42,842,855 bytes | 42,970,627 bytes | +127,772 / +0.30% |
+
+Installed size sums all files in each fresh `dist` directory. ZIPs use .NET
+`ZipFile.CreateFromDirectory` with Optimal compression and no enclosing directory.
+Both builds reported the existing OpenH264 LNK4255 debug-information warning;
+NSIS was unavailable, so no Windows installer was produced. Packaging does not
+establish live Discord interoperability.
+
+
+The real native demo snapshot also exposed a pre-existing App Toolbox fuel
+failure, reproduced on clean `7a64a46`. The collector now limits combined
+`timeline` plus `message_details` to 12 rows each and reports truncation.
+Timeline-only reads retain 50 rows, metadata-only reads retain 20. The unchanged
+real-Wasm demo regression test and all ten desktop SDK integration tests pass
+with the same 5,000,000-fuel limit. The timing table above uses its original fixed
+synthetic snapshot; it does not measure this collector reduction.

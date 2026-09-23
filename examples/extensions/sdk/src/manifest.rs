@@ -30,6 +30,23 @@ pub enum ExtensionKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
+	RelationshipControl,
+	AccountControl,
+	AudioSettings,
+	VoiceConnect,
+	CameraControl,
+
+	MessageSend,
+	MessageManage,
+	ReactionsControl,
+	ReadStateControl,
+	ThreadsControl,
+	ChannelControl,
+	ServerControl,
+	RoleControl,
+	ModerationControl,
+	MediaControl,
+
 	MessageContent,
 	ForumData,
 	ConversationActivity,

@@ -62,6 +62,10 @@ pub struct AppSnapshot {
 	pub settings: Option<LocalSettingsSnapshot>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub notification_settings: Option<NotificationSettingsSnapshot>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub audio_settings: Option<AudioSettingsSnapshot>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub own_presence: Option<OwnPresenceSnapshot>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -403,10 +407,433 @@ pub enum AppView {
 	VoiceSettings,
 }
 
-/// One local host proposal per response, applied only after explicit user confirmation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AudioSettingsSnapshot {
+	pub input_percent: u16,
+	pub output_percent: u16,
+	pub push_to_talk: bool,
+	pub input_profile: String,
+	pub suppression: String,
+	pub suppression_level: u8,
+	pub echo_cancellation: bool,
+	pub automatic_gain: bool,
+	pub sensitivity_db: Option<i16>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OwnPresenceSnapshot {
+	pub status: String,
+	pub custom_status: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub expires_at_ms: Option<u64>,
+	pub share_game_activity: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OwnProfilePatch {
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub global_name: Option<String>,
+	pub clear_global_name: bool,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub bio: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub pronouns: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub accent_color: Option<u32>,
+	pub clear_accent_color: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OwnPresencePatch {
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub status: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub custom_status: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub clear_after_seconds: Option<u32>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AudioSettingsPatch {
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub input_percent: Option<u16>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub output_percent: Option<u16>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub push_to_talk: Option<bool>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub input_profile: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub suppression: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub suppression_level: Option<u8>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub echo_cancellation: Option<bool>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub automatic_gain: Option<bool>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub sensitivity_db: Option<i16>,
+	pub open_microphone: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PermissionOverwriteInput {
+	pub id: String,
+	pub kind: u8,
+	pub allow: String,
+	pub deny: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChannelEditInput {
+	pub name: String,
+	pub topic: String,
+	pub slowmode: u32,
+	pub nsfw: bool,
+	pub overwrites: Vec<PermissionOverwriteInput>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChannelPositionInput {
+	pub channel_id: String,
+	pub position: i32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ServerTraitInput {
+	pub label: String,
+	pub emoji: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ServerSettingsPatch {
+	pub name: Option<String>,
+	pub banner_color: Option<u32>,
+	pub traits: Option<Vec<ServerTraitInput>>,
+	pub description: Option<String>,
+	pub system_channel_id: Option<String>,
+	pub clear_system_channel: bool,
+	pub system_channel_flags: Option<u64>,
+	pub activity_feed: Option<bool>,
+	pub default_message_notifications: Option<u8>,
+	pub afk_channel_id: Option<String>,
+	pub clear_afk_channel: bool,
+	pub afk_timeout: Option<u32>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RolePatch {
+	pub name: Option<String>,
+	pub primary_color: Option<u32>,
+	pub secondary_color: Option<u32>,
+	pub tertiary_color: Option<u32>,
+	pub permissions: Option<String>,
+	pub permission_mask: Option<String>,
+	pub hoist: Option<bool>,
+	pub mentionable: Option<bool>,
+	pub unicode_emoji: Option<String>,
+	pub clear_unicode_emoji: bool,
+}
+
+/// App operation proposed by a foreground action; the host revalidates it at Apply.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AppAction {
+	OpenFriendDm {
+		user_id: String,
+	},
+	SetFriendNickname {
+		user_id: String,
+		text: String,
+	},
+	SetUserNote {
+		user_id: String,
+		text: String,
+	},
+	AddFriend {
+		username: String,
+	},
+	RemoveFriend {
+		user_id: String,
+	},
+	ResolveFriendRequest {
+		user_id: String,
+		accept: bool,
+	},
+	SetUserBlocked {
+		user_id: String,
+		blocked: bool,
+	},
+	SetOwnProfile {
+		profile: OwnProfilePatch,
+	},
+	SetOwnPresence {
+		presence: OwnPresencePatch,
+	},
+	SetActivitySharing {
+		enabled: bool,
+	},
+	SetAudioSettings {
+		settings: AudioSettingsPatch,
+	},
+	SetParticipantAudio {
+		user_id: String,
+		volume_percent: Option<u16>,
+		muted: Option<bool>,
+	},
+	SetStreamAudio {
+		volume_percent: Option<u16>,
+		muted: Option<bool>,
+	},
+	WatchStream {
+		user_id: String,
+	},
+	StopWatching,
+	DeclineCall {
+		channel_id: String,
+	},
+	JoinVoice {
+		channel_id: String,
+		ring: bool,
+		muted: bool,
+		deafened: bool,
+	},
+	SetCamera {
+		enabled: bool,
+	},
+	OpenAttachmentPicker {
+		channel_id: String,
+	},
+	SelectAudioDevices {
+		input_id: Option<String>,
+		output_id: Option<String>,
+	},
+	RefreshMediaDevices,
+	SelectCameraDevice {
+		device_id: Option<String>,
+	},
+	OpenScreenSharePicker,
+	StopScreenShare,
+
+	SendMessage {
+		channel_id: String,
+		content: String,
+	},
+	SendReply {
+		channel_id: String,
+		message_id: String,
+		content: String,
+		mention: bool,
+	},
+	SendSticker {
+		channel_id: String,
+		sticker_id: String,
+	},
+	ForwardMessage {
+		channel_id: String,
+		message_id: String,
+		target_channel_ids: Vec<String>,
+		note: String,
+	},
+	EditMessage {
+		channel_id: String,
+		message_id: String,
+		content: String,
+	},
+	DeleteMessage {
+		channel_id: String,
+		message_id: String,
+	},
+	SetReaction {
+		channel_id: String,
+		message_id: String,
+		emoji: String,
+		add: bool,
+	},
+	SetMessagePinned {
+		channel_id: String,
+		message_id: String,
+		pinned: bool,
+	},
+	MarkRead {
+		channel_id: String,
+		message_id: String,
+	},
+	MarkChannelRead {
+		channel_id: String,
+	},
+	MarkUnread {
+		channel_id: String,
+		message_id: String,
+	},
+	MarkGuildRead {
+		guild_id: String,
+	},
+	JumpToUnread,
+	CreateThread {
+		channel_id: String,
+		name: String,
+		message_id: Option<String>,
+	},
+	CreateForumPost {
+		parent_id: String,
+		title: String,
+		content: String,
+	},
+	SetThreadArchived {
+		channel_id: String,
+		archived: bool,
+	},
+	SetThreadLocked {
+		channel_id: String,
+		locked: bool,
+	},
+	SetThreadFollowed {
+		channel_id: String,
+		followed: bool,
+	},
+	SetThreadPinned {
+		channel_id: String,
+		pinned: bool,
+	},
+	RenameThread {
+		channel_id: String,
+		name: String,
+	},
+	SetChannelMute {
+		channel_id: String,
+		duration_seconds: Option<u32>,
+	},
+	SetChannelNotifications {
+		channel_id: String,
+		level: u8,
+	},
+	SetGuildHideMuted {
+		guild_id: String,
+		hide: bool,
+	},
+	CreateChannel {
+		guild_id: String,
+		name: String,
+		kind: String,
+	},
+	CreateCategory {
+		guild_id: String,
+		name: String,
+	},
+	DuplicateChannel {
+		channel_id: String,
+		name: String,
+	},
+	EditChannel {
+		channel_id: String,
+		before: ChannelEditInput,
+		after: ChannelEditInput,
+	},
+	DeleteChannel {
+		channel_id: String,
+	},
+	MoveChannel {
+		channel_id: String,
+		parent_id: Option<String>,
+		position: i32,
+		lock_permissions: bool,
+		shifts: Vec<ChannelPositionInput>,
+	},
+	CreateServerInvite {
+		guild_id: String,
+		channel_id: Option<String>,
+		max_age: u32,
+		max_uses: u16,
+		temporary: bool,
+	},
+	LeaveServer {
+		guild_id: String,
+	},
+	UpdateServerSettings {
+		guild_id: String,
+		settings: ServerSettingsPatch,
+	},
+	CreateRole {
+		guild_id: String,
+		role: RolePatch,
+	},
+	EditRole {
+		guild_id: String,
+		role_id: String,
+		role: RolePatch,
+	},
+	DeleteRole {
+		guild_id: String,
+		role_id: String,
+	},
+	MoveRole {
+		guild_id: String,
+		role_id: String,
+		position: i32,
+	},
+	SetMemberRole {
+		guild_id: String,
+		user_id: String,
+		role_id: String,
+		assigned: bool,
+	},
+	SetMemberNickname {
+		guild_id: String,
+		user_id: String,
+		nickname: String,
+	},
+	KickMember {
+		guild_id: String,
+		user_id: String,
+	},
+	PruneMembers {
+		guild_id: String,
+		days: u8,
+		execute: bool,
+	},
+	SetMemberListVisible {
+		guild_id: String,
+		enabled: bool,
+	},
+	RenameServerEmoji {
+		guild_id: String,
+		emoji_id: String,
+		name: String,
+	},
+	DeleteServerEmoji {
+		guild_id: String,
+		emoji_id: String,
+	},
+	LeaveGroup {
+		channel_id: String,
+	},
+	RenameGroup {
+		channel_id: String,
+		name: String,
+	},
+	CloseDm {
+		channel_id: String,
+	},
+	SetConversationMuted {
+		channel_id: String,
+		muted: bool,
+	},
+}
+
+/// One host proposal per response, applied only after explicit user confirmation.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HostEffect {
+	AppAction {
+		action: AppAction,
+	},
 	Navigate {
 		channel_id: String,
 	},

@@ -1554,6 +1554,27 @@ impl State {
 	pub fn prepare_send(&mut self) -> Option<Command> {
 		self.prepare_send_with_attachment(None)
 	}
+	/// Queue explicit text without consuming the composer draft or reply target.
+	pub fn prepare_text_send(&mut self, content: &str) -> Option<Command> {
+		self.prepare_message_content(&[], None, true, Some(content), None)
+	}
+	/// Queue an explicit reply without consuming the composer draft or its reply target.
+	pub fn prepare_reply_send(
+		&mut self,
+		target: Id,
+		content: &str,
+		mention: bool,
+	) -> Option<Command> {
+		let channel = self.selected?;
+		let message = self.timeline.get(target)?;
+		if message.channel != channel || message.ephemeral || !self.accepts_reply_source(message) {
+			self.status = "This message is unavailable for replies";
+			return None;
+		}
+		let mut reply = Reply::to(target);
+		reply.mention = mention;
+		self.prepare_message_content(&[], None, true, Some(content), Some(reply))
+	}
 	pub fn prepare_send_with_attachment(&mut self, filename: Option<&str>) -> Option<Command> {
 		self.prepare_send_with_attachments(filename.as_slice())
 	}
@@ -1570,6 +1591,16 @@ impl State {
 		filenames: &[&str],
 		sticker: Option<&Sticker>,
 		preserve_draft: bool,
+	) -> Option<Command> {
+		self.prepare_message_content(filenames, sticker, preserve_draft, None, None)
+	}
+	fn prepare_message_content(
+		&mut self,
+		filenames: &[&str],
+		sticker: Option<&Sticker>,
+		preserve_draft: bool,
+		explicit_content: Option<&str>,
+		explicit_reply: Option<Reply>,
 	) -> Option<Command> {
 		let channel = self.selected?;
 		if !self.can_send(channel) || (!filenames.is_empty() && !self.can_attach(channel)) {
@@ -1591,7 +1622,9 @@ impl State {
 			self.status = "Attachment filename is invalid or too long";
 			return None;
 		}
-		let content = if sticker.is_some() || preserve_draft {
+		let content = if let Some(content) = explicit_content {
+			content
+		} else if sticker.is_some() || preserve_draft {
 			""
 		} else {
 			self.drafts.get(&channel).map_or("", String::as_str)
@@ -1637,7 +1670,11 @@ impl State {
 			channel,
 			content,
 			nonce,
-			reply: self.reply.take(),
+			reply: match (explicit_reply, explicit_content) {
+				(Some(reply), _) => Some(reply),
+				(None, None) => self.reply.take(),
+				(None, Some(_)) => None,
+			},
 		})
 	}
 	/// Reports a command the transport could not accept as a bounded outcome error.

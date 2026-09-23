@@ -2,8 +2,9 @@
 
 Serein extensions are local, opt-in tools for the native client. The Extensions
 and Themes pages in Settings contain packages, links to their source, their
-requested capabilities and their review status. A plugin cannot directly call Discord,
-send a message, read credentials, open files or make network requests.
+requested capabilities and their review status. A plugin cannot directly call Discord, read credentials, open files or make
+network requests. Separately granted foreground actions can propose messages
+and other app operations; the user reviews and applies each operation in Serein.
 
 ## Install and remove
 
@@ -119,7 +120,12 @@ Unknown API versions and invalid packages are rejected before installation.
 
 Each capability is independent and requires user consent. An update requests
 renewed consent; adding a read grant does not grant commands. The SDK currently
-supports 32 capabilities, with at most 32 distinct declarations per manifest.
+supports 47 capabilities, with at most 64 distinct declarations per manifest.
+
+> **Preview SDK — PR #405, not yet released.** `channel_control`,
+> `server_control`, `role_control`, `moderation_control` and `media_control`, plus
+> the reply, sticker and forward operations under `message_send`, require a host
+> built from this branch.
 
 | Capability | Granted behavior | Scope / confirmation |
 | --- | --- | --- |
@@ -141,9 +147,9 @@ supports 32 capabilities, with at most 32 distinct declarations per manifest.
 | `conversation_activity` | Read current typing IDs and a loaded pin page | Selected readable conversation; 8 typing IDs/20 pin IDs/2 KiB; no fetch |
 | `channel_metadata` | Read loaded guild channel topic/category/thread metadata and permission decisions | Fresh readable selected guild channel; unknown remains optional; 6 KiB; no settings fetch |
 | `member_details` | Read loaded guild member nicknames, role labels and matching server profile | Fresh selected member pane; 20 members/32 role IDs each/32 catalog roles; 6 KiB; no fetch |
-| `message_details` | Read loaded message metadata: replies, mentions, attachment labels and reaction counts | Fresh readable selected timeline; at most 20 messages; no text or URLs |
+| `message_details` | Read loaded message metadata: replies, mentions, attachment labels and reaction counts | Fresh readable selected timeline; at most 20 messages (12 with `timeline`); no text or URLs |
 | `relationships` | Read loaded friends, requests and restricted-account labels | Connected; at most 100; known flags distinguish unloaded lists; no fetch |
-| `timeline` | Read ordinary loaded messages in the active conversation | Fresh readable timeline, at most 50 (20 with `message_details`); no deleted/ephemeral text |
+| `timeline` | Read ordinary loaded messages in the active conversation | Fresh readable timeline, at most 50 (12 with `message_details`); no deleted/ephemeral text |
 | `members` | Read loaded members or DM recipients | Active channel, at most 100; no fetch |
 | `presence` | Read cached status strings for that context | At most 100; no activity/private device payloads |
 | `voice_state` | Read current call state and participant IDs | At most 64 participants; no raw media |
@@ -153,8 +159,23 @@ supports 32 capabilities, with at most 32 distinct declarations per manifest.
 | `navigation` | Propose channel, Home, view, profile, message or search navigation | Existing native paths; each command requires Apply |
 | `local_notices` | Propose an in-app toast | At most 1,024 text bytes; requires Apply |
 | `clipboard_write` | Propose replacing clipboard text | At most 4,096 bytes; requires Apply; no clipboard read |
-| `voice_control` | Propose mute/deafen or leave for the current call | Each command requires Apply; cannot join calls or start media |
+| `voice_control` | Propose mute/deafen, leaving or watching/stopping a participant stream | Each command requires Apply and the same current call |
 | `app_events` | Observe ready/navigation/context/connection/voice/settings changes | Other grants control accompanying data; no background commands |
+| `message_send` | Propose sending text, replies, loaded stickers, a loaded-message forward, or opening the native attachment picker | Apply; selected accessible targets; picker discloses no file path/bytes to Wasm; preserves existing composition |
+| `message_manage` | Propose editing, deleting or pinning a loaded message | Apply; native ownership/moderation checks |
+| `reactions_control` | Propose adding/removing your reaction | Apply; known message and current reaction state |
+| `read_state_control` | Propose channel/server read markers | Apply; existing read-state checks |
+| `threads_control` | Propose creating, renaming or changing threads/forum posts | Apply; native channel/thread permissions |
+| `relationship_control` | Propose friend requests, relationship changes, nicknames and user notes; open a friend DM | Apply; existing relationship and loaded-note checks |
+| `account_control` | Read own status/activity preferences and propose profile, status and activity-sharing changes | Apply; profile readiness and native validation |
+| `audio_settings` | Read audio preferences and propose processing, gain, local playback, device selection or a device refresh | Apply; selected IDs must remain in the host's private device lists |
+| `voice_connect` | Propose joining/ringing or declining a call | Apply; connection/access checks; native call-switch confirmation |
+| `camera_control` | Propose enabling/disabling your camera or selecting a host-known camera | Apply; same current call, capture availability and native permissions |
+| `channel_control` | Propose channel creation/editing/deletion/reordering, channel notification settings, and DM/group controls | Apply; loaded targets and native permissions; destructive operations are identified before approval |
+| `server_control` | Propose server-settings/emoji changes, creating an invite or leaving a server | Apply; loaded server/settings and native permission checks |
+| `role_control` | Propose creating, editing, moving or deleting roles | Apply; native role hierarchy and permission checks |
+| `moderation_control` | Propose role assignment, nicknames, kicks, prune preview/execution and member-list visibility | Apply; native hierarchy/permission checks; destructive actions are identified |
+| `media_control` | Propose opening the native screen-share picker or stopping screen share | Apply; current-call checks; no source list or captured media reaches Wasm |
 
 ### App snapshots and confirmed commands
 
@@ -174,7 +195,8 @@ not consent; discovery never bypasses required manifest validation or grants.
 `app` contains separately granted optional `context`, `account_profile`, `guilds`,
 `channel_details`, `channels`, `timeline`, `members`, `presence`, `voice`,
 `read_state`, `settings`, `notification_settings`, `message_details`, `relationships`, `channel_metadata`
-`member_details`, `message_content`, `forum_data` and `conversation_activity` groups. A missing group
+`member_details`, `message_content`, `forum_data`, `conversation_activity`,
+`audio_settings` and `own_presence` groups. A missing group
 is unavailable or ungranted, not an empty dataset. Snapshot construction reads
 already-loaded state without network or disk IO. The complete serialized snapshot
 is capped at 64 KiB. Per-group budgets are 10 KiB for channels, 20 KiB for timeline,
@@ -187,8 +209,8 @@ are trimmed first, and groups can be omitted when no space remains. Rich-message
 content (8 KiB), forum data (6 KiB) and conversation activity (2 KiB) also share
 that ceiling; no new total snapshot allocation is authorized. The timeline
 skips messages larger than 4 KiB and reports partial data. Granting
-`message_details` also caps timeline rows at 20 instead of 50, while preserving
-the 20-KiB timeline byte budget and the shared Wasm fuel limit. Valid wire-sized
+`message_details` also caps both timeline text and metadata rows at 12 when requested together, while preserving
+the 20-KiB timeline byte budget and shared 10-million-fuel limit. Valid wire-sized
 inputs can still exceed execution fuel. Bounded list responses
 expose `truncated`; voice participant IDs are capped without a completeness flag.
 No snapshot includes tokens, deleted/ephemeral text, attachment bytes/URLs, raw
@@ -210,13 +232,14 @@ and scroll speed 25 through 300%. The separate `notification_settings` grant exp
 device-local notification toggles and sound volume 0 through 100%; it does not change
 Discord account/guild settings or play a cue. Both patches require at least one
 value, preserve omitted/null preferences at Apply time and reject invalid changes
-without applying any fields. Changes use the ordinary local persistence path. Voice
-commands affect only the existing call; they cannot join a call or enable camera,
-screen sharing or recording.
+without applying any fields. Changes use the ordinary local persistence path. The separate `voice_connect` and `camera_control` grants permit approved call
+joins/rings and camera changes. Screen-source selection and recording are not
+exposed. Read the [app-action reference](extension-sdk-actions.md#app-actions)
+for messaging, threads, relationships, account and audio operations.
 
 One `app_event` action may observe `ready`, `navigation`, `context`, `connection`,
-`voice` and `settings`. Settings events cover both reading and device-local
-notification preferences; each snapshot still requires its own grant. Context
+`voice` and `settings`. Settings events cover reading, notification, audio and own-presence/activity
+preferences; each snapshot still requires its own grant. Context
 events report loaded-data/freshness changes after navigation; use `message_events` for individual message changes. The additional
 `data_events` grant opts into `account`, `channels`, `members`, `presence`,
 `read_state`, `message_details`, `relationships`, `threads`, `roles`, `permissions`
@@ -238,7 +261,9 @@ events and activation cannot return host command proposals; background events
 cannot open panels. Granted `storage` and `appearance` outputs remain available.
 
 The [App Toolbox example](../examples/extensions/app-toolbox/src/lib.rs) provides
-an account/channel dashboard and explicit controls for all 12 command types. Its `app_event`
+an account/channel dashboard and explicit controls for the original 12 host-effect types.
+[Conversation Actions](../examples/extensions/app-actions/src/lib.rs) demonstrates
+the new typed `app_action` operations through a review form. Its `app_event`
 observer returns an empty output, and it saves no conversation data.
 [Guild Inspector](../examples/extensions/guild-inspector/src/lib.rs) separately
 shows optional channel settings/thread permissions and the first five loaded
@@ -374,7 +399,7 @@ invocation input/output, panel complexity, queues and plugin storage.
 | Execution fuel | 10,000,000 | Shared by parsing and execution; a valid-sized input can still exhaust it. |
 | Wasm call depth / interpreter stack | 128 calls / 256 KiB | Avoid deep recursion. |
 | Serialized input and output | 256 KiB each | Count UTF-8 and JSON escaping, including nested storage JSON. |
-| Manifest actions / capabilities | 16 / 32 distinct | Only the 32 supported capability names are currently accepted. |
+| Manifest actions / capabilities | 16 / 64 distinct | Only the 47 supported capability names are currently accepted. |
 | Panel | 64 elements / 8 row levels | Includes nested children; text and input values are at most 4 KiB each. |
 | Plugin storage on disk | 1 MiB | Its practical size must also fit the smaller invocation/output budget. |
 | App snapshot | 64 KiB | Individual lists have smaller budgets; see the [data reference](extension-sdk-reference.md#app-data). |
