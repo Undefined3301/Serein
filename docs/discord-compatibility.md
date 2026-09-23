@@ -13,7 +13,7 @@ A rejected request stays a placeholder.
 Tenor and Klipy previews stay on their original URL.
 
 A gifv embed with an allowed MP4, MOV, or M4V URL fetches that file and plays the frames through the platform video decoder.
-WebM is recognized as video and is not decoded on this path.
+A WebM URL stays on the poster or GIF path, because this decoder does not read WebM.
 If the clip yields fewer than two frames, the embed stays a placeholder.
 Live acceptance of the proxy query is unverified.
 

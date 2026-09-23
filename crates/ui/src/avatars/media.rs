@@ -783,7 +783,6 @@ pub fn is_motion_video(url: &str) -> bool {
 	let path = url.split(['?', '#']).next().unwrap_or(url);
 	path.rsplit_once('.').is_some_and(|(_, extension)| {
 		extension.eq_ignore_ascii_case("mp4")
-			|| extension.eq_ignore_ascii_case("webm")
 			|| extension.eq_ignore_ascii_case("mov")
 			|| extension.eq_ignore_ascii_case("m4v")
 	})
