@@ -14,7 +14,7 @@ Tenor and Klipy previews stay on their original URL.
 
 A gifv embed with an allowed MP4, MOV, or M4V URL fetches that file and plays the frames through the platform video decoder.
 A WebM URL stays on the poster or GIF path, because this decoder does not read WebM.
-If the clip yields fewer than two frames, the embed stays a placeholder.
+If the clip does not decode to at least two frames, the embed falls back to its GIF or poster.
 Live acceptance of the proxy query is unverified.
 
 ## Slash commands - September 22, 2026

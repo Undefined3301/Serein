@@ -262,7 +262,9 @@ impl Avatars {
 			},
 		);
 	}
+	/// Drained once per frame after the UI pass.
 	pub fn take_requests(&mut self) -> Vec<String> {
+		self.media.end_frame();
 		std::mem::take(&mut self.requests)
 	}
 	fn request(&mut self, key: String) {
@@ -975,7 +977,8 @@ impl Avatars {
 					.or(video
 						.proxy_url
 						.as_deref()
-						.filter(|url| media::is_motion_video(url)))?;
+						.filter(|url| media::is_motion_video(url)))
+					.filter(|url| self.media.playable(url))?;
 				Some(model::EmbedMedia {
 					url: Some(url.to_owned()),
 					proxy_url: video
@@ -1767,6 +1770,78 @@ mod tests {
 		)
 		.drop_without_applying_deltas();
 		assert_eq!(images.media.animation(&rendition).unwrap().frame, 1);
+	}
+
+	#[test]
+	fn gifv_falls_back_to_its_poster_when_the_clip_cannot_decode() {
+		let ctx = egui::Context::default();
+		let mut images = Avatars::default();
+		images.set_animation(true);
+		let poster = "https://media.discordapp.net/external/a/https/static.klipy.com/poster.png";
+		let embed = model::Embed {
+			kind: "gifv".into(),
+			thumbnail: Some(model::EmbedMedia {
+				url: Some(poster.into()),
+				width: 64,
+				height: 32,
+				..Default::default()
+			}),
+			video: Some(model::EmbedMedia {
+				url: Some("https://static.klipy.com/clip.mp4".into()),
+				width: 64,
+				height: 32,
+				..Default::default()
+			}),
+			..Default::default()
+		};
+		let frame = |images: &mut Avatars| {
+			ctx.run_ui(Default::default(), |ui| {
+				images.show_gif_embed(ui, &embed, None, egui::vec2(320.0, 320.0), false);
+			})
+			.drop_without_applying_deltas();
+			images.take_requests()
+		};
+		let clip = frame(&mut images);
+		assert_eq!(
+			clip,
+			["media:ia:64x32:https://static.klipy.com/clip.mp4".to_owned()]
+		);
+		images.accept(&ctx, clip[0].clone(), None);
+		let fallback = frame(&mut images);
+		assert_eq!(fallback, [format!("media:is:64x32:{poster}")]);
+		// The rejected clip is never requested again.
+		assert!(!frame(&mut images).iter().any(|key| key.ends_with(".mp4")));
+	}
+
+	#[test]
+	fn closing_the_viewer_releases_its_pixels_on_the_next_frame() {
+		let ctx = egui::Context::default();
+		let mut images = Avatars::default();
+		let media = model::EmbedMedia {
+			url: Some("https://cdn.discordapp.com/attachments/1/2/a.png".into()),
+			width: 64,
+			height: 32,
+			..Default::default()
+		};
+		let frame = |images: &mut Avatars, viewer: bool| {
+			ctx.run_ui(Default::default(), |ui| {
+				if viewer {
+					images.show_media(ui, &media, egui::vec2(100.0, 80.0), false, Surface::Viewer);
+				}
+			})
+			.drop_without_applying_deltas();
+			images.take_requests()
+		};
+		let key = frame(&mut images, true).pop().unwrap();
+		images.accept(
+			&ctx,
+			key,
+			Some(ColorImage::filled([64, 32], egui::Color32::WHITE)),
+		);
+		frame(&mut images, true);
+		assert_eq!(images.media.bytes(), 64 * 32 * 4);
+		frame(&mut images, false);
+		assert_eq!(images.media.bytes(), 0);
 	}
 
 	/// Offline settled media frames; no window, GPU, network, or account access.

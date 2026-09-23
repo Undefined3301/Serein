@@ -564,10 +564,12 @@ allocations and a 512-pixel output edge. A still message picture allows an 8192 
 The size ladder is 32, 64, 128, 256, 368, 512, 720, 1024, 1440, 2048, 2880, and 4096.
 The requested rung is never longer than the file.
 Inline stills keep 384 images and 96 MiB.
-Inline animations keep 96 clips and 192 MiB.
+Inline animations keep 96 clips and 128 MiB.
 One inline clip keeps 240 frames and 40 MiB.
-The viewer lane keeps 160 MiB and drops those pixels after the viewer stops painting.
-One viewer clip keeps 240 frames and 150 MiB.
+The viewer lane keeps 128 MiB and drops those pixels on the first frame the viewer is not painted.
+One viewer clip keeps 240 frames and 96 MiB.
+An animation that exceeds 600 frames or 3 seconds of decoding stays on its first frame.
+A gifv clip the platform decoder rejects is not retried; the embed shows its GIF or poster.
 GIF, WebP, and ISO-BMFF clips share that frame budget.
 Animation source dimensions are capped at 2048×2048, with a 48 MiB decoder allocation
 budget for the persistent RGBA canvas, current frame and composited output canvas.

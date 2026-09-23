@@ -1123,24 +1123,24 @@ fn decode_motion_video(
 	let mut fit = budget.fit;
 	let mut shrinks = budget.shrinks;
 	let mut posted = false;
+	// One owned copy for the decoder's 'static stream, shared by every shrink pass.
+	let bytes: Arc<[u8]> = bytes.into();
 	'decode: loop {
 		let mut decoder =
-			platform::video::Decoder::open(Box::new(Cursor::new(bytes.to_vec()))).ok()?;
+			platform::video::Decoder::open(Box::new(Cursor::new(bytes.clone()))).ok()?;
 		let duration = decoder.info().duration;
 		let mut frames: Vec<(f64, Arc<egui::ColorImage>)> = Vec::new();
 		let mut total = 0usize;
 		let mut stride = 1usize;
 		let mut index = 0usize;
 		loop {
-			if frames.len() >= 2 && (index >= 600 || started.elapsed() > Duration::from_secs(3)) {
-				break;
+			// A partial clip would loop with a visible jump; the embed falls back to its GIF instead.
+			if index >= 600 || started.elapsed() > Duration::from_secs(3) {
+				return None;
 			}
 			match decoder.poll_video() {
 				Ok(std::task::Poll::Pending) => {
 					let _ = decoder.poll_audio();
-					if started.elapsed() > Duration::from_secs(3) {
-						break;
-					}
 					std::thread::sleep(Duration::from_millis(2));
 				}
 				Ok(std::task::Poll::Ready(Some(platform::video::Sample::Video {
@@ -1253,8 +1253,10 @@ fn decode_animation(
 		let mut total = 0;
 		let mut stride = 1;
 		for (index, frame) in animation_frames(bytes)?.enumerate() {
-			if frames.len() >= 2 && (index == 600 || started.elapsed() > Duration::from_secs(3)) {
-				return Some(frames);
+			// A partial clip would loop with a visible jump; keep the still first frame instead.
+			// The deadline waits for two frames so one slow resize of a short GIF still animates.
+			if index == 600 || (frames.len() >= 2 && started.elapsed() > Duration::from_secs(3)) {
+				return None;
 			}
 			let frame = frame.ok()?;
 			let (numerator, denominator) = frame.delay().numer_denom_ms();

@@ -21,13 +21,13 @@ const SIZING: [&str; 7] = [
 ];
 const INLINE_STILL_BYTES: usize = 96 * 1024 * 1024;
 const INLINE_STILLS: usize = 384;
-const INLINE_FRAME_BYTES: usize = 192 * 1024 * 1024;
+const INLINE_FRAME_BYTES: usize = 128 * 1024 * 1024;
 const INLINE_ANIMATIONS: usize = 96;
-const VIEWER_BYTES: usize = 160 * 1024 * 1024;
+const VIEWER_BYTES: usize = 128 * 1024 * 1024;
 const SLOTS: usize = 2048;
 const CANONICAL: usize = 4096;
 const HELD: usize = 4;
-const ATTEMPTS: usize = 4;
+const ATTEMPTS: usize = 8;
 const FADE: Duration = Duration::from_millis(150);
 const DIM: f32 = 48.0;
 
@@ -125,7 +125,7 @@ impl Lane {
 	pub const fn frame_bytes(self) -> usize {
 		match self {
 			Self::Inline => 40 * 1024 * 1024,
-			Self::Viewer => 150 * 1024 * 1024,
+			Self::Viewer => 96 * 1024 * 1024,
 		}
 	}
 }
@@ -266,6 +266,8 @@ enum Learned {
 	#[default]
 	Unknown,
 	Still,
+	/// A gifv clip the platform decoder cannot play; the embed falls back to its GIF or poster.
+	Unplayable,
 }
 
 #[derive(Clone, Copy)]
@@ -361,7 +363,13 @@ impl Slot {
 			return;
 		}
 		if self.attempts.len() >= ATTEMPTS {
-			self.attempts.remove(0);
+			// A dropped pending entry would discard its result on arrival; drop settled ones first.
+			let oldest = self
+				.attempts
+				.iter()
+				.position(|(.., attempt)| !matches!(attempt, Attempt::Pending))
+				.unwrap_or(0);
+			self.attempts.remove(oldest);
 		}
 		self.attempts.push((motion, size, attempt));
 	}
@@ -451,6 +459,7 @@ pub(crate) struct MediaLibrary {
 	canonical: HashMap<Box<str>, Option<Source>>,
 	clock: u64,
 	swept_pass: u64,
+	viewer_painted: bool,
 }
 
 impl MediaLibrary {
@@ -492,7 +501,7 @@ impl MediaLibrary {
 		now: Instant,
 	) -> (Rendition, Choice) {
 		let slot = self.slot(source);
-		let motion = if may_animate && slot.learned != Learned::Still {
+		let motion = if may_animate && slot.learned == Learned::Unknown {
 			Motion::Animated
 		} else {
 			Motion::Still
@@ -571,7 +580,13 @@ impl MediaLibrary {
 				&& image.size[1] <= limit
 				&& image.pixels.len() == image.size[0] * image.size[1]
 		}) else {
-			slot.record(motion, size, Attempt::Failed(Instant::now()));
+			if motion == Motion::Animated && is_motion_video(source.as_str()) {
+				// Retrying cannot help a clip this decoder rejects, and it is not cached on disk.
+				slot.learned = Learned::Unplayable;
+				slot.forget(motion, size);
+			} else {
+				slot.record(motion, size, Attempt::Failed(Instant::now()));
+			}
 			return true;
 		};
 		if motion == Motion::Still {
@@ -635,6 +650,12 @@ impl MediaLibrary {
 		let Some(index) = slot.index(motion, size) else {
 			return;
 		};
+		let video = is_motion_video(source.as_str());
+		if frames.len() < 2 && video {
+			slot.learned = Learned::Unplayable;
+			slot.held.remove(index);
+			return;
+		}
 		if frames.len() < 2 {
 			slot.learned = Learned::Still;
 			if slot.index(Motion::Still, size).is_some() {
@@ -655,8 +676,13 @@ impl MediaLibrary {
 			|| frames.iter().any(|(delay, image)| {
 				*delay < Duration::from_millis(20) || image.size[0] > limit || image.size[1] > limit
 			}) {
+			// The decoder applies the same budget, so a retry would be rejected again.
 			slot.held.remove(index);
-			slot.record(motion, size, Attempt::Failed(now));
+			slot.learned = if video {
+				Learned::Unplayable
+			} else {
+				Learned::Still
+			};
 			return;
 		}
 		let started = slot.carried_start(size, now);
@@ -710,6 +736,24 @@ impl MediaLibrary {
 				slot.held.remove(index);
 			}
 		}
+	}
+
+	/// Once per frame after painting: a closed viewer releases its full-size pixels at once.
+	pub(super) fn end_frame(&mut self) {
+		if !std::mem::take(&mut self.viewer_painted) {
+			for slot in self.slots.values_mut() {
+				slot.held.retain(|held| held.lane == Lane::Inline);
+			}
+		}
+	}
+
+	/// False once this clip failed to decode, so a gifv embed can use its GIF or poster instead.
+	pub(super) fn playable(&mut self, raw: &str) -> bool {
+		self.source(raw).is_none_or(|source| {
+			self.slots
+				.get(&source)
+				.is_none_or(|slot| slot.learned != Learned::Unplayable)
+		})
 	}
 
 	fn sweep(&mut self, pass: u64) {
@@ -904,6 +948,7 @@ impl Avatars {
 			native,
 		);
 		let lane = surface.lane();
+		self.media.viewer_painted |= viewer;
 		let (want, choice) = self
 			.media
 			.want(&source, may_animate && !demo, size, lane, now);
