@@ -1160,13 +1160,14 @@ fn decode_motion_video(
 					let image = image::RgbaImage::from_raw(width, height, rgba)?;
 					let image = resize_to(image, fit);
 					let frame_bytes = image.width() as usize * image.height() as usize * 4;
-					if total + frame_bytes > budget.bytes && shrinks > 0 {
+					// accept_frames also keeps one playback texture the size of this frame.
+					if total + 2 * frame_bytes > budget.bytes && shrinks > 0 {
 						shrinks -= 1;
 						fit = ((fit as f32 * 0.707) as u32).max(1);
 						posted = false;
 						continue 'decode;
 					}
-					if frames.len() >= budget.count || total + frame_bytes > budget.bytes {
+					if frames.len() >= budget.count || total + 2 * frame_bytes > budget.bytes {
 						frames = frames.chunks(2).map(|pair| pair[0].clone()).collect();
 						total = frames.iter().map(|(_, image)| image.pixels.len() * 4).sum();
 						stride *= 2;
@@ -1266,13 +1267,14 @@ fn decode_animation(
 			}
 			let image = resize_to(frame.into_buffer(), fit);
 			let frame_bytes = image.width() as usize * image.height() as usize * 4;
-			if total + frame_bytes > budget.bytes && shrinks > 0 {
+			// accept_frames also keeps one playback texture the size of this frame.
+			if total + 2 * frame_bytes > budget.bytes && shrinks > 0 {
 				shrinks -= 1;
 				fit = ((fit as f32 * 0.707) as u32).max(1);
 				posted = false;
 				continue 'decode;
 			}
-			if frames.len() >= budget.count || total + frame_bytes > budget.bytes {
+			if frames.len() >= budget.count || total + 2 * frame_bytes > budget.bytes {
 				frames = frames
 					.chunks(2)
 					.map(|pair| {
