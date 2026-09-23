@@ -272,7 +272,10 @@ mod native {
 mod native {
 	use std::{
 		fs, io,
-		os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt},
+		os::unix::{
+			fs::{FileTypeExt, MetadataExt, PermissionsExt},
+			net::UnixDatagram,
+		},
 		path::{Path, PathBuf},
 	};
 	use tokio::net::UnixListener;
@@ -380,7 +383,9 @@ mod native {
 		};
 		metadata.file_type().is_socket()
 			&& metadata.uid() == uid
-			&& std::os::unix::net::UnixStream::connect(path)
+			// Stream probes enter a live listener's accept queue; datagrams do not.
+			&& UnixDatagram::unbound()
+				.and_then(|probe| probe.connect(path))
 				.is_err_and(|error| error.kind() == io::ErrorKind::ConnectionRefused)
 			&& fs::remove_file(path).is_ok()
 	}
