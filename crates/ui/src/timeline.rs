@@ -71,6 +71,12 @@ pub struct TimelineView {
 	pub(super) mark_unread: Option<Id>,
 	pub(super) auto_read_attempt: Option<Id>,
 	at_current_latest: bool,
+	/// The unread banner was raised during this visit; it stays until the reader leaves.
+	unread_session: bool,
+	/// Newest live-edge message the reader had on screen at the bottom during this visit.
+	seen_latest: Option<Id>,
+	/// Channel left this frame and the message to acknowledge there.
+	pub(super) leave_read: Option<(Id, Id)>,
 	pub(super) reaction_picker: Option<(Id, egui::Rect, egui::Id)>,
 	pub(super) reaction: Option<(Id, Option<model::ReactionEmoji>)>,
 	pub(super) reaction_users: Option<(Id, model::ReactionEmoji, bool)>,
@@ -1213,6 +1219,7 @@ impl TimelineView {
 		self.auto_read_attempt = None;
 		self.mark_read = None;
 		self.mark_unread = None;
+		self.seen_latest = None;
 	}
 	pub(super) fn follow_latest(&mut self, state: &State) {
 		self.latest |= state.history_targeted
@@ -1310,6 +1317,7 @@ impl TimelineView {
 				browser_opening: self.browser_opening.take(),
 				pending_viewer: self.pending_viewer.take(),
 				jump: following,
+				leave_read: self.channel.zip(self.seen_latest),
 				..Self::default()
 			};
 		}
@@ -1358,7 +1366,11 @@ impl TimelineView {
 					.find(|m| read.is_none_or(|id| m.id > id))
 					.map(|m| m.id)
 			})
-			.filter(|_| !watching_latest || self.unread_boundary.is_some());
+			.filter(|_| !watching_latest || self.unread_boundary.is_some())
+			// Acknowledging the section keeps its divider in place until the reader leaves.
+			.or(self
+				.unread_boundary
+				.filter(|id| state.timeline.get(*id).is_some()));
 		if self.unread_boundary != boundary {
 			self.unread_boundary = boundary;
 			self.revision = u64::MAX;
@@ -3075,6 +3087,15 @@ impl TimelineView {
 		let was_following = self.following;
 		self.following = at_bottom && !self.target_browsing;
 		if self.following
+			&& self.at_current_latest
+			&& !state.history_targeted
+			&& state.history_after.is_none()
+			&& ui.input(|i| i.focused)
+			&& let Some(latest) = state.live_edge_latest()
+		{
+			self.seen_latest = Some(latest);
+		}
+		if self.following
 			&& !self.hold_read_ack
 			&& ui.is_enabled()
 			&& self.mark_unread.is_none()
@@ -3209,7 +3230,7 @@ impl TimelineView {
 		let missed = state.show_missed_banner();
 		let opening_unread =
 			missed && state.freshness == model::Freshness::Loading && state.history_pending;
-		let show_unread = missed
+		let raise_unread = missed
 			&& (state.timeline.iter().next().is_some() || opening_unread)
 			&& (opening_unread
 				|| self.hold_read_ack
@@ -3217,15 +3238,20 @@ impl TimelineView {
 					&& self.at_current_latest
 					&& state.live_edge_latest().is_some()
 					&& ui.input(|input| input.focused)));
-		let can_jump_unread = show_unread && state.can_jump_unread();
+		// Once raised, the banner stays with its divider for the rest of the visit.
+		let kept_unread = self.unread_session && self.unread_boundary.is_some();
+		let show_unread = raise_unread || kept_unread;
+		let can_jump_unread = show_unread && (state.can_jump_unread() || kept_unread);
 		// Latest-message metadata can outlive a deleted message. A complete, visible
 		// latest page has nowhere useful to jump; targeted pages still need navigation.
 		if (show_unread || can_load_newer)
 			&& (!whole_conversation_visible
 				|| browsing_history
 				|| opening_unread
-				|| self.hold_read_ack)
+				|| self.hold_read_ack
+				|| kept_unread)
 		{
+			self.unread_session |= show_unread && self.unread_boundary.is_some();
 			let (jump_unread, load_newer) = history_banner(
 				ui,
 				banner_rect(area),
@@ -3234,8 +3260,13 @@ impl TimelineView {
 				can_load_newer,
 			);
 			if jump_unread {
-				self.unread_jump = true;
-				self.browse_away();
+				if state.can_jump_unread() {
+					self.unread_jump = true;
+					self.browse_away();
+				} else if let Some(boundary) = self.unread_boundary {
+					// The section was acknowledged during this visit; its divider is still loaded.
+					self.request_reply_target(boundary);
+				}
 			}
 			if load_newer {
 				self.load_newer = true;
@@ -3764,8 +3795,9 @@ mod tests {
 			}
 			assert_eq!(view.mark_read, (count == 0).then_some(Id(latest)));
 			if tall {
-				// Scrolling to the live edge of tall unread content resolves both banners,
-				// even when the service latest ID names a deleted message.
+				// Scrolling to the live edge of tall unread content acknowledges it and resolves
+				// navigation, even when the service latest ID names a deleted message. The unread
+				// banner stays for the rest of the visit.
 				state.channels[0].last_message = Some(Id(21));
 				view.mark_read = None;
 				view.anchor = Some((Id(20), f32::MAX));
@@ -3788,12 +3820,11 @@ mod tests {
 				);
 				assert!(view.following && !view.target_browsing);
 				assert_eq!(view.mark_read.take(), Some(Id(21)));
-				for forbidden in [
-					"Unread messages",
-					"Next messages",
-					"New messages below",
-					"Jump to present",
-				] {
+				assert!(
+					labels.iter().any(|(text, _)| text == "Unread messages"),
+					"the unread banner left before the reader did: {labels:?}"
+				);
+				for forbidden in ["Next messages", "New messages below", "Jump to present"] {
 					assert!(
 						!labels.iter().any(|(text, _)| text == forbidden),
 						"tall stale channel still showed {forbidden}"
