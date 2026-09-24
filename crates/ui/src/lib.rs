@@ -42,6 +42,7 @@ mod emoji_picker;
 pub mod fonts;
 mod formatting;
 mod forum;
+mod forum_settings;
 mod friends;
 mod group_menu;
 mod guild_folders;
@@ -585,6 +586,21 @@ impl MessagingUi {
 	#[cfg(feature = "demo")]
 	pub fn preview_slash_commands(&mut self) {
 		self.preview_slash_commands = true;
+	}
+	/// Fixture-only: show the forum list as `layout`.
+	#[cfg(feature = "demo")]
+	pub fn preview_forum_layout(&mut self, layout: model::forum::Layout) {
+		self.forum.preview_layout(layout);
+	}
+	/// Fixture-only: open the settings dialog of `channel` at startup.
+	#[cfg(feature = "demo")]
+	pub fn preview_channel_settings(&mut self, channel: Id, generation: u64) {
+		self.channel_menu.preview_settings(channel, generation);
+	}
+	/// Fixture-only: filter the forum list by `tags`, optionally with the post composer open.
+	#[cfg(feature = "demo")]
+	pub fn preview_forum(&mut self, forum: Id, tags: &[Id], draft: Option<&str>) {
+		self.forum.preview(forum, tags, draft);
 	}
 	/// Fixture-only: open the Threads dialog for `parent` at startup, as the header control would.
 	#[cfg(any(test, feature = "demo"))]
@@ -3642,7 +3658,7 @@ impl MessagingUi {
 						state,
 						channel,
 						&mut commands,
-						(&mut self.scroll, &mut staged),
+						(&mut self.scroll, &mut staged, &mut self.avatars),
 						(&mut self.channel_menu, view),
 					);
 					return;
@@ -4459,6 +4475,7 @@ mod composer_tests {
 				recipients: vec![],
 				last_message: None,
 				member_list_id: None,
+				tags: None,
 				message_count: None,
 				icon: None,
 			}],
@@ -6081,6 +6098,7 @@ mod composer_tests {
 				position: 0,
 				recipients: vec![],
 				member_list_id: None,
+				tags: None,
 				message_count: None,
 				icon: None,
 			});
@@ -6261,6 +6279,7 @@ mod composer_tests {
 				kind: 0,
 				recipients: Vec::new(),
 				member_list_id: Some("everyone".into()),
+				tags: None,
 				message_count: None,
 				icon: None,
 			}],
@@ -6935,6 +6954,7 @@ mod composer_tests {
 					kind: if guild.is_some() { 0 } else { 1 },
 					recipients: vec![user.clone()],
 					member_list_id: None,
+					tags: None,
 					message_count: None,
 					icon: None,
 				}],
@@ -7159,6 +7179,7 @@ mod composer_tests {
 				kind: 1,
 				recipients: Vec::new(),
 				member_list_id: None,
+				tags: None,
 				message_count: None,
 				icon: None,
 			}],

@@ -966,6 +966,7 @@ mod tests {
 				kind,
 				recipients: vec![user(42, "Zoe")],
 				member_list_id: None,
+				tags: None,
 				message_count: None,
 				icon: None,
 			});
@@ -1115,6 +1116,7 @@ mod tests {
 			position: 0,
 			recipients: vec![],
 			member_list_id: None,
+			tags: None,
 			message_count: None,
 			icon: None,
 		}

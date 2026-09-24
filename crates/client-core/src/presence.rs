@@ -413,6 +413,7 @@ mod tests {
 				recipients: vec![],
 				icon: None,
 				member_list_id: Some("everyone".into()),
+				tags: None,
 				message_count: None,
 				last_message: None,
 			}],

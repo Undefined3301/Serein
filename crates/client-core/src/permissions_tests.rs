@@ -266,6 +266,7 @@ fn channel(id: u64, kind: u8, parent: Option<Id>) -> Channel {
 		last_message: None,
 		icon: None,
 		member_list_id: None,
+		tags: None,
 		message_count: None,
 	}
 }
@@ -1114,6 +1115,7 @@ fn thread_target_changes_revoke_content_for_patches_creates_and_snapshots() {
 						parent_id: Patch::Value(parent),
 						kind: Patch::Absent,
 						message_count: Patch::Absent,
+						tags: Patch::Absent,
 						name: Patch::Absent,
 						position: Patch::Absent,
 						last_message: Patch::Absent,

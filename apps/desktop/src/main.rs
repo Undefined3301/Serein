@@ -3108,6 +3108,7 @@ impl Desktop {
 							position: Patch::Absent,
 							kind: Patch::Absent,
 							message_count: Patch::Absent,
+							tags: Patch::Absent,
 						}),
 					};
 					Event::GroupAction(GroupEvent::Written {
@@ -3231,6 +3232,7 @@ impl Desktop {
 					parent,
 					guild,
 					title,
+					tags,
 					request,
 					..
 				} => {
@@ -3249,6 +3251,12 @@ impl Desktop {
 							recipients: vec![],
 							last_message: None,
 							member_list_id: None,
+							tags: (!tags.is_empty()).then(|| {
+								Box::new(model::forum::Tags {
+									applied: tags,
+									..Default::default()
+								})
+							}),
 							message_count: Some(0),
 						}),
 					}
@@ -3299,6 +3307,7 @@ impl Desktop {
 							recipients: vec![],
 							last_message: None,
 							member_list_id: None,
+							tags: None,
 							message_count: None,
 						})
 						.collect();

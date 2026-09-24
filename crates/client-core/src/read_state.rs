@@ -872,6 +872,7 @@ mod navigation_tests {
 				last_message: Some(Id(500)),
 				icon: None,
 				member_list_id: None,
+				tags: None,
 				message_count: None,
 			}],
 			..Default::default()

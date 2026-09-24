@@ -65,6 +65,21 @@ impl eframe::App for Preview {
 				client_core::Command::ServerAction { action, request } => {
 					server_settings_demo::execute_action(&mut self.state, action, request)
 				}
+				client_core::Command::ChannelAction {
+					guild,
+					channel,
+					request,
+					action: client_core::channel_actions::Action::Load,
+				} => client_core::Event::ChannelAction(
+					client_core::channel_actions::Event::Finished {
+						guild,
+						channel,
+						request,
+						result: Ok(client_core::channel_actions::Outcome::Details(
+							channel_settings(&self.state, channel),
+						)),
+					},
+				),
 				_ => continue,
 			};
 			self.state.apply(client_core::Envelope {
@@ -335,6 +350,32 @@ fn seed_catalog(extensions: &mut ui::ExtensionUi, themes: bool) {
 	}
 }
 
+/// Synthetic settings for a fixture channel, including a forum's tags and post defaults.
+fn channel_settings(
+	state: &client_core::State,
+	channel: model::Id,
+) -> client_core::channel_actions::Edit {
+	let source = state.channel(channel).expect("fixture channel");
+	let tags = source.tags.as_deref().cloned().unwrap_or_default();
+	client_core::channel_actions::Edit {
+		name: source.name.clone(),
+		topic: "Share one idea per post. Search first, and tag what the idea is about.".into(),
+		forum: matches!(source.kind, 15 | 16).then(|| {
+			Box::new(client_core::channel_actions::ForumEdit {
+				tags: tags.available,
+				require_tag: tags.required,
+				reaction: tags.reaction,
+				layout: tags.layout,
+				sort: tags.sort,
+				match_all: tags.match_all,
+				hide_after: 4320,
+				..Default::default()
+			})
+		}),
+		..Default::default()
+	}
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let args: Vec<_> = std::env::args().skip(1).collect();
 	let value = |prefix: &str| args.iter().find_map(|arg| arg.strip_prefix(prefix));
@@ -360,6 +401,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			| "server"
 			| "server-engagement"
 			| "server-stickers"
+			| "forum" | "forum-post"
+			| "forum-gallery"
+			| "forum-settings"
 	) {
 		return Err("Page must be profile, profile-card, member-tags, dm-tags, account, appearance, general, extensions, slash-commands, slash-command-search, slash-command-options, server, server-engagement or server-stickers".into());
 	}
@@ -372,6 +416,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	if !(500.0..=1920.0).contains(&width) || !(520.0..=1200.0).contains(&height) {
 		return Err("Viewport must be 500-1920 by 520-1200".into());
 	}
+	let forum_tags: Vec<_> = value("--tags=")
+		.map(|list| {
+			list.split(',')
+				.filter_map(|id| id.parse().ok())
+				.map(model::Id)
+				.collect()
+		})
+		.unwrap_or_default();
 	let light = args.iter().any(|arg| arg == "--light");
 	let theme_editor = value("--theme-editor=").map(str::to_owned);
 	let theme_preview = args.iter().any(|arg| arg == "--theme-preview");
@@ -392,6 +444,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 		},
 		Box::new(move |cc| {
 			ui::fonts::install(&cc.egui_ctx);
+			let _ = ui::emoji::install(&cc.egui_ctx);
 			ui::design::apply(&cc.egui_ctx);
 			cc.egui_ctx.set_theme(if light {
 				egui::ThemePreference::Light
@@ -432,13 +485,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 				});
 			} else if page == "dm-tags" {
 				let _ = state.select(model::Id(22));
+			} else if page.starts_with("forum") {
+				state.gateway_connected = true;
+				state.auth = client_core::auth::AuthState::Authenticated;
+				let _ = state.select(model::Id(26));
 			}
 			let mut messaging = ui::MessagingUi::default();
 			messaging.tray_available = platform::tray::supported();
 			messaging.startup_available = platform::startup::available();
 			messaging.startup_enabled = args.iter().any(|arg| arg == "--startup-enabled");
 			messaging.startup_minimized = args.iter().any(|arg| arg == "--startup-minimized");
-			if matches!(page.as_str(), "member-tags" | "dm-tags") {
+			if page == "forum" {
+				messaging.preview_forum(model::Id(26), &forum_tags, None);
+			} else if page == "forum-gallery" {
+				messaging.preview_forum(model::Id(26), &[], None);
+				messaging.preview_forum_layout(model::forum::Layout::Gallery);
+			} else if page == "forum-settings" {
+				messaging.preview_channel_settings(model::Id(26), state.generation);
+			} else if page == "forum-post" {
+				messaging.preview_forum(
+					model::Id(26),
+					&[model::Id(2603)],
+					Some("Faster startup on older phones"),
+				);
+			} else if matches!(page.as_str(), "member-tags" | "dm-tags") {
 				// State is primed above; the normal offline messaging surface renders the list.
 			} else if page == "slash-commands" {
 				messaging.preview_slash_commands();

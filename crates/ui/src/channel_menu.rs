@@ -43,6 +43,7 @@ struct Dialog {
 	integrations_opened: bool,
 	discard: bool,
 	permissions: crate::channel_permissions::PermissionsUi,
+	forum: crate::forum_settings::ForumSettingsUi,
 }
 
 #[derive(Default)]
@@ -61,6 +62,13 @@ pub(super) struct ChannelMenu {
 impl ChannelMenu {
 	pub fn is_open(&self) -> bool {
 		self.dialog.is_some()
+	}
+
+	/// Fixture-only: open the settings dialog for `channel`, as its context menu would.
+	#[cfg(feature = "demo")]
+	pub fn preview_settings(&mut self, channel: Id, generation: u64) {
+		self.generation = generation;
+		self.requested = Some((channel, Intent::Dialog(Kind::Edit)));
 	}
 
 	/// Shows the shared "full" feedback so DM, group and guild pins report capacity alike.
@@ -358,6 +366,7 @@ impl ChannelMenu {
 							slowmode: 0,
 							nsfw: false,
 							overwrites: vec![],
+							forum: None,
 						},
 						loaded: kind != Kind::Edit,
 						before: Edit::default(),
@@ -367,6 +376,7 @@ impl ChannelMenu {
 						integrations_opened: false,
 						discard: false,
 						permissions: Default::default(),
+						forum: Default::default(),
 					});
 					state.clear_channel_action_result(id);
 					if kind == Kind::Edit
@@ -771,12 +781,7 @@ impl Dialog {
 			}
 			ui.add_space(14.0);
 			dialog::label(ui, "Slowmode");
-			ui.add(
-				egui::DragValue::new(&mut self.draft.slowmode)
-					.clip_text(true)
-					.range(0..=21600)
-					.suffix(" seconds"),
-			);
+			crate::forum_settings::slowmode(ui, "slowmode", &mut self.draft.slowmode);
 			dialog::hint(
 				ui,
 				"Members will be restricted to one message in this interval.",
@@ -872,7 +877,13 @@ impl Dialog {
 				.show(ui, state, this.guild, avatars, commands),
 			Page::Overview => {
 				design::section(ui, "Overview", None);
-				ui.add_enabled_ui(can_delete, |ui| this.overview(ui, &channel));
+				ui.add_enabled_ui(can_delete, |ui| {
+					this.overview(ui, &channel);
+					if matches!(channel.kind, 15 | 16) {
+						this.forum
+							.show(ui, state, this.guild, &mut this.draft, avatars);
+					}
+				});
 			}
 		};
 		if ui.available_width() >= 850.0 {

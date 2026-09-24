@@ -1812,6 +1812,7 @@ mod tests {
 					slowmode: 5,
 					nsfw: false,
 					overwrites: vec![],
+					forum: None,
 				})),
 			}),
 		});

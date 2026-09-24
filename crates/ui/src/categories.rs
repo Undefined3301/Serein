@@ -1222,7 +1222,7 @@ pub fn debug_thread_navigation_check(state: &mut State) {
 			attachments,
 			..
 		} = state
-			.create_post_with_attachments(parent, "Image post", "", &["synthetic.png"])
+			.create_post_with_attachments(parent, "Image post", "", &["synthetic.png"], &[])
 			.unwrap()
 		else {
 			panic!("Expected post command")
@@ -1638,6 +1638,7 @@ mod tests {
 			kind,
 			recipients: vec![],
 			member_list_id: None,
+			tags: None,
 			message_count: None,
 			icon: None,
 		}
