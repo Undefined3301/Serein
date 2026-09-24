@@ -418,6 +418,26 @@ pub fn paint(painter: &egui::Painter, icon: Icon, rect: Rect, color: Color32) {
 	painter.image(texture.id(), rect.expand(size * 4.0 / 56.0), uv, color);
 }
 
+/// `icon` as an atom, so widgets built from atoms (buttons, combo boxes) can show it beside text.
+pub fn atom(icon: Icon, size: f32, color: Color32) -> egui::Atom<'static> {
+	egui::Atom::paint(Vec2::splat(size), move |ui, args| {
+		paint(ui.painter(), icon, args.rect, color);
+	})
+}
+
+/// Glyph for a channel row: threads, forums, voice, announcements and direct messages.
+pub fn channel(kind: u8) -> Icon {
+	match kind {
+		1 => Icon::Profile,
+		3 => Icon::People,
+		2 | 13 => Icon::Speaker,
+		5 => Icon::Megaphone,
+		10..=12 => Icon::Threads,
+		15 | 16 => Icon::Forum,
+		_ => Icon::Hash,
+	}
+}
+
 /// Square icon button that highlights on hover and exposes `label` to accessibility.
 pub fn button(ui: &mut egui::Ui, icon: Icon, size: f32, label: &str) -> Response {
 	let colors = design::palette(ui);
