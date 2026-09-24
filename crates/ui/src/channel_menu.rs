@@ -508,7 +508,10 @@ impl ChannelMenu {
 							"Channel settings could not be loaded.",
 						);
 						if ui
-							.add_enabled(allowed, egui::Button::new("Retry"))
+							.add_enabled_ui(allowed, |ui| {
+								dialog::action(ui, "Retry", dialog::Action::Neutral)
+							})
+							.inner
 							.clicked() && let Some(command) =
 							state.request_channel_action(dialog.channel, Action::Load)
 						{
@@ -546,7 +549,10 @@ impl ChannelMenu {
 						"Channel settings need to be refreshed before saving. Reloading replaces this draft.",
 					);
 					if ui
-						.add_enabled(allowed && !pending_now, egui::Button::new("Reload Channel"))
+						.add_enabled_ui(allowed && !pending_now, |ui| {
+							dialog::action(ui, "Reload Channel", dialog::Action::Neutral)
+						})
+						.inner
 						.clicked() && let Some(command) =
 						state.request_channel_action(dialog.channel, Action::Load)
 					{
@@ -737,8 +743,11 @@ impl Dialog {
 					"Organize discussions into separate posts.",
 				),
 			] {
-				ui.radio_value(&mut self.create_kind, kind, label);
-				ui.indent(label, |ui| dialog::hint(ui, description));
+				if design::radio_row(ui, self.create_kind == kind, label, Some(description))
+					.clicked()
+				{
+					self.create_kind = kind;
+				}
 			}
 			ui.add_space(10.0);
 		}
@@ -812,32 +821,31 @@ impl Dialog {
 			.truncate(),
 		);
 		ui.add_space(12.0);
-		let mut tabs = |ui: &mut egui::Ui| {
-			for (page, label) in [
-				(Page::Overview, "Overview"),
-				(Page::Permissions, "Permissions"),
-				(Page::Integrations, "Integrations"),
-			] {
-				if page == Page::Integrations && !can_integrate {
-					continue;
-				}
-				let response = if compact {
-					ui.selectable_label(self.page == page, label)
-				} else {
-					crate::settings::nav_item(ui, label, self.page == page)
-				};
-				if response.clicked() {
-					self.page = page;
+		let pages: Vec<(Page, &str)> = [
+			(Page::Overview, "Overview"),
+			(Page::Permissions, "Permissions"),
+			(Page::Integrations, "Integrations"),
+		]
+		.into_iter()
+		.filter(|(page, _)| *page != Page::Integrations || can_integrate)
+		.collect();
+		if compact {
+			let labels: Vec<&str> = pages.iter().map(|(_, label)| *label).collect();
+			let selected = pages
+				.iter()
+				.position(|(page, _)| *page == self.page)
+				.unwrap_or(usize::MAX);
+			if let Some(index) = design::segmented(ui, &labels, selected) {
+				self.page = pages[index].0;
+			}
+		} else {
+			for (page, label) in &pages {
+				if crate::settings::nav_item(ui, label, self.page == *page).clicked() {
+					self.page = *page;
 				}
 			}
-		};
-		if compact {
-			ui.horizontal_wrapped(tabs);
-		} else {
-			tabs(ui);
 		}
-
-		ui.separator();
+		design::card_divider(ui);
 		row(
 			ui,
 			if channel.kind == 4 {

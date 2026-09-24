@@ -179,6 +179,46 @@ fn prime_profile(state: &mut client_core::State) {
 	}
 }
 
+/// Several synthetic Rich Presence entries for the first friend and the message author.
+fn prime_activities(state: &mut client_core::State) {
+	let activity =
+		|kind, name: &str, details: Option<&str>, state: Option<&str>| model::RichActivity {
+			kind,
+			name: name.into(),
+			details: details.map(Into::into),
+			state: state.map(Into::into),
+			image: None,
+			small_image: None,
+			ends_at: None,
+			started_at: Some(1_700_000_000_000),
+		};
+	let activities = vec![
+		activity(
+			0,
+			"Synthetic Quest",
+			Some("Exploring the hollow"),
+			Some("Chapter 3"),
+		),
+		activity(2, "Spotify", Some("Quiet Harbor"), Some("The Offline Band")),
+		activity(3, "Harbor Stories", None, None),
+	];
+	let author = test_support::message(1, model::Id(20)).author.id;
+	state.apply(client_core::Envelope {
+		generation: state.generation,
+		event: client_core::Event::DirectPresence(
+			[model::Id(1001), author]
+				.into_iter()
+				.map(|user| client_core::presence::Update {
+					user,
+					status: model::Patch::Value("online".into()),
+					custom_status: model::Patch::Absent,
+					activities: model::Patch::Value(activities.clone()),
+				})
+				.collect(),
+		),
+	});
+}
+
 fn prime_extension_chat(state: &mut client_core::State) {
 	let channel = state.selected.expect("selected fixture channel");
 	let messages = [
@@ -404,6 +444,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			| "forum" | "forum-post"
 			| "forum-gallery"
 			| "forum-settings"
+			| "friends"
 	) {
 		return Err("Page must be profile, profile-card, member-tags, dm-tags, account, appearance, general, extensions, slash-commands, slash-command-search, slash-command-options, server, server-engagement or server-stickers".into());
 	}
@@ -425,6 +466,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 		})
 		.unwrap_or_default();
 	let light = args.iter().any(|arg| arg == "--light");
+	let activities = args.iter().any(|arg| arg == "--activities");
+	let friends_tab = value("--tab=").unwrap_or("online").to_owned();
 	let theme_editor = value("--theme-editor=").map(str::to_owned);
 	let theme_preview = args.iter().any(|arg| arg == "--theme-preview");
 	let thumbnail = args.iter().any(|arg| arg == "--thumbnail");
@@ -456,9 +499,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 				"slash-commands" | "slash-command-search" | "slash-command-options"
 			) {
 				slash_demo::preview()
+			} else if page == "friends" {
+				test_support::friends_demo_state()
 			} else {
 				test_support::demo_state()
 			};
+			if activities {
+				prime_activities(&mut state);
+			}
 			if page == "profile" {
 				prime_profile(&mut state);
 			}
@@ -495,7 +543,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			messaging.startup_available = platform::startup::available();
 			messaging.startup_enabled = args.iter().any(|arg| arg == "--startup-enabled");
 			messaging.startup_minimized = args.iter().any(|arg| arg == "--startup-minimized");
-			if page == "forum" {
+			if page == "friends" {
+				messaging.preview_friends_tab(&friends_tab);
+			} else if page == "forum" {
 				messaging.preview_forum(model::Id(26), &forum_tags, None);
 			} else if page == "forum-gallery" {
 				messaging.preview_forum(model::Id(26), &[], None);
