@@ -4009,6 +4009,12 @@ impl MessagingUi {
 		{
 			commands.push(command);
 		}
+		if let Some(channel) = self.timeline.mark_channel_read.take() {
+			self.timeline.mark_read = None;
+			if let Some(command) = state.prepare_mark_channel_read(channel) {
+				commands.push(command);
+			}
+		}
 		if let Some(message) = self.timeline.mark_unread.take() {
 			self.timeline.mark_read = None;
 			if !settings_open && let Some(command) = state.prepare_mark_unread(message) {
@@ -5510,7 +5516,9 @@ mod composer_tests {
 					frame(&mut view, &mut state, vec![]);
 				}
 				if last == 15 {
-					let commands = click(&mut view, &mut state, "Next messages");
+					// Older history has no bar of its own; this is the request its end sends.
+					view.timeline.load_newer = true;
+					let (_, commands) = frame(&mut view, &mut state, vec![]);
 					assert!(commands.iter().any(|command| matches!(
 						command,
 						Command::History {
