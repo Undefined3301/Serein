@@ -1949,6 +1949,7 @@ mod tests {
 			nick: None,
 			status: Some("online".into()),
 			custom_status: None,
+			clients: model::ClientPlatforms::default(),
 			activities: Vec::new(),
 		};
 		state.members = Some(model::MemberList {
