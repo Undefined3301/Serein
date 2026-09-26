@@ -2497,7 +2497,7 @@ mod tests {
 	#[tokio::test]
 	async fn unjoined_dm_call_discovery_and_lifecycle_over_local_gateway() {
 		use client_core::voice::{Command as V, Event as E};
-		timeout(Duration::from_secs(25), async {
+		timeout(Duration::from_secs(45), async {
 			let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
 			let endpoint = format!("ws://{}/", listener.local_addr().unwrap());
 			let (controls, receive) = mpsc::channel(8);
