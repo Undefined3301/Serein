@@ -455,7 +455,8 @@ Retry saving is deliberate. Closing with pending/failed writes prompts before di
 In-app preview edits are not saved; a write already requested outside preview still completes.
 The standalone --demo does not start the SQLite worker. Narrow People overlays and outer window geometry remain session-local.
 Notification opt-in, hidden-channel visibility, primary RGB color, audio devices (up to 1,024 bytes each),
-input profile/custom processing, push-to-talk and gain are saved in the device-wide `app_preferences`
+input profile/custom processing, push-to-talk, gain, keyboard bindings and the global-keybind
+switch (enabled by default) are saved in the device-wide `app_preferences`
 SQLite singleton (16 KiB maximum), using the existing background worker. The Linux
 hide-window-decorations boolean is stored in this same record and defaults to false. These survive
 restart/logout; demo controls never read or write them. Save failures remain visible.

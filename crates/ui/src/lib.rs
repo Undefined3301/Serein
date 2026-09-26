@@ -511,9 +511,11 @@ impl MessagingUi {
 
 	/// Returns whether the configured push-to-talk chord is held in the focused window.
 	pub fn push_to_talk_down(&self, ctx: &egui::Context) -> bool {
+		if ctx.egui_wants_keyboard_input() {
+			return false;
+		}
 		ctx.input(|input| {
 			input.focused
-				&& !ctx.egui_wants_keyboard_input()
 				&& crate::keybinds::down(
 					input,
 					self.keybinds.chord(model::KeybindAction::PushToTalk),
