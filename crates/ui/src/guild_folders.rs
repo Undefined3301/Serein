@@ -316,16 +316,17 @@ impl MessagingUi {
 			.input(|input| input.pointer.is_decidedly_dragging());
 		egui::Popup::from_response(response)
 			.kind(egui::PopupKind::Tooltip)
+			.align(egui::RectAlign::RIGHT)
 			.open(
 				!dragging
 					&& (response.contains_pointer() || response.hovered() || response.has_focus()),
 			)
 			.gap(8.0)
-			.width(220.0)
+			.width(200.0)
 			.interactable(false)
 			.show(|ui| {
-				ui.label(egui::RichText::new(&guild.name).strong());
-				ui.add_space(4.0);
+				ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+				ui.label(design::semibold(ui, &guild.name, 14.0));
 				for (icon, streaming) in [(Icon::Speaker, false), (Icon::ScreenShare, true)] {
 					let entries = guild_voice(state, guild.id, streaming);
 					if entries.clone().next().is_none() {
@@ -333,7 +334,7 @@ impl MessagingUi {
 					}
 					ui.horizontal(|ui| {
 						let (rect, _) =
-							ui.allocate_exact_size(egui::Vec2::splat(20.0), Sense::hover());
+							ui.allocate_exact_size(egui::Vec2::splat(16.0), Sense::hover());
 						icons::paint(ui.painter(), icon, rect, design::palette(ui).text);
 						const VISIBLE: usize = 5;
 						let count = entries.clone().count();
