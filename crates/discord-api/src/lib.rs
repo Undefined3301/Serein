@@ -59,10 +59,23 @@ tokio::task_local! {
 }
 /// REST permits a preload must leave free for requests the user is waiting for.
 const FOREGROUND_PERMITS: usize = 2;
-/// Idempotent reads wait out this many HTTP 429s. Writes are never retried.
 const READ_RATE_LIMIT_RETRIES: u8 = 2;
-/// A longer penalty is returned so sign-in does not stay on Connecting.
 const MAX_READ_RATE_LIMIT_WAIT: Duration = Duration::from_secs(60);
+const API_ORIGINS: [&str; 2] = [
+	"https://discord.com/api/v10",
+	"https://ptb.discord.com/api/v10",
+];
+#[cfg(not(test))]
+static API_ON_TEST_HOST: AtomicBool = AtomicBool::new(false);
+
+/// Later lookups in this process follow a Cloudflare block of discord.com.
+pub fn api_v10_base() -> &'static str {
+	#[cfg(not(test))]
+	let index = usize::from(API_ON_TEST_HOST.load(Ordering::Acquire));
+	#[cfg(test)]
+	let index = 0;
+	API_ORIGINS[index]
+}
 
 pub struct DiscordApi {
 	interaction_session: std::sync::Mutex<Option<zeroize::Zeroizing<String>>>,
@@ -369,9 +382,6 @@ impl DiscordApi {
 		};
 		// Four permits bound concurrent REST work. A slow profile body must not hold the
 		// cooldown mutex and delay a message write; only service rate admission is shared.
-		// A 429 on an idempotent read is waited out here. Sign-in treats that error as
-		// fatal and drops this client, so the next click would otherwise hit Discord again
-		// during the penalty window.
 		let idempotent = method == Method::GET && body.is_none() && !speculative;
 		let mut body = body;
 		let mut rate_limits = 0u8;
@@ -393,7 +403,13 @@ impl DiscordApi {
 				.map_err(|_| Failure::InvalidCredential)?;
 			authorization.set_sensitive(true);
 			#[cfg(not(test))]
-			let base = "https://discord.com/api/v10";
+			let on_stable = !API_ON_TEST_HOST.load(Ordering::Acquire);
+			#[cfg(not(test))]
+			let base = if on_stable {
+				API_ORIGINS[0]
+			} else {
+				API_ORIGINS[1]
+			};
 			#[cfg(test)]
 			let base = &self.base;
 			let write = method != Method::GET;
@@ -463,6 +479,13 @@ impl DiscordApi {
 				self.stop();
 				return Err(Failure::Expired);
 			}
+			let cloudflare_block = response
+				.headers()
+				.get(CONTENT_TYPE)
+				.and_then(|value| value.to_str().ok())
+				.is_some_and(|value| {
+					value.starts_with("text/html") || value.starts_with("text/plain")
+				});
 			if response
 				.content_length()
 				.is_some_and(|n| n > max_bytes as u64)
@@ -512,6 +535,16 @@ impl DiscordApi {
 
 					self.stop();
 					return Err(Failure::Challenged);
+				}
+				if status == StatusCode::TOO_MANY_REQUESTS && cloudflare_block {
+					#[cfg(not(test))]
+					if on_stable {
+						API_ON_TEST_HOST.store(true, Ordering::Release);
+						if idempotent {
+							continue;
+						}
+						return Err(Failure::RateLimited);
+					}
 				}
 				if status == StatusCode::TOO_MANY_REQUESTS {
 					// The body is the penalty Discord documents. A missing or shorter reset

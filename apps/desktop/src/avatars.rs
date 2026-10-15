@@ -703,7 +703,10 @@ fn cdn_url(key: &str) -> Option<String> {
 	}
 	if let Some(id) = key.strip_prefix("app-icon-") {
 		let id: Id = id.parse().ok()?;
-		return Some(format!("https://discord.com/api/v10/applications/{id}/rpc"));
+		return Some(format!(
+			"{}/applications/{id}/rpc",
+			discord_api::api_v10_base()
+		));
 	}
 	if let Some(value) = key.strip_prefix("activity-") {
 		let (application, asset) = value.split_once('-')?;
