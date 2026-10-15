@@ -59,6 +59,10 @@ tokio::task_local! {
 }
 /// REST permits a preload must leave free for requests the user is waiting for.
 const FOREGROUND_PERMITS: usize = 2;
+/// Idempotent reads wait out this many HTTP 429s. Writes are never retried.
+const READ_RATE_LIMIT_RETRIES: u8 = 2;
+/// A longer penalty is returned so sign-in does not stay on Connecting.
+const MAX_READ_RATE_LIMIT_WAIT: Duration = Duration::from_secs(60);
 
 pub struct DiscordApi {
 	interaction_session: std::sync::Mutex<Option<zeroize::Zeroizing<String>>>,
@@ -365,161 +369,184 @@ impl DiscordApi {
 		};
 		// Four permits bound concurrent REST work. A slow profile body must not hold the
 		// cooldown mutex and delay a message write; only service rate admission is shared.
+		// A 429 on an idempotent read is waited out here. Sign-in treats that error as
+		// fatal and drops this client, so the next click would otherwise hit Discord again
+		// during the penalty window.
+		let idempotent = method == Method::GET && body.is_none() && !speculative;
+		let mut body = body;
+		let mut rate_limits = 0u8;
 		loop {
-			let next = *self.cooldown.lock().await;
-			if speculative && Instant::now() < next {
-				return Err(Failure::Capacity);
-			}
-			sleep_until(next).await;
-			if Instant::now() >= *self.cooldown.lock().await {
-				break;
-			}
-		}
-		if self.stopped() {
-			return Err(Failure::Expired);
-		}
-		let mut authorization =
-			HeaderValue::from_str(self.secret.expose()).map_err(|_| Failure::InvalidCredential)?;
-		authorization.set_sensitive(true);
-		#[cfg(not(test))]
-		let base = "https://discord.com/api/v10";
-		#[cfg(test)]
-		let base = &self.base;
-		let write = method != Method::GET;
-		let mut request = self
-			.rest_client()
-			.await?
-			.request(method, format!("{base}{path}"))
-			.header(AUTHORIZATION, authorization);
-		if let Some(retry) = retry {
-			if retry.expired() {
-				return Err(Failure::ProtocolAt(
-					"Verification expired; start the check again",
-				));
-			}
-			for (name, value) in [
-				("x-captcha-key", Some(retry.passcode())),
-				("x-captcha-rqtoken", retry.rqtoken()),
-				("x-captcha-session-id", retry.session_id()),
-			] {
-				if let Some(value) = value {
-					let mut value = HeaderValue::from_str(value).map_err(|_| Failure::Protocol)?;
-					value.set_sensitive(true);
-					request = request.header(name, value);
+			loop {
+				let next = *self.cooldown.lock().await;
+				if speculative && Instant::now() < next {
+					return Err(Failure::Capacity);
+				}
+				sleep_until(next).await;
+				if Instant::now() >= *self.cooldown.lock().await {
+					break;
 				}
 			}
-		}
-		if let Some(body) = body {
-			request = match body {
-				RequestContent::Json(body) => request.json(&body),
-				RequestContent::Multipart { content_type, body } => request
-					.header(
-						CONTENT_TYPE,
-						HeaderValue::from_str(&content_type).map_err(|_| Failure::Protocol)?,
-					)
-					.body(body),
-			};
-		}
-		let mut response = request.send().await.map_err(|_| {
-			if write {
-				Failure::Ambiguous
-			} else {
-				Failure::Network
+			if self.stopped() {
+				return Err(Failure::Expired);
 			}
-		})?;
-		let status = response.status();
-		let exhausted = response
-			.headers()
-			.get("x-ratelimit-remaining")
-			.and_then(|v| v.to_str().ok())
-			== Some("0");
-		let reset = response
-			.headers()
-			.get("x-ratelimit-reset-after")
-			.and_then(|v| v.to_str().ok())
-			.and_then(|s| s.parse::<f64>().ok());
-		let retry_header = response
-			.headers()
-			.get("retry-after")
-			.and_then(|v| v.to_str().ok())
-			.and_then(|s| s.parse::<f64>().ok());
-		if exhausted || status == StatusCode::TOO_MANY_REQUESTS {
-			let mut next = self.cooldown.lock().await;
-			*next = (*next).max(Instant::now() + safe_delay(reset.or(retry_header))?);
-		}
-		if status == StatusCode::UNAUTHORIZED {
-			self.stop();
-			return Err(Failure::Expired);
-		}
-		if response
-			.content_length()
-			.is_some_and(|n| n > max_bytes as u64)
-		{
-			return Err(Failure::Capacity);
-		}
-		let mut bytes = zeroize::Zeroizing::new(Vec::with_capacity(
-			response.content_length().unwrap_or(0).min(max_bytes as u64) as usize,
-		));
-		while let Some(chunk) = response.chunk().await.map_err(|_| {
-			if write {
-				Failure::Ambiguous
-			} else {
-				Failure::Network
-			}
-		})? {
-			if bytes.len() + chunk.len() > max_bytes {
-				return Err(Failure::Capacity);
-			}
-			bytes.extend_from_slice(&chunk);
-		}
-		if !status.is_success() {
-			let error = decode::<ErrorBody>(&bytes).unwrap_or_default();
-			if error.captcha_key.is_some() || matches!(error.code, Some(60003 | 50014)) {
-				let auth_challenge = matches!(error.code, Some(60003 | 50014));
-				if !auth_challenge
-					&& error.captcha_key.is_some()
-					&& matches!(status, StatusCode::BAD_REQUEST | StatusCode::FORBIDDEN)
-					&& let Some(output) = challenge.as_mut()
-				{
-					if let Some(parsed) = invite_captcha(&bytes) {
-						**output = Some(parsed);
-						return Err(Failure::Challenged);
+			let mut authorization = HeaderValue::from_str(self.secret.expose())
+				.map_err(|_| Failure::InvalidCredential)?;
+			authorization.set_sensitive(true);
+			#[cfg(not(test))]
+			let base = "https://discord.com/api/v10";
+			#[cfg(test)]
+			let base = &self.base;
+			let write = method != Method::GET;
+			let mut request = self
+				.rest_client()
+				.await?
+				.request(method.clone(), format!("{base}{path}"))
+				.header(AUTHORIZATION, authorization);
+			if let Some(retry) = retry {
+				if retry.expired() {
+					return Err(Failure::ProtocolAt(
+						"Verification expired; start the check again",
+					));
+				}
+				for (name, value) in [
+					("x-captcha-key", Some(retry.passcode())),
+					("x-captcha-rqtoken", retry.rqtoken()),
+					("x-captcha-session-id", retry.session_id()),
+				] {
+					if let Some(value) = value {
+						let mut value =
+							HeaderValue::from_str(value).map_err(|_| Failure::Protocol)?;
+						value.set_sensitive(true);
+						request = request.header(name, value);
 					}
-					return Err(Failure::ProtocolAt(
-						"This verification is unavailable; complete the action in the official client",
-					));
 				}
-				if !auth_challenge && write && challenge.is_none() {
-					// The service can require a captcha for one write (for example a friend
-					// request). No solver is wired for this action, but it is not a session
-					// challenge: keep the connection and report a bounded local reason.
-					return Err(Failure::ProtocolAt(
-						"Discord requires verification for this action; complete it in the official client",
-					));
-				}
-
-				self.stop();
-				return Err(Failure::Challenged);
 			}
-			if status == StatusCode::TOO_MANY_REQUESTS {
+			if let Some(content) = body.take() {
+				request = match content {
+					RequestContent::Json(body) => request.json(&body),
+					RequestContent::Multipart { content_type, body } => request
+						.header(
+							CONTENT_TYPE,
+							HeaderValue::from_str(&content_type).map_err(|_| Failure::Protocol)?,
+						)
+						.body(body),
+				};
+			}
+			let mut response = request.send().await.map_err(|_| {
+				if write {
+					Failure::Ambiguous
+				} else {
+					Failure::Network
+				}
+			})?;
+			let status = response.status();
+			let exhausted = response
+				.headers()
+				.get("x-ratelimit-remaining")
+				.and_then(|v| v.to_str().ok())
+				== Some("0");
+			let reset = response
+				.headers()
+				.get("x-ratelimit-reset-after")
+				.and_then(|v| v.to_str().ok())
+				.and_then(|s| s.parse::<f64>().ok());
+			let retry_header = response
+				.headers()
+				.get("retry-after")
+				.and_then(|v| v.to_str().ok())
+				.and_then(|s| s.parse::<f64>().ok());
+			if exhausted && status != StatusCode::TOO_MANY_REQUESTS {
 				let mut next = self.cooldown.lock().await;
-				*next =
-					(*next).max(Instant::now() + safe_delay(error.retry_after.or(retry_header))?);
-				return Err(Failure::RateLimited);
+				*next = (*next).max(Instant::now() + safe_delay(reset)?);
 			}
-			// A missing private note is empty, not a missing user profile. No other 404 is converted.
-			if !write && status == StatusCode::NOT_FOUND && path.starts_with("/users/@me/notes/") {
-				return Ok(br#"{"note":""}"#.to_vec());
+			if status == StatusCode::UNAUTHORIZED {
+				self.stop();
+				return Err(Failure::Expired);
 			}
-			return Err(if status == StatusCode::FORBIDDEN {
-				Failure::Forbidden
-			} else if status.is_server_error() && write {
-				Failure::Ambiguous
-			} else {
-				Failure::Protocol
-			});
+			if response
+				.content_length()
+				.is_some_and(|n| n > max_bytes as u64)
+			{
+				return Err(Failure::Capacity);
+			}
+			let mut bytes = zeroize::Zeroizing::new(Vec::with_capacity(
+				response.content_length().unwrap_or(0).min(max_bytes as u64) as usize,
+			));
+			while let Some(chunk) = response.chunk().await.map_err(|_| {
+				if write {
+					Failure::Ambiguous
+				} else {
+					Failure::Network
+				}
+			})? {
+				if bytes.len() + chunk.len() > max_bytes {
+					return Err(Failure::Capacity);
+				}
+				bytes.extend_from_slice(&chunk);
+			}
+			if !status.is_success() {
+				let error = decode::<ErrorBody>(&bytes).unwrap_or_default();
+				if error.captcha_key.is_some() || matches!(error.code, Some(60003 | 50014)) {
+					let auth_challenge = matches!(error.code, Some(60003 | 50014));
+					if !auth_challenge
+						&& error.captcha_key.is_some()
+						&& matches!(status, StatusCode::BAD_REQUEST | StatusCode::FORBIDDEN)
+						&& let Some(output) = challenge.as_mut()
+					{
+						if let Some(parsed) = invite_captcha(&bytes) {
+							**output = Some(parsed);
+							return Err(Failure::Challenged);
+						}
+						return Err(Failure::ProtocolAt(
+							"This verification is unavailable; complete the action in the official client",
+						));
+					}
+					if !auth_challenge && write && challenge.is_none() {
+						// The service can require a captcha for one write (for example a friend
+						// request). No solver is wired for this action, but it is not a session
+						// challenge: keep the connection and report a bounded local reason.
+						return Err(Failure::ProtocolAt(
+							"Discord requires verification for this action; complete it in the official client",
+						));
+					}
+
+					self.stop();
+					return Err(Failure::Challenged);
+				}
+				if status == StatusCode::TOO_MANY_REQUESTS {
+					// The body is the penalty Discord documents. A missing or shorter reset
+					// header must not send the retry early.
+					let delay = safe_delay(error.retry_after.or(retry_header).or(reset))?;
+					{
+						let mut next = self.cooldown.lock().await;
+						*next = (*next).max(Instant::now() + delay);
+					}
+					if idempotent
+						&& delay <= MAX_READ_RATE_LIMIT_WAIT
+						&& rate_limits < READ_RATE_LIMIT_RETRIES
+					{
+						rate_limits += 1;
+						continue;
+					}
+					return Err(Failure::RateLimited);
+				}
+				// A missing private note is empty, not a missing user profile. No other 404 is converted.
+				if !write
+					&& status == StatusCode::NOT_FOUND
+					&& path.starts_with("/users/@me/notes/")
+				{
+					return Ok(br#"{"note":""}"#.to_vec());
+				}
+				return Err(if status == StatusCode::FORBIDDEN {
+					Failure::Forbidden
+				} else if status.is_server_error() && write {
+					Failure::Ambiguous
+				} else {
+					Failure::Protocol
+				});
+			}
+			return Ok(std::mem::take(&mut *bytes));
 		}
-		Ok(std::mem::take(&mut *bytes))
 	}
 	pub async fn gateway_url(&self) -> Result<String, Failure> {
 		let bytes = self
@@ -3116,11 +3143,6 @@ mod tests {
 			),
 			("401 Unauthorized", "{}", Failure::Expired),
 			(
-				"429 Too Many Requests",
-				"{\"retry_after\":0.1,\"global\":true}",
-				Failure::RateLimited,
-			),
-			(
 				"403 Forbidden",
 				"{\"captcha_key\":[\"challenge\"]}",
 				Failure::Challenged,
@@ -3149,6 +3171,68 @@ mod tests {
 			if expected.ends_session() {
 				assert!(api.stopped());
 			}
+			task.await.unwrap();
+		}
+		fn limited(status: &str, body: &str) -> String {
+			format!(
+				"HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+				body.len()
+			)
+		}
+		{
+			let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+			let address = listener.local_addr().unwrap();
+			let attempts = usize::from(READ_RATE_LIMIT_RETRIES) + 1;
+			let task = tokio::spawn(async move {
+				for _ in 0..attempts {
+					let (mut socket, _) = listener.accept().await.unwrap();
+					let mut buffer = [0; 4096];
+					let _ = socket.read(&mut buffer).await.unwrap();
+					let body = r#"{"retry_after":0.05,"global":true}"#;
+					socket
+						.write_all(limited("429 Too Many Requests", body).as_bytes())
+						.await
+						.unwrap();
+				}
+			});
+			let mut api = DiscordApi::new(Arc::new(
+				SessionSecret::from_owner_input("SYNTHETIC_SECRET_MARKER".into()).unwrap(),
+			))
+			.unwrap();
+			api.base = format!("http://{address}");
+			assert_eq!(
+				api.current_user().await.map(|_| ()).unwrap_err(),
+				Failure::RateLimited
+			);
+			assert!(!api.stopped());
+			task.await.unwrap();
+		}
+		{
+			let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+			let address = listener.local_addr().unwrap();
+			let task = tokio::spawn(async move {
+				for (status, body) in [
+					(
+						"429 Too Many Requests",
+						r#"{"retry_after":0.05,"global":true}"#,
+					),
+					("200 OK", r#"{"id":"42","username":"synthetic"}"#),
+				] {
+					let (mut socket, _) = listener.accept().await.unwrap();
+					let mut buffer = [0; 4096];
+					let _ = socket.read(&mut buffer).await.unwrap();
+					socket
+						.write_all(limited(status, body).as_bytes())
+						.await
+						.unwrap();
+				}
+			});
+			let mut api = DiscordApi::new(Arc::new(
+				SessionSecret::from_owner_input("SYNTHETIC_SECRET_MARKER".into()).unwrap(),
+			))
+			.unwrap();
+			api.base = format!("http://{address}");
+			assert_eq!(api.current_user().await.unwrap().id, Id(42));
 			task.await.unwrap();
 		}
 		assert!(safe_delay(Some(f64::NAN)).is_err());

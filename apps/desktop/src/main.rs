@@ -4953,6 +4953,12 @@ impl Desktop {
 				generation: self.state.generation,
 				event: Event::Failure(failure),
 			});
+			if failure == Failure::RateLimited && self.state.failure_detail.is_none() {
+				self.state.failure_detail = Some(
+					"Discord is rate limiting this sign-in. Wait before trying again. Another attempt before that can make the wait longer."
+						.into(),
+				);
+			}
 			if !matches!(self.state.auth, AuthState::Expired | AuthState::Challenged) {
 				self.state.auth = AuthState::Failed;
 			}
