@@ -810,21 +810,12 @@ impl MessagingUi {
 							// Forum containers open their post list; Discord lists them as browsable rows.
 							let forum = channel.guild.is_some() && matches!(channel.kind, 15 | 16);
 							// A forum carries no messages of its own: its posts hold the activity.
-							let unread = visible
-								&& (state.channel_unread(channel) == Some(true)
-									|| state.unread_count(channel.id) > 0
-									|| (forum && state.forum_unread(channel.id)));
+							let (unread, count) =
+								crate::notifications::row_activity(state, channel, visible);
 							let new_posts = if visible && forum {
 								state.forum_new_count(channel.id)
 							} else {
 								0
-							};
-							let count = if !visible || forum {
-								0
-							} else if channel.guild.is_some() {
-								state.mention_count(channel.id)
-							} else {
-								state.unread_count(channel.id)
 							};
 							let enabled = visible && (channel.supports_text() || forum);
 							// Kinds Serein cannot render keep Discord's own destination.
