@@ -2415,4 +2415,128 @@ mod tests {
 			)
 		);
 	}
+
+	#[test]
+	fn voice_text_channel_pings_match_text_channel_indicators() {
+		let mut state = test_support::demo_state();
+		state.gateway_connected = true;
+		for id in [Id(20), Id(25)] {
+			state
+				.channels
+				.iter_mut()
+				.find(|channel| channel.id == id)
+				.unwrap()
+				.last_message = Some(Id(800));
+		}
+		state.apply(client_core::Envelope {
+			generation: state.generation,
+			event: client_core::Event::ReadState(client_core::read_state::Event::Snapshot {
+				partial: false,
+				entries: Some(vec![(Id(20), Some(Id(100)), 3), (Id(25), Some(Id(100)), 3)]),
+				version: Some(2),
+			}),
+		});
+		state.select(Id(22));
+		for id in [Id(20), Id(25)] {
+			let channel = state.channel(id).unwrap();
+			assert_eq!(state.channel_unread(channel), Some(true));
+			assert_eq!(state.mention_count(id), 3);
+			assert_eq!(state.guild_channel_muted(id), Some(false));
+		}
+
+		let mut view = MessagingUi {
+			guild: Some(Id(10)),
+			..Default::default()
+		};
+		let ctx = egui::Context::default();
+		ctx.enable_accesskit();
+		design::apply(&ctx);
+		let output = ctx.run_ui(
+			egui::RawInput {
+				screen_rect: Some(egui::Rect::from_min_size(
+					egui::Pos2::ZERO,
+					egui::vec2(280.0, 1600.0),
+				)),
+				..Default::default()
+			},
+			|ui| {
+				assert!(view.channel_list(ui, &mut state).is_none());
+			},
+		);
+		let colors = design::palette_for(&ctx);
+		fn walk(
+			shape: &egui::Shape,
+			texts: &mut Vec<(String, egui::Pos2, egui::Color32)>,
+			rects: &mut Vec<(egui::Rect, egui::Color32)>,
+		) {
+			match shape {
+				egui::Shape::Text(text) => {
+					let color = text
+						.galley
+						.job
+						.sections
+						.first()
+						.map(|section| section.format.color)
+						.unwrap_or(text.fallback_color);
+					texts.push((text.galley.job.text.clone(), text.pos, color));
+				}
+				egui::Shape::Rect(rect) => rects.push((rect.rect, rect.fill)),
+				egui::Shape::Vec(children) => {
+					for shape in children {
+						walk(shape, texts, rects);
+					}
+				}
+				_ => {}
+			}
+		}
+		let (mut texts, mut rects) = (Vec::new(), Vec::new());
+		for clipped in &output.shapes {
+			walk(&clipped.shape, &mut texts, &mut rects);
+		}
+		let labels: Vec<String> = output
+			.platform_output
+			.accesskit_update
+			.iter()
+			.flat_map(|update| update.nodes.iter())
+			.filter_map(|(_, node)| node.label().map(str::to_owned))
+			.collect();
+		let indicators = |name: &str| {
+			let name_row = texts.iter().find(|(text, ..)| text == name);
+			let (pos, color) = name_row
+				.map(|(_, pos, color)| (*pos, *color))
+				.unwrap_or((egui::Pos2::ZERO, egui::Color32::TRANSPARENT));
+			let near = |rect: egui::Rect| (rect.center().y - pos.y).abs() < 20.0;
+			let badge = rects
+				.iter()
+				.any(|(rect, fill)| *fill == colors.danger && near(*rect) && rect.height() >= 16.0);
+			let pill = rects.iter().any(|(rect, fill)| {
+				*fill == colors.text_strong
+					&& near(*rect) && rect.width() <= 6.0
+					&& rect.height() <= 12.0
+			});
+			let label = labels.iter().find(|label| label.contains(name)).cloned();
+			format!(
+				"name={name} painted={} color={color:?} strong={} badge={badge} pill={pill} label={label:?}",
+				name_row.is_some(),
+				color == colors.text_strong,
+			)
+		};
+		let text_paint = indicators("getting-started");
+		let voice_paint = indicators("hangout");
+		output.drop_without_applying_deltas();
+		assert!(
+			text_paint.contains("badge=true")
+				&& text_paint.contains("pill=true")
+				&& text_paint.contains("strong=true"),
+			"text control must show a ping badge, unread pill, and strong name: {text_paint}"
+		);
+		assert!(
+			voice_paint.contains("badge=true")
+				&& voice_paint.contains("pill=true")
+				&& voice_paint.contains("strong=true")
+				&& voice_paint.contains("unread")
+				&& voice_paint.contains("3 notifications"),
+			"voice text channel pings must match text indicators\ntext {text_paint}\nvoice {voice_paint}"
+		);
+	}
 }
