@@ -5323,6 +5323,183 @@ mod tests {
 		state
 	}
 
+	/// Drag a visible message, then scroll. The copied range must survive both a
+	/// finished selection and a wheel tick while the button is still down.
+	#[test]
+	fn scrolling_keeps_a_message_text_selection() {
+		let ctx = egui::Context::default();
+		crate::design::apply(&ctx);
+		let mut state = loading_unread_channel(false);
+		state.freshness = model::Freshness::Fresh;
+		state.history_pending = false;
+		state.older_exhausted = true;
+		for id in 1..=40 {
+			let mut message = text_message(id);
+			message.content = format!("Sentence {id:02} alpha bravo charlie delta");
+			state.timeline.insert(message, false, false).unwrap();
+		}
+		state.channels[0].last_message = Some(Id(40));
+		let mut view = TimelineView::default();
+
+		fn texts(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+			match shape {
+				egui::Shape::Text(text) => out.push((
+					text.galley.job.text.clone(),
+					text.galley.rect.translate(text.pos.to_vec2()),
+				)),
+				egui::Shape::Vec(shapes) => {
+					for shape in shapes {
+						texts(shape, out);
+					}
+				}
+				_ => {}
+			}
+		}
+		let mut frame = |events: Vec<egui::Event>| {
+			let output = ctx.run_ui(
+				egui::RawInput {
+					focused: true,
+					events,
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(900.0, 600.0),
+					)),
+					..Default::default()
+				},
+				|ui| {
+					view.show(
+						ui,
+						&mut state,
+						&mut None,
+						&mut None,
+						(
+							&mut crate::avatars::Avatars::default(),
+							&mut crate::profiles::ProfileSession::default(),
+						),
+						None,
+					);
+				},
+			);
+			let copied = output.platform_output.commands.iter().find_map(|command| {
+				match command {
+					egui::OutputCommand::CopyText(text) => Some(text.clone()),
+					_ => None,
+				}
+			});
+			let mut labels = vec![];
+			for shape in &output.shapes {
+				texts(&shape.shape, &mut labels);
+			}
+			output.drop_without_applying_deltas();
+			(labels, copied, crate::select::has_selection(&ctx))
+		};
+		let wheel = |delta: f32| {
+			vec![
+				egui::Event::PointerMoved(egui::pos2(400.0, 300.0)),
+				egui::Event::MouseWheel {
+					unit: egui::MouseWheelUnit::Point,
+					phase: egui::TouchPhase::Move,
+					source: egui::MouseWheelSource::Unknown,
+					delta: egui::vec2(0.0, delta),
+					modifiers: egui::Modifiers::NONE,
+				},
+			]
+		};
+		let press = |pos: egui::Pos2, pressed: bool| {
+			vec![
+				egui::Event::PointerMoved(pos),
+				egui::Event::PointerButton {
+					pos,
+					button: egui::PointerButton::Primary,
+					pressed,
+					modifiers: egui::Modifiers::NONE,
+				},
+			]
+		};
+		for _ in 0..8 {
+			frame(vec![]);
+		}
+		let (labels, _, _) = frame(vec![]);
+		let sentence = labels.iter().find(|(text, rect)| {
+			text.contains("alpha bravo")
+				&& rect.center().y > 80.0
+				&& rect.center().y < 520.0
+				&& rect.width() > 40.0
+		});
+		let (_, rect) = sentence.cloned().unwrap_or_else(|| {
+			panic!(
+				"no visible sentence: {:?}",
+				labels
+					.iter()
+					.map(|(text, _)| text.as_str())
+					.filter(|text| text.contains("Sentence"))
+					.collect::<Vec<_>>()
+			)
+		});
+		let from = egui::pos2(rect.left() + 4.0, rect.center().y);
+		let to = egui::pos2(rect.right() - 4.0, rect.center().y);
+		frame(press(from, true));
+		frame(vec![egui::Event::PointerMoved(to)]);
+		frame(press(to, false));
+		let (_, copied, selected) = frame(vec![egui::Event::Copy]);
+		let copied = copied.unwrap_or_default();
+		assert!(
+			selected && copied.contains("alpha"),
+			"selection did not start: selected={selected} copied={copied:?}"
+		);
+
+		let (labels, _, selected_after_nudge) = frame(wheel(48.0));
+		let still_visible = labels.iter().any(|(text, rect)| {
+			text.contains("alpha bravo") && rect.top() < 600.0 && rect.bottom() > 0.0
+		});
+		let (_, nudged, _) = frame(vec![egui::Event::Copy]);
+		assert!(
+			selected_after_nudge && nudged.as_deref() == Some(copied.as_str()),
+			"small scroll cleared the selection (visible={still_visible}): {nudged:?}"
+		);
+
+		let mut gone = false;
+		for _ in 0..12 {
+			let (labels, _, selected) = frame(wheel(240.0));
+			gone = !labels.iter().any(|(text, rect)| {
+				text.contains(&copied) && rect.top() < 600.0 && rect.bottom() > 0.0
+			});
+			if gone {
+				let (_, after, _) = frame(vec![egui::Event::Copy]);
+				assert!(
+					selected && after.as_deref() == Some(copied.as_str()),
+					"scrolling the selection offscreen cleared it: {after:?}"
+				);
+				break;
+			}
+		}
+		assert!(gone, "the wheel never moved the selection offscreen");
+
+		let (labels, _, _) = frame(vec![]);
+		let (_, rect) = labels
+			.iter()
+			.find(|(text, rect)| {
+				text.contains("alpha bravo")
+					&& rect.center().y > 80.0
+					&& rect.center().y < 520.0
+			})
+			.cloned()
+			.expect("a sentence to drag through a wheel tick");
+		let from = egui::pos2(rect.left() + 4.0, rect.center().y);
+		let to = egui::pos2((rect.left() + rect.right()) / 2.0, rect.center().y);
+		frame(press(from, true));
+		frame(vec![egui::Event::PointerMoved(to)]);
+		let mut scrolling = wheel(180.0);
+		scrolling.insert(0, egui::Event::PointerMoved(to));
+		let (_, _, selected_while_dragging) = frame(scrolling);
+		frame(press(to, false));
+		let (_, dragged, _) = frame(vec![egui::Event::Copy]);
+		assert!(
+			selected_while_dragging && dragged.as_ref().is_some_and(|text| text.contains("alpha")),
+			"wheel during a drag cleared the selection: {dragged:?}"
+		);
+	}
+
 	#[test]
 	fn embed_lightbox_reuses_viewer_and_closes_when_source_is_hidden_or_changed() {
 		for reason in [0, 1, 2] {
