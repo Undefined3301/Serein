@@ -545,6 +545,11 @@ impl DiscordApi {
 						}
 						return Err(Failure::RateLimited);
 					}
+					// A block page has no JSON penalty. The short read retry must not run.
+					let delay = safe_delay(retry_header.or(reset).or(Some(60.0)))?;
+					let mut next = self.cooldown.lock().await;
+					*next = (*next).max(Instant::now() + delay);
+					return Err(Failure::RateLimited);
 				}
 				if status == StatusCode::TOO_MANY_REQUESTS {
 					// The body is the penalty Discord documents. A missing or shorter reset
