@@ -2243,6 +2243,10 @@ screen-body-quality = Kalite
 # Context: body
 screen-body-source = Kaynak
 # Context: body
+screen-preview-paused-title = Yayınınız hâlâ devam ediyor!
+# Context: body
+screen-preview-paused-body = Kaynaklarınızı korumak için bu önizlemeyi duraklattık.
+# Context: body
 screen-body-quality-selection-does-not-require-nitro = Kaliteli seçim Nitro gerektirmez.
 # Context: body
 screen-body-refresh = Yenile
