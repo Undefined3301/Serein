@@ -602,20 +602,56 @@ unsafe fn scaled_nv12(output: &mut Output, image: &CVImageBuffer) -> Result<Pict
 		return unsafe { copy_nv12(image, output.policy) };
 	}
 	let format = CVPixelBufferGetPixelFormatType(image);
-	if output
+	let policy = output.policy;
+	let ready = output
 		.scaler
 		.as_ref()
-		.is_none_or(|scaler| scaler.size != size || scaler.format != format)
-	{
-		output.scaler = Scaler::new(size, format);
+		.is_some_and(|scaler| scaler.size == size && scaler.format == format);
+	if ready {
+		if let Some(picture) = output
+			.scaler
+			.as_ref()
+			.and_then(|scaler| unsafe { transferred(scaler, image, policy) }.ok())
+		{
+			return Ok(picture);
+		}
+	} else if let Some(next) = Scaler::new(size, format) {
+		match unsafe { transferred(&next, image, policy) } {
+			Ok(picture) => {
+				output.scaler = Some(next);
+				return Ok(picture);
+			}
+			Err(_) => {}
+		}
 	}
+	// A refused size must not drop the scaler that is already producing frames.
+	let picture = output.scaler.as_ref().and_then(|scaler| {
+		(scaler.size != size)
+			.then(|| unsafe { transferred(scaler, image, policy) }.ok())
+			.flatten()
+	});
+	let kept = output
+		.scaler
+		.as_ref()
+		.filter(|scaler| scaler.size != size)
+		.map(|scaler| scaler.size);
+	if let (Some(picture), Some(kept)) = (picture, kept) {
+		output.size = kept;
+		return Ok(picture);
+	}
+	unsafe { copy_nv12(image, policy) }
+}
+
+unsafe fn transferred(
+	scaler: &Scaler,
+	image: &CVImageBuffer,
+	policy: FramePolicy,
+) -> Result<Picture, &'static str> {
 	// SAFETY: Both buffers are live; the destination is ours and unshared.
-	if let Some(scaler) = &output.scaler
-		&& unsafe { scaler.transfer.0.transfer_image(image, &scaler.buffer) } == 0
-	{
-		return unsafe { copy_planes(&scaler.buffer, image, output.policy) };
+	if unsafe { scaler.transfer.0.transfer_image(image, &scaler.buffer) } != 0 {
+		return Err(INVALID);
 	}
-	unsafe { copy_nv12(image, output.policy) }
+	unsafe { copy_planes(&scaler.buffer, image, policy) }
 }
 
 /// Copy one bi-planar 4:2:0 picture into tightly packed NV12 after checking every bound.
