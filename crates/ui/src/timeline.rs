@@ -7101,12 +7101,12 @@ mod tests {
 		state.freshness = model::Freshness::Fresh;
 		state.history_pending = false;
 		state.older_exhausted = true;
-		for id in 1..=8 {
+		for id in 1..=40 {
 			let mut message = text_message(id);
 			message.content = format!("Sentence {id:02} alpha bravo charlie delta");
 			state.timeline.insert(message, false, false).unwrap();
 		}
-		state.channels[0].last_message = Some(Id(8));
+		state.channels[0].last_message = Some(Id(40));
 		let mut view = TimelineView::default();
 		let mut draft = "UNSELECTED DRAFT".to_string();
 		let composer_id = egui::Id::unique("draft-selection");
@@ -7268,6 +7268,101 @@ mod tests {
 		assert!(
 			!menu_open || still_offered,
 			"Copy Selected Text left the menu while it was still open after release: {labels:?}"
+		);
+		let (_, still) = frame(vec![egui::Event::Copy]);
+		let still = still.unwrap_or_default();
+		assert!(
+			still == expected,
+			"the first Copy Selected Text dropped the highlight: {still:?}"
+		);
+		frame(press(to, egui::PointerButton::Secondary, true));
+		let (labels, _) = frame(vec![]);
+		let copy_at = labels
+			.iter()
+			.find(|(text, _)| text == "Copy Selected Text")
+			.map(|(_, rect)| rect.center())
+			.expect("Copy Selected Text without scrolling");
+		frame(press(copy_at, egui::PointerButton::Primary, true));
+		let (_, second_now) = frame(press(copy_at, egui::PointerButton::Primary, false));
+		let (_, second_next) = frame(vec![]);
+		let second = second_next.unwrap_or_else(|| second_now.unwrap_or_default());
+		let (_, after) = frame(vec![egui::Event::Copy]);
+		let after = after.unwrap_or_default();
+		assert!(
+			second == expected && after == expected,
+			"the next Copy Selected Text was not the whole highlight: menu {second:?}, after {after:?}, expected {expected:?}"
+		);
+		let shown = |labels: &[(String, egui::Rect)], id: &str| {
+			labels.iter().any(|(text, rect)| {
+				text.contains(id)
+					&& rect.center().y > 0.0
+					&& rect.center().y < 600.0
+					&& rect.width() > 40.0
+			})
+		};
+		let mut left_the_screen = false;
+		for _ in 0..80 {
+			let (labels, _) = frame(vec![egui::Event::MouseWheel {
+				unit: egui::MouseWheelUnit::Point,
+				delta: egui::vec2(0.0, 240.0),
+				modifiers: egui::Modifiers::NONE,
+				phase: egui::TouchPhase::Move,
+				source: egui::MouseWheelSource::Unknown,
+			}]);
+			if !shown(&labels, first_id) && !shown(&labels, last_id) {
+				left_the_screen = true;
+				break;
+			}
+		}
+		assert!(left_the_screen, "the highlight never left the screen");
+		for _ in 0..8 {
+			frame(vec![]);
+		}
+		for _ in 0..40 {
+			let (labels, _) = frame(vec![egui::Event::MouseWheel {
+				unit: egui::MouseWheelUnit::Point,
+				delta: egui::vec2(0.0, -240.0),
+				modifiers: egui::Modifiers::NONE,
+				phase: egui::TouchPhase::Move,
+				source: egui::MouseWheelSource::Unknown,
+			}]);
+			if shown(&labels, first_id) && shown(&labels, last_id) {
+				break;
+			}
+		}
+		for _ in 0..8 {
+			frame(vec![]);
+		}
+		let (labels, _) = frame(vec![]);
+		assert!(
+			crate::select::has_selection(&ctx),
+			"the highlight was gone after scrolling back, on screen first={} last={}",
+			shown(&labels, first_id),
+			shown(&labels, last_id)
+		);
+		let back = labels.iter().find(|(text, rect)| {
+			text.contains(last_id) && rect.center().y > 40.0 && rect.width() > 40.0
+		});
+		let Some((_, back_rect)) = back else {
+			panic!("the selection did not come back on screen");
+		};
+		let at = egui::pos2(back_rect.right() - 4.0, back_rect.center().y);
+		frame(press(at, egui::PointerButton::Secondary, true));
+		let (labels, _) = frame(vec![]);
+		let copy_at = labels
+			.iter()
+			.find(|(text, _)| text == "Copy Selected Text")
+			.map(|(_, rect)| rect.center())
+			.expect("Copy Selected Text after scrolling away and back");
+		frame(press(copy_at, egui::PointerButton::Primary, true));
+		let (_, later_now) = frame(press(copy_at, egui::PointerButton::Primary, false));
+		let (_, later_next) = frame(vec![]);
+		let later = later_next.unwrap_or_else(|| later_now.unwrap_or_default());
+		let (_, still) = frame(vec![egui::Event::Copy]);
+		let still = still.unwrap_or_default();
+		assert!(
+			later == expected && still == expected,
+			"Copy Selected Text after scrolling copied one piece and dropped the highlight: menu {later:?}, after {still:?}, expected {expected:?}"
 		);
 	}
 
