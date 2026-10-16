@@ -822,7 +822,10 @@ impl<K: Copy + Eq> Span<K> {
 			self.ends = Ends::None;
 			return;
 		}
+		// The copy menu's press lands on a message row. A new drag there forgets the
+		// rows already selected, and the next scroll drops the highlight.
 		if pressed
+			&& !egui::Popup::is_any_open(ctx)
 			&& let Some(origin) =
 				origin.filter(|pos| viewport.contains(*pos) && !exclude.contains(*pos))
 			&& let Some(&(hit, _)) = on_screen.iter().find(|(_, rect)| rect.contains(origin))
