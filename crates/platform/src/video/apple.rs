@@ -90,6 +90,10 @@ struct Scaler {
 	format: u32,
 }
 
+// SAFETY: A transfer session must not be used from two threads at once. `Output`'s mutex
+// is that lock, so the scaler can move between the decoder worker and the VideoToolbox callback.
+unsafe impl Send for Scaler {}
+
 impl Scaler {
 	fn new(size: OutputSize, format: u32) -> Option<Self> {
 		let mut transfer: *mut VTPixelTransferSession = null_mut();
@@ -616,12 +620,9 @@ unsafe fn scaled_nv12(output: &mut Output, image: &CVImageBuffer) -> Result<Pict
 			return Ok(picture);
 		}
 	} else if let Some(next) = Scaler::new(size, format) {
-		match unsafe { transferred(&next, image, policy) } {
-			Ok(picture) => {
-				output.scaler = Some(next);
-				return Ok(picture);
-			}
-			Err(_) => {}
+		if let Ok(picture) = unsafe { transferred(&next, image, policy) } {
+			output.scaler = Some(next);
+			return Ok(picture);
 		}
 	}
 	// A refused size must not drop the scaler that is already producing frames.
