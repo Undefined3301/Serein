@@ -619,11 +619,11 @@ unsafe fn scaled_nv12(output: &mut Output, image: &CVImageBuffer) -> Result<Pict
 		{
 			return Ok(picture);
 		}
-	} else if let Some(next) = Scaler::new(size, format) {
-		if let Ok(picture) = unsafe { transferred(&next, image, policy) } {
-			output.scaler = Some(next);
-			return Ok(picture);
-		}
+	} else if let Some(next) = Scaler::new(size, format)
+		&& let Ok(picture) = unsafe { transferred(&next, image, policy) }
+	{
+		output.scaler = Some(next);
+		return Ok(picture);
 	}
 	// A refused size must not drop the scaler that is already producing frames.
 	let picture = output.scaler.as_ref().and_then(|scaler| {
