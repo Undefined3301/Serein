@@ -425,6 +425,7 @@ pub fn request_copy(ctx: &egui::Context) {
 }
 
 const OFFSTAGE: &str = "serein-selection-offstage";
+pub(crate) const PIN: &str = "serein-selection-pin";
 
 /// A zero-clip child for a selection end that has scrolled off the timeline.
 ///
@@ -447,26 +448,153 @@ fn reaches(ui: &egui::Ui, rect: Rect) -> bool {
 		|| ui
 			.stack()
 			.iter()
-			.any(|frame| frame.tags().contains(OFFSTAGE))
+			.any(|frame| frame.tags().contains(OFFSTAGE) || frame.tags().contains(PIN))
+}
+
+/// The scrollbar strip on the trailing edge of `clip`.
+pub(crate) fn scroll_bar_strip(ui: &egui::Ui, clip: Rect) -> Rect {
+	let scroll = ui.spacing().scroll;
+	let width = (scroll.bar_inner_margin + scroll.bar_width + scroll.bar_outer_margin).max(12.0);
+	Rect::from_min_max(
+		Pos2::new(clip.right() - width, clip.top()),
+		clip.right_bottom(),
+	)
+}
+
+/// A press inside `rect` is a hovered label, so egui does not treat it as a click away from the selection.
+///
+/// The scrollbar is that press. Selection fields are private, and the bar is the widget under the
+/// pointer, so the hover flag on a registration here is the lever that keeps the range.
+pub(crate) fn hold(ui: &mut egui::Ui, rect: Rect) {
+	if !rect.is_positive() || !has_selection(ui.ctx()) {
+		return;
+	}
+	let over = ui
+		.input(|input| input.pointer.interact_pos().or(input.pointer.hover_pos()))
+		.is_some_and(|pos| rect.contains(pos));
+	if !over {
+		return;
+	}
+	let mut response = ui.interact(rect, ui.scope_id().with("selection-hold"), Sense::hover());
+	response.flags.set(egui::response::Flags::HOVERED, true);
+	let galley = ui.fonts_mut(|fonts| {
+		fonts.layout_no_wrap(
+			String::new(),
+			egui::FontId::proportional(1.0),
+			Color32::TRANSPARENT,
+		)
+	});
+	LabelSelectionState::label_text_selection(
+		ui,
+		&response,
+		rect.min,
+		galley,
+		Color32::TRANSPARENT,
+		Stroke::NONE,
+	);
+}
+
+/// Channel clip for this pass. The timeline publishes it so a nested row can tell the
+/// viewport edge from its own short clip.
+fn viewport_id() -> egui::Id {
+	egui::Id::unique("serein-selection-viewport")
+}
+
+pub(crate) fn publish_viewport(ui: &egui::Ui, clip: Rect) {
+	ui.data_mut(|data| data.insert_temp(viewport_id(), clip));
+}
+
+/// The pointer is held still, so a scroll must not retarget the drag onto whatever glyph
+/// slid underneath it. The viewport edge is the exception: holding there extends the range.
+///
+/// Mouse-up is still inside egui's drag. `is_dragging` clears only at the end of that pass,
+/// so a release on top of text that scrolled under the pointer would steal the range.
+fn drag_is_still(ui: &egui::Ui) -> bool {
+	let (down, pressed, released, delta, pos) = ui.input(|input| {
+		(
+			input.pointer.primary_down(),
+			input.pointer.any_pressed(),
+			input.pointer.primary_released(),
+			input.pointer.delta(),
+			input.pointer.interact_pos(),
+		)
+	});
+	if (!down && !released) || pressed || delta.length_sq() >= 0.25 {
+		return false;
+	}
+	let Some(pos) = pos else {
+		return true;
+	};
+	let Some(viewport) = ui.data(|data| data.get_temp::<Rect>(viewport_id())) else {
+		return true;
+	};
+	if !viewport.is_positive() {
+		return true;
+	}
+	let band = 36.0;
+	let at_edge = pos.y < viewport.min.y + band || pos.y > viewport.max.y - band;
+	!at_edge
+}
+
+/// A still drag must not move onto another label. egui only updates the dragged end when
+/// `multi_widget_text_select` is set, or when the label already owns that end.
+pub(crate) fn lock_still_drag(ui: &mut egui::Ui) {
+	if drag_is_still(ui) {
+		ui.style_mut().interaction.multi_widget_text_select = false;
+	}
 }
 
 /// The one call into egui's label selection. Registers when `reaches` allows it.
+///
+/// A run that misses the clip still has to register, or egui drops the range. While a drag
+/// is held still, `cursor_for` would also retarget that range onto text that scrolled under
+/// the pointer. An empty clip skips that retarget. The painted shape is then unclipped so
+/// the same characters stay visible.
 pub(crate) fn register(
-	ui: &egui::Ui,
+	ui: &mut egui::Ui,
 	response: &Response,
 	galley_pos: Pos2,
 	galley: Arc<Galley>,
 	color: Color32,
 ) {
-	if reaches(ui, response.rect) {
-		LabelSelectionState::label_text_selection(
-			ui,
-			response,
-			galley_pos,
-			galley,
-			color,
-			Stroke::NONE,
-		);
+	if !reaches(ui, response.rect) {
+		return;
+	}
+	let clip = ui.clip_rect();
+	let offstage = !response.rect.intersects(clip);
+	let freeze = !offstage && drag_is_still(ui);
+	let mut response = response.clone();
+	if freeze {
+		response
+			.flags
+			.set(egui::response::Flags::CONTAINS_POINTER, false);
+	}
+	let hide = offstage || freeze;
+	if hide {
+		ui.set_clip_rect(Rect::NOTHING);
+	}
+	let layer = ui.layer_id();
+	let shape_idx = hide.then(|| {
+		ui.ctx()
+			.graphics(|gfx| gfx.get(layer).map(|list| list.next_idx()))
+	});
+	LabelSelectionState::label_text_selection(
+		ui,
+		&response,
+		galley_pos,
+		galley,
+		color,
+		Stroke::NONE,
+	);
+	if hide {
+		ui.set_clip_rect(clip);
+	}
+	if freeze && let Some(Some(idx)) = shape_idx {
+		ui.ctx().graphics_mut(|gfx| {
+			if let Some(list) = gfx.get_mut(layer) {
+				list.mutate_shape(idx, |shape| shape.clip_rect = clip);
+			}
+		});
 	}
 }
 
@@ -564,11 +692,22 @@ impl<K: Copy + Eq> Span<K> {
 		Pins(indices)
 	}
 
+	pub fn dragging(&self) -> bool {
+		matches!(self.ends, Ends::Dragging { .. })
+	}
+
 	/// Follow this pass's primary button over the rows on screen.
 	///
 	/// `viewport` is the timeline clip in screen space. `on_screen` lists the rows
-	/// built in the visible stage, top to bottom. Call once per pass after those rows.
-	pub fn track(&mut self, ctx: &egui::Context, viewport: Rect, on_screen: &[(K, Rect)]) {
+	/// built in the visible stage, top to bottom. `exclude` is the scrollbar strip.
+	/// A press there must not start a new drag. Call once per pass after those rows.
+	pub fn track(
+		&mut self,
+		ctx: &egui::Context,
+		viewport: Rect,
+		on_screen: &[(K, Rect)],
+		exclude: Rect,
+	) {
 		let (down, released, pressed, shift, origin, pointer) = ctx.input(|input| {
 			(
 				input.pointer.primary_down(),
@@ -584,7 +723,8 @@ impl<K: Copy + Eq> Span<K> {
 			return;
 		}
 		if pressed
-			&& let Some(origin) = origin.filter(|pos| viewport.contains(*pos))
+			&& let Some(origin) =
+				origin.filter(|pos| viewport.contains(*pos) && !exclude.contains(*pos))
 			&& let Some(&(hit, _)) = on_screen.iter().find(|(_, rect)| rect.contains(origin))
 		{
 			let anchor = if shift {

@@ -2645,6 +2645,7 @@ impl TimelineView {
 		let allow_hover = !session.holding()
 			&& !ui.input(|input| input.is_scrolling())
 			&& ui.ctx().dragged_id().is_none();
+		let selection_edge = std::cell::Cell::new(false);
 		let output = scroll.show_viewport(ui, |ui, viewport| {
 			ui.spacing_mut().item_spacing.y = 0.0;
 			if welcome && let Some(channel) = state.selected.and_then(|id| state.channel(id)) {
@@ -2669,6 +2670,32 @@ impl TimelineView {
 			);
 			let content_top = ui.cursor().top();
 			let clip = ui.clip_rect();
+			crate::select::publish_viewport(ui, clip);
+			crate::select::lock_still_drag(ui);
+			let bar = crate::select::scroll_bar_strip(ui, clip);
+			// A drag held against the clip edge scrolls the channel. The step is immediate
+			// so the next rows arrive under the pointer while the button is still down.
+			if self.selection.dragging()
+				&& let Some(pos) = ui.input(|input| input.pointer.interact_pos())
+				&& clip.contains(pos)
+				&& !bar.contains(pos)
+			{
+				let band = 36.0;
+				let toward_older = if pos.y < clip.min.y + band {
+					(clip.min.y + band - pos.y) / band
+				} else if pos.y > clip.max.y - band {
+					-((pos.y - (clip.max.y - band)) / band)
+				} else {
+					0.0
+				};
+				if toward_older != 0.0 {
+					ui.scroll_with_delta_animation(
+						egui::vec2(0.0, toward_older.clamp(-1.0, 1.0) * 64.0),
+						egui::style::ScrollAnimation::none(),
+					);
+					selection_edge.set(true);
+				}
+			}
 			// Measure leading overscan without changing the visible rows or parent bounds.
 			// Its new heights take effect together with anchor restoration next pass.
 			// The scroll content's box is only one viewport tall. A child that starts
@@ -2896,7 +2923,13 @@ impl TimelineView {
 					self.compact_messages || grouped(previous, message, self.unread_boundary);
 				let new_day = previous
 					.is_none_or(|previous| timestamp(previous.id).date() != timestamp(id).date());
-				let response = ui.scope_builder(egui::UiBuilder::new().scope_id(row_id), |ui| {
+				let mut row_scope = egui::UiBuilder::new().scope_id(row_id);
+				if pinned {
+					// A pinned row can still be on screen while the selected run has left the clip.
+					row_scope = row_scope
+						.ui_stack_info(egui::UiStackInfo::default().with_tag(crate::select::PIN));
+				}
+				let response = ui.scope_builder(row_scope, |ui| {
 					if new_day {
 						let date = timestamp(id);
 						divider(
@@ -4440,9 +4473,10 @@ impl TimelineView {
 				.filter(|measured| (anchor..end).contains(&measured.index))
 				.map(|measured| (measured.id, measured.rect))
 				.collect();
-			self.selection.track(ui.ctx(), clip, &on_screen);
+			self.selection.track(ui.ctx(), clip, &on_screen, bar);
 			viewport.min.y
 		});
+		crate::select::hold(ui, crate::select::scroll_bar_strip(ui, output.inner_rect));
 		self.scroll_offset = output.state.clamped_offset().y;
 		if jumped_to.is_some_and(|target| (self.scroll_offset - target).abs() > 1.0) {
 			self.jump = false;
@@ -4580,7 +4614,7 @@ impl TimelineView {
 			self.reflow_frames = self.reflow_frames.saturating_add(1);
 			self.consecutive_reflows = self.consecutive_reflows.saturating_add(1);
 			self.revision = u64::MAX;
-			let user_scrolling = scroll_delta != 0.0 || session.holding();
+			let user_scrolling = scroll_delta != 0.0 || session.holding() || selection_edge.get();
 			if was_following && !user_scrolling {
 				self.following = true;
 				self.jump = true;
@@ -5644,6 +5678,304 @@ mod tests {
 		assert!(
 			selected_while_dragging && dragged.as_ref().is_some_and(|text| text.contains("alpha")),
 			"wheel during a drag cleared the selection: {dragged:?}"
+		);
+	}
+
+	/// Premise: registering the end row offstage is enough for every scroll gesture.
+	/// These checks fail if that is false. A wheel that carries the dragged sentence
+	/// off screen, a scrollbar drag, a pointer held at the top edge, and a scroll
+	/// away and back must each keep the same copied text. The scroll-back also
+	/// requires the highlight on that sentence.
+	#[test]
+	fn selection_survives_the_scroll_gestures() {
+		let ctx = egui::Context::default();
+		crate::design::apply(&ctx);
+		let highlight = std::cell::Cell::new(egui::Color32::TRANSPARENT);
+		let mut state = loading_unread_channel(false);
+		state.freshness = model::Freshness::Fresh;
+		state.history_pending = false;
+		state.older_exhausted = true;
+		for id in 1..=40 {
+			let mut message = text_message(id);
+			message.content = format!("Sentence {id:02} alpha bravo charlie delta");
+			state.timeline.insert(message, false, false).unwrap();
+		}
+		state.channels[0].last_message = Some(Id(40));
+		let mut view = TimelineView::default();
+
+		fn texts(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+			match shape {
+				egui::Shape::Text(text) => out.push((
+					text.galley.job.text.clone(),
+					text.galley.rect.translate(text.pos.to_vec2()),
+				)),
+				egui::Shape::Vec(shapes) => {
+					for shape in shapes {
+						texts(shape, out);
+					}
+				}
+				_ => {}
+			}
+		}
+		fn painted(shape: &egui::Shape, needle: &str, color: egui::Color32) -> bool {
+			match shape {
+				egui::Shape::Text(text) if text.galley.job.text.contains(needle) => {
+					text.galley.rows.iter().any(|row| {
+						row.visuals
+							.mesh
+							.vertices
+							.iter()
+							.any(|vertex| vertex.color == color)
+					})
+				}
+				egui::Shape::Vec(shapes) => {
+					shapes.iter().any(|shape| painted(shape, needle, color))
+				}
+				_ => false,
+			}
+		}
+		let seek: std::cell::Cell<Option<String>> = std::cell::Cell::new(None);
+		let clock = std::cell::Cell::new(0.0_f64);
+		let mut frame = |events: Vec<egui::Event>| {
+			let output = ctx.run_ui(
+				egui::RawInput {
+					focused: true,
+					time: Some(clock.get()),
+					predicted_dt: 1.0 / 60.0,
+					events,
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(900.0, 600.0),
+					)),
+					..Default::default()
+				},
+				|ui| {
+					highlight.set(ui.visuals().selection.bg_fill);
+					view.show(
+						ui,
+						&mut state,
+						&mut None,
+						&mut None,
+						(
+							&mut crate::avatars::Avatars::default(),
+							&mut crate::profiles::ProfileSession::default(),
+						),
+						None,
+					);
+				},
+			);
+			let copied = output
+				.platform_output
+				.commands
+				.iter()
+				.find_map(|command| match command {
+					egui::OutputCommand::CopyText(text) => Some(text.clone()),
+					_ => None,
+				});
+			let mut labels = vec![];
+			for shape in &output.shapes {
+				texts(&shape.shape, &mut labels);
+			}
+			let highlighted = seek.take().is_some_and(|needle| {
+				output
+					.shapes
+					.iter()
+					.any(|shape| painted(&shape.shape, &needle, highlight.get()))
+			});
+			output.drop_without_applying_deltas();
+			clock.set(clock.get() + 1.0 / 60.0);
+			(
+				labels,
+				copied,
+				crate::select::has_selection(&ctx),
+				highlighted,
+				view.scroll_offset,
+			)
+		};
+		let wheel = |delta: f32| {
+			vec![
+				egui::Event::PointerMoved(egui::pos2(400.0, 300.0)),
+				egui::Event::MouseWheel {
+					unit: egui::MouseWheelUnit::Point,
+					phase: egui::TouchPhase::Move,
+					source: egui::MouseWheelSource::Unknown,
+					delta: egui::vec2(0.0, delta),
+					modifiers: egui::Modifiers::NONE,
+				},
+			]
+		};
+		let press = |pos: egui::Pos2, pressed: bool| {
+			vec![
+				egui::Event::PointerMoved(pos),
+				egui::Event::PointerButton {
+					pos,
+					button: egui::PointerButton::Primary,
+					pressed,
+					modifiers: egui::Modifiers::NONE,
+				},
+			]
+		};
+		for _ in 0..8 {
+			frame(vec![]);
+		}
+		fn visible(labels: &[(String, egui::Rect)]) -> Option<&(String, egui::Rect)> {
+			labels.iter().find(|(text, rect)| {
+				text.contains("alpha bravo")
+					&& rect.center().y > 80.0
+					&& rect.center().y < 520.0
+					&& rect.width() > 40.0
+			})
+		}
+		fn on_screen(labels: &[(String, egui::Rect)], needle: &str) -> bool {
+			labels.iter().any(|(text, rect)| {
+				text.contains(needle) && rect.top() < 600.0 && rect.bottom() > 0.0
+			})
+		}
+		let (labels, _, _, _, start_offset) = frame(vec![]);
+		let (_, rect) = visible(&labels)
+			.cloned()
+			.expect("a visible sentence at the live edge");
+		let from = egui::pos2(rect.left() + 4.0, rect.center().y);
+		let to = egui::pos2(rect.right() - 4.0, rect.center().y);
+
+		// Holding the pointer at the top edge during a drag should scroll.
+		frame(press(from, true));
+		frame(vec![egui::Event::PointerMoved(to)]);
+		let edge = egui::pos2(from.x, 8.0);
+		frame(vec![egui::Event::PointerMoved(edge)]);
+		let mut offset_after_edge = start_offset;
+		for _ in 0..30 {
+			let (_, _, _, _, offset) = frame(vec![egui::Event::PointerMoved(edge)]);
+			offset_after_edge = offset;
+		}
+		let (_, _, selected_at_edge, _, _) = frame(vec![]);
+		frame(press(edge, false));
+		let (_, edge_copy, _, _, _) = frame(vec![egui::Event::Copy]);
+		let edge_moved = (offset_after_edge - start_offset).abs() > 24.0;
+		// The pointer left the dragged phrase and sat on the top edge, so the range
+		// follows it. What must survive is a selection, not the phrase the pointer left.
+		let edge_kept = edge_moved
+			&& selected_at_edge
+			&& edge_copy.as_ref().is_some_and(|text| !text.is_empty());
+
+		crate::select::clear(&ctx);
+		{
+			let mut previous = f32::NAN;
+			for _ in 0..24 {
+				let (_, _, _, _, offset) = frame(wheel(-240.0));
+				if (offset - previous).abs() < 1.0 {
+					break;
+				}
+				previous = offset;
+			}
+		}
+		let (labels, _, _, _, _) = frame(vec![]);
+		let (_, rect) = visible(&labels)
+			.cloned()
+			.expect("a sentence to keep across a scrollbar drag");
+		let from = egui::pos2(rect.left() + 4.0, rect.center().y);
+		let to = egui::pos2(rect.right() - 4.0, rect.center().y);
+		frame(press(from, true));
+		frame(vec![egui::Event::PointerMoved(to)]);
+		frame(press(to, false));
+		let (_, copied, selected, _, offset_before_bar) = frame(vec![egui::Event::Copy]);
+		let copied = copied.unwrap_or_default();
+		assert!(
+			selected && copied.contains("alpha"),
+			"scrollbar case never selected: {copied:?}"
+		);
+		let bar_top = egui::pos2(894.0, 560.0);
+		for _ in 0..3 {
+			frame(vec![egui::Event::PointerMoved(bar_top)]);
+		}
+		frame(press(bar_top, true));
+		let (_, _, selected_on_press, _, offset_after_bar) =
+			frame(vec![egui::Event::PointerMoved(egui::pos2(894.0, 160.0))]);
+		frame(press(egui::pos2(894.0, 160.0), false));
+		let (_, bar_copy, selected_after_bar, _, _) = frame(vec![egui::Event::Copy]);
+		let bar_moved = (offset_after_bar - offset_before_bar).abs() > 8.0;
+		let bar_kept = bar_moved
+			&& selected_on_press
+			&& selected_after_bar
+			&& bar_copy.as_deref() == Some(copied.as_str());
+
+		crate::select::clear(&ctx);
+		{
+			let mut previous = f32::NAN;
+			for _ in 0..24 {
+				let (_, _, _, _, offset) = frame(wheel(-240.0));
+				if (offset - previous).abs() < 1.0 {
+					break;
+				}
+				previous = offset;
+			}
+		}
+		let (labels, _, _, _, _) = frame(vec![]);
+		let (sentence, rect) = visible(&labels)
+			.cloned()
+			.expect("a sentence to drag off screen");
+		let from = egui::pos2(rect.left() + 4.0, rect.center().y);
+		let to = egui::pos2((rect.left() + rect.right()) / 2.0, rect.center().y);
+		frame(press(from, true));
+		frame(vec![egui::Event::PointerMoved(to)]);
+		let (_, anchor, _, _, _) = frame(vec![egui::Event::Copy]);
+		let anchor = anchor.unwrap_or_default();
+		let mut dragged_off = false;
+		let mut selected_off = false;
+		for _ in 0..48 {
+			// The pointer stays on the phrase. The wheel moves the channel under it.
+			let (labels, _, selected, _, _) = frame(vec![egui::Event::MouseWheel {
+				unit: egui::MouseWheelUnit::Point,
+				phase: egui::TouchPhase::Move,
+				source: egui::MouseWheelSource::Unknown,
+				delta: egui::vec2(0.0, 80.0),
+				modifiers: egui::Modifiers::NONE,
+			}]);
+			selected_off = selected;
+			dragged_off = !on_screen(&labels, &sentence);
+			if dragged_off {
+				break;
+			}
+		}
+		frame(press(to, false));
+		let (_, dragged, selected_after_drag, _, _) = frame(vec![egui::Event::Copy]);
+		let drag_kept = dragged_off
+			&& selected_off
+			&& selected_after_drag
+			&& dragged
+				.as_ref()
+				.is_some_and(|text| text.contains(anchor.as_str()));
+
+		let mut gone = false;
+		for _ in 0..16 {
+			let (labels, _, _, _, _) = frame(wheel(240.0));
+			gone = !on_screen(&labels, &sentence);
+			if gone {
+				break;
+			}
+		}
+		let mut back = false;
+		for _ in 0..16 {
+			let (labels, _, _, _, _) = frame(wheel(-240.0));
+			back = labels.iter().any(|(text, rect)| {
+				text.contains(&sentence) && rect.center().y > 80.0 && rect.center().y < 520.0
+			});
+			if back {
+				break;
+			}
+		}
+		seek.set(Some(anchor.clone()));
+		let (_, restored, selected_back, highlighted, _) = frame(vec![egui::Event::Copy]);
+		let highlight_kept = gone
+			&& back && highlighted
+			&& selected_back
+			&& restored
+				.as_ref()
+				.is_some_and(|text| text.contains(anchor.as_str()));
+
+		assert!(
+			drag_kept && edge_kept && bar_kept && highlight_kept,
+			"start={start_offset} drag_off={drag_kept} (offscreen={dragged_off} selected={selected_off} after={selected_after_drag} anchor={anchor:?} copy={dragged:?}) edge={edge_kept} (moved={edge_moved} from={start_offset} to={offset_after_edge} selected={selected_at_edge} copy={edge_copy:?}) bar={bar_kept} (moved={bar_moved} from={offset_before_bar} to={offset_after_bar} selected_on_press={selected_on_press} copy={bar_copy:?}) highlight={highlight_kept} (gone={gone} back={back} painted={highlighted} copy={restored:?})"
 		);
 	}
 
