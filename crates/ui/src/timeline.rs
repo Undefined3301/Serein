@@ -125,6 +125,8 @@ pub struct TimelineView {
 	pub(super) consecutive_reflows: u64,
 	width: f32,
 	rows: Vec<(Id, f32)>,
+	/// Message rows that must keep registering a label selection after they scroll away.
+	selection: crate::select::Span<Id>,
 	revision: u64,
 	layout_fingerprint: u64,
 	channel: Option<Id>,
@@ -1119,14 +1121,7 @@ fn divider(ui: &mut egui::Ui, label: String, unread: bool, compact: bool) {
 				egui::Stroke::new(1.0, if unread { color } else { colors.border }),
 			);
 		}
-		egui::text_selection::LabelSelectionState::label_text_selection(
-			ui,
-			&response,
-			pos,
-			text,
-			color,
-			egui::Stroke::NONE,
-		);
+		crate::select::register(ui, &response, pos, text, color);
 		if response.hovered() {
 			ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
 		}
@@ -1863,6 +1858,63 @@ fn show_system(
 		});
 	}
 }
+
+struct Measured {
+	index: usize,
+	id: Id,
+	key: u64,
+	rect: egui::Rect,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Stage {
+	Leading,
+	Visible,
+	Offstage,
+}
+
+/// Pinned rows built in an offstage child at their document positions, ascending.
+struct OffstageRows {
+	ui: egui::Ui,
+	next: usize,
+}
+
+impl OffstageRows {
+	fn new(
+		parent: &mut egui::Ui,
+		top: egui::Pos2,
+		width: f32,
+		height: f32,
+		from: usize,
+		salt: &str,
+	) -> Self {
+		let ui = crate::select::offstage(
+			parent,
+			egui::Rect::from_min_size(top, egui::vec2(width, height.max(1.0))),
+			salt,
+		);
+		Self { ui, next: from }
+	}
+
+	fn row(&mut self, index: usize, rows: &[(Id, f32)]) -> &mut egui::Ui {
+		let gap = rows[self.next..index]
+			.iter()
+			.map(|(_, height)| *height)
+			.sum::<f32>();
+		self.ui.add_space(gap);
+		self.next = index + 1;
+		&mut self.ui
+	}
+
+	fn row_in<'a>(
+		slot: &'a mut Option<Self>,
+		index: usize,
+		rows: &[(Id, f32)],
+	) -> &'a mut egui::Ui {
+		slot.as_mut().unwrap().row(index, rows)
+	}
+}
+
 impl TimelineView {
 	pub(super) fn show_fullscreen_video(&mut self, ctx: &egui::Context, state: &State) -> bool {
 		if self.video.is_fullscreen() {
@@ -2649,21 +2701,99 @@ impl TimelineView {
 			let reuse_leading = keyboard_focus.is_none()
 				&& retained_toolbar.is_none()
 				&& !egui::Popup::is_any_open(ui.ctx())
-				&& !crate::select::has_selection(ui.ctx())
 				&& !ui.input(|input| input.pointer.any_down() || input.pointer.any_released());
 			let name_hover = self.name_hover.take();
+			let pins = {
+				let rows = &self.rows;
+				self.selection
+					.pins(ui.ctx(), |id| rows.iter().position(|(row, _)| *row == id))
+			};
+			let mut before = None;
+			let mut clipped = None;
+			let mut after = None;
+			let mut past = false;
 			let mut end = first;
-			for index in first..self.rows.len() {
+			// Pinned rows share this walk so egui sees registrations in document order.
+			for index in pins.below(first).chain(first..self.rows.len()) {
 				let row_id = ui.make_persistent_id(self.rows[index].0.0);
-				let ui = if index < anchor {
-					&mut leading
+				let pinned = pins.contains(index);
+				let row_top = ui.cursor().top();
+				let row_height = self.rows[index].1;
+				past |= index >= anchor && row_top > content_top + viewport.max.y + 100.0;
+				// Measurement overscan is outside the clip, so a selection end there
+				// would not register if the row stayed in the parent.
+				let misses_clip = index >= anchor
+					&& (row_top >= clip.max.y || row_top + row_height <= clip.min.y);
+				let stage = if pinned && (index < anchor || past || misses_clip) {
+					Stage::Offstage
+				} else if index < anchor {
+					Stage::Leading
+				} else if !past {
+					Stage::Visible
+				} else if pins.last().is_some_and(|last| last > index) {
+					continue;
 				} else {
-					&mut *ui
-				};
-				if index >= anchor && ui.cursor().top() > content_top + viewport.max.y + 100.0 {
 					break;
+				};
+				if pinned && index < anchor && index >= first {
+					leading.add_space(row_height);
 				}
-				end = index + 1;
+				if index >= first && !past {
+					end = index + 1;
+				}
+				if stage == Stage::Offstage && index < anchor && before.is_none() {
+					let top = origin.y
+						+ self.rows[..index]
+							.iter()
+							.map(|(_, height)| *height)
+							.sum::<f32>();
+					let row_width = ui.available_width();
+					before = Some(OffstageRows::new(
+						ui,
+						egui::pos2(origin.x, top),
+						row_width,
+						total,
+						index,
+						"before",
+					));
+				}
+				if stage == Stage::Offstage && index >= anchor && !past && clipped.is_none() {
+					let row_width = ui.available_width();
+					clipped = Some(OffstageRows::new(
+						ui,
+						egui::pos2(origin.x, row_top),
+						row_width,
+						total,
+						index,
+						"clipped",
+					));
+				}
+				if stage == Stage::Offstage && index >= anchor && !past {
+					ui.add_space(row_height);
+				}
+				if stage == Stage::Offstage && past && after.is_none() {
+					let top = ui.cursor().top();
+					let row_width = ui.available_width();
+					after = Some(OffstageRows::new(
+						ui,
+						egui::pos2(origin.x, top),
+						row_width,
+						total,
+						end,
+						"after",
+					));
+				}
+				let ui = match stage {
+					Stage::Leading => &mut leading,
+					Stage::Visible => &mut *ui,
+					Stage::Offstage if index < anchor => {
+						OffstageRows::row_in(&mut before, index, &self.rows)
+					}
+					Stage::Offstage if !past => {
+						OffstageRows::row_in(&mut clipped, index, &self.rows)
+					}
+					Stage::Offstage => OffstageRows::row_in(&mut after, index, &self.rows),
+				};
 				let id = self.rows[index].0;
 				if id == INTRO
 					&& let Some(intro) = intro.as_ref()
@@ -2679,7 +2809,12 @@ impl TimelineView {
 							}
 						})
 						.response;
-					measurements.push((id, intro_key(intro, state), response.rect.height()));
+					measurements.push(Measured {
+						index,
+						id,
+						key: intro_key(intro, state),
+						rect: response.rect,
+					});
 					continue;
 				}
 				if Some(id) == self.starter_row
@@ -2690,17 +2825,18 @@ impl TimelineView {
 							starter_row(ui, starter, state, avatars, width);
 						})
 						.response;
-					measurements.push((
+					measurements.push(Measured {
+						index,
 						id,
-						row_height_key(
+						key: row_height_key(
 							starter,
 							None,
 							self.unread_boundary,
 							state,
 							state.timeline.is_deleted(id),
 						),
-						response.rect.height(),
-					));
+						rect: response.rect,
+					});
 					continue;
 				}
 				let can_mark_read = state.can_mark_read(id);
@@ -2721,7 +2857,7 @@ impl TimelineView {
 				// ponytail: reuse only settled ordinary text; dynamic media, references,
 				// spoilers and reactions need explicit layout invalidation before caching.
 				if index < anchor
-					&& reuse_leading
+					&& !pinned && reuse_leading
 					&& self.measured_rows.contains(&id)
 					&& message.kind == 0
 					&& !message.unsupported
@@ -2742,12 +2878,17 @@ impl TimelineView {
 						== row_height_key(message, previous, self.unread_boundary, state, deleted)
 				{
 					ui.add_space(height);
-					// Keep one result per row: visible height updates below zip by index.
-					measurements.push((id, key, height));
+					// The row was not laid out. The cached height is the measurement.
+					measurements.push(Measured {
+						index,
+						id,
+						key,
+						rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(0.0, height)),
+					});
 					continue;
 				}
 				#[cfg(test)]
-				if index < anchor {
+				if index < anchor && !pinned {
 					self.leading_rendered += 1;
 				}
 
@@ -4222,11 +4363,12 @@ impl TimelineView {
 						);
 					}
 				});
-				measurements.push((
+				measurements.push(Measured {
+					index,
 					id,
-					row_height_key(message, previous, self.unread_boundary, state, deleted),
-					response.response.rect.height(),
-				));
+					key: row_height_key(message, previous, self.unread_boundary, state, deleted),
+					rect: response.response.rect,
+				});
 			}
 			// Names follow the hovered row a pass late; draw that pass even if the pointer stops.
 			if self.name_hover != name_hover {
@@ -4288,11 +4430,17 @@ impl TimelineView {
 			ui.add_space(end_padding);
 			// Visible rows occupy their measured height immediately; leading overscan
 			// still occupies its old height until the next anchored pass.
-			for (index, (_, _, height)) in (first..end).zip(&measurements) {
-				if index >= anchor {
-					self.rows[index].1 = *height;
+			for measured in &measurements {
+				if (anchor..end).contains(&measured.index) {
+					self.rows[measured.index].1 = measured.rect.height();
 				}
 			}
+			let on_screen: Vec<(Id, egui::Rect)> = measurements
+				.iter()
+				.filter(|measured| (anchor..end).contains(&measured.index))
+				.map(|measured| (measured.id, measured.rect))
+				.collect();
+			self.selection.track(ui.ctx(), clip, &on_screen);
 			viewport.min.y
 		});
 		self.scroll_offset = output.state.clamped_offset().y;
@@ -4418,14 +4566,13 @@ impl TimelineView {
 		if let Some(action) = intro_action {
 			self.user_action = Some(action);
 		}
-		for (id, key, height) in measurements {
-			self.measured_rows.insert(id);
-			if self
-				.heights
-				.get(&id)
-				.is_none_or(|(old_key, old)| *old_key != key || (*old - height).abs() > 1.0)
-			{
-				self.heights.insert(id, (key, height));
+		for measured in measurements {
+			let height = measured.rect.height();
+			self.measured_rows.insert(measured.id);
+			if self.heights.get(&measured.id).is_none_or(|(old_key, old)| {
+				*old_key != measured.key || (*old - height).abs() > 1.0
+			}) {
+				self.heights.insert(measured.id, (measured.key, height));
 				reflow = true;
 			}
 		}
@@ -5380,12 +5527,14 @@ mod tests {
 					);
 				},
 			);
-			let copied = output.platform_output.commands.iter().find_map(|command| {
-				match command {
+			let copied = output
+				.platform_output
+				.commands
+				.iter()
+				.find_map(|command| match command {
 					egui::OutputCommand::CopyText(text) => Some(text.clone()),
 					_ => None,
-				}
-			});
+				});
 			let mut labels = vec![];
 			for shape in &output.shapes {
 				texts(&shape.shape, &mut labels);
@@ -5479,9 +5628,7 @@ mod tests {
 		let (_, rect) = labels
 			.iter()
 			.find(|(text, rect)| {
-				text.contains("alpha bravo")
-					&& rect.center().y > 80.0
-					&& rect.center().y < 520.0
+				text.contains("alpha bravo") && rect.center().y > 80.0 && rect.center().y < 520.0
 			})
 			.cloned()
 			.expect("a sentence to drag through a wheel tick");
@@ -9844,7 +9991,7 @@ mod tests {
 				"Settled hidden text needs no layout"
 			);
 		}
-		// Pointer selection must retain the complete label registration path.
+		// Pointer motion still measures leading rows. A settled selection does not.
 		for pressed in [true, false] {
 			overscan_frame(
 				&ctx,
@@ -9861,10 +10008,12 @@ mod tests {
 			);
 			assert!(view.leading_rendered > 0);
 		}
+		// A press lays the leading rows out. Once the button is up, only the
+		// selection's own rows stay registered, so the rest of the overscan reuses.
 		overscan_frame(&ctx, &mut view, &mut state, &mut avatars, 360.0, vec![]);
 		assert!(
-			view.leading_rendered > 0,
-			"Retained selection or focus still needs registration"
+			crate::select::has_selection(&ctx),
+			"pointer selection remains after release"
 		);
 		ctx.plugin::<egui::text_selection::LabelSelectionState>()
 			.lock()

@@ -195,7 +195,7 @@ impl Surface {
 				show_embed(ui, &embeds[embedded], menu_open);
 				embedded += 1;
 			}
-			if !run.rect.is_positive() || !ui.is_rect_visible(run.rect) {
+			if !run.rect.is_positive() || !reaches(ui, run.rect) {
 				continue;
 			}
 			if menu_open {
@@ -238,14 +238,7 @@ impl Surface {
 			} else {
 				ui.visuals().text_color()
 			};
-			egui::text_selection::LabelSelectionState::label_text_selection(
-				ui,
-				&response,
-				run.galley_pos,
-				run.galley,
-				color,
-				Stroke::NONE,
-			);
+			register(ui, &response, run.galley_pos, run.galley, color);
 		}
 		for embed in &embeds[embedded..] {
 			show_embed(ui, embed, menu_open);
@@ -431,13 +424,223 @@ pub fn request_copy(ctx: &egui::Context) {
 	}
 }
 
+const OFFSTAGE: &str = "serein-selection-offstage";
+
+/// A zero-clip child for a selection end that has scrolled off the timeline.
+///
+/// The clip is `Rect::NOTHING`, so paint and pointer hits miss. The tag stays on
+/// every nested `Ui`, and `reaches` treats that tag as permission to register.
+pub fn offstage(parent: &mut egui::Ui, max_rect: Rect, salt: &str) -> egui::Ui {
+	let mut ui = parent.new_child(
+		egui::UiBuilder::new()
+			.id_salt((OFFSTAGE, salt))
+			.max_rect(max_rect)
+			.ui_stack_info(egui::UiStackInfo::default().with_tag(OFFSTAGE)),
+	);
+	ui.set_clip_rect(Rect::NOTHING);
+	ui
+}
+
+/// Label text at `rect` registers this pass when it is on screen or inside [`offstage`].
+fn reaches(ui: &egui::Ui, rect: Rect) -> bool {
+	ui.is_rect_visible(rect)
+		|| ui
+			.stack()
+			.iter()
+			.any(|frame| frame.tags().contains(OFFSTAGE))
+}
+
+/// The one call into egui's label selection. Registers when `reaches` allows it.
+pub(crate) fn register(
+	ui: &egui::Ui,
+	response: &Response,
+	galley_pos: Pos2,
+	galley: Arc<Galley>,
+	color: Color32,
+) {
+	if reaches(ui, response.rect) {
+		LabelSelectionState::label_text_selection(
+			ui,
+			response,
+			galley_pos,
+			galley,
+			color,
+			Stroke::NONE,
+		);
+	}
+}
+
+/// Rows that must keep registering after they leave the screen.
+///
+/// egui drops a label selection when either end widget misses a pass. This records
+/// those rows. It resets when egui reports no selection and the primary button is up.
+pub struct Span<K> {
+	ends: Ends<K>,
+}
+
+impl<K> Default for Span<K> {
+	fn default() -> Self {
+		Self { ends: Ends::None }
+	}
+}
+
+enum Ends<K> {
+	None,
+	/// Primary is held. Both rows can leave the screen during a wheel tick.
+	Dragging {
+		anchor: K,
+		focus: K,
+	},
+	/// Released. The focus end may sit on `focus` or the neighbour toward `anchor`.
+	Settled {
+		anchor: K,
+		focus: K,
+	},
+}
+
+/// Row indices to build this pass even when they are off screen. Ascending and unique.
+pub struct Pins(Vec<usize>);
+
+impl Pins {
+	pub fn contains(&self, index: usize) -> bool {
+		self.0.binary_search(&index).is_ok()
+	}
+
+	/// Pinned rows above `index`, ascending.
+	pub fn below(&self, index: usize) -> impl Iterator<Item = usize> + '_ {
+		self.0.iter().copied().take_while(move |&pin| pin < index)
+	}
+
+	pub fn last(&self) -> Option<usize> {
+		self.0.last().copied()
+	}
+}
+
+impl<K: Copy + Eq> Span<K> {
+	/// Rows that must register this pass although they may be off screen.
+	///
+	/// A copy, cut, or primary release pins every row from anchor to focus, because
+	/// egui only copies labels registered in that pass. Any other pass pins the ends.
+	/// A missing key pins nothing.
+	pub fn pins(&self, ctx: &egui::Context, index_of: impl Fn(K) -> Option<usize>) -> Pins {
+		let (anchor, focus) = match self.ends {
+			Ends::None => return Pins(Vec::new()),
+			Ends::Dragging { anchor, focus } | Ends::Settled { anchor, focus } => (anchor, focus),
+		};
+		let (Some(anchor_at), Some(focus_at)) = (index_of(anchor), index_of(focus)) else {
+			return Pins(Vec::new());
+		};
+		let collecting = ctx.input(|input| {
+			input.pointer.primary_released()
+				|| input
+					.events
+					.iter()
+					.any(|event| matches!(event, Event::Copy | Event::Cut))
+		});
+		if collecting {
+			let (lo, hi) = if anchor_at <= focus_at {
+				(anchor_at, focus_at)
+			} else {
+				(focus_at, anchor_at)
+			};
+			return Pins((lo..=hi).collect());
+		}
+		let mut indices = match self.ends {
+			Ends::Dragging { .. } => vec![anchor_at, focus_at],
+			Ends::Settled { .. } => {
+				let neighbor = if focus_at < anchor_at {
+					focus_at + 1
+				} else if focus_at > anchor_at {
+					focus_at - 1
+				} else {
+					focus_at
+				};
+				vec![anchor_at, focus_at, neighbor]
+			}
+			Ends::None => return Pins(Vec::new()),
+		};
+		indices.sort_unstable();
+		indices.dedup();
+		Pins(indices)
+	}
+
+	/// Follow this pass's primary button over the rows on screen.
+	///
+	/// `viewport` is the timeline clip in screen space. `on_screen` lists the rows
+	/// built in the visible stage, top to bottom. Call once per pass after those rows.
+	pub fn track(&mut self, ctx: &egui::Context, viewport: Rect, on_screen: &[(K, Rect)]) {
+		let (down, released, pressed, shift, origin, pointer) = ctx.input(|input| {
+			(
+				input.pointer.primary_down(),
+				input.pointer.primary_released(),
+				input.pointer.primary_pressed(),
+				input.modifiers.shift,
+				input.pointer.press_origin(),
+				input.pointer.interact_pos().or(input.pointer.hover_pos()),
+			)
+		});
+		if !down && !released && !has_selection(ctx) {
+			self.ends = Ends::None;
+			return;
+		}
+		if pressed
+			&& let Some(origin) = origin.filter(|pos| viewport.contains(*pos))
+			&& let Some(&(hit, _)) = on_screen.iter().find(|(_, rect)| rect.contains(origin))
+		{
+			let anchor = if shift {
+				self.anchor_key().unwrap_or(hit)
+			} else {
+				hit
+			};
+			self.ends = Ends::Dragging {
+				anchor,
+				focus: anchor,
+			};
+		}
+		if let Ends::Dragging { anchor, .. } = self.ends
+			&& let Some(pointer) = pointer
+		{
+			let y = pointer.y.clamp(viewport.min.y, viewport.max.y);
+			if let Some(hit) = row_at_y(on_screen, y) {
+				self.ends = Ends::Dragging { anchor, focus: hit };
+			}
+		}
+		if released && let Ends::Dragging { anchor, focus } = self.ends {
+			self.ends = Ends::Settled { anchor, focus };
+		}
+	}
+
+	fn anchor_key(&self) -> Option<K> {
+		match self.ends {
+			Ends::None => None,
+			Ends::Dragging { anchor, .. } | Ends::Settled { anchor, .. } => Some(anchor),
+		}
+	}
+}
+
+fn row_at_y<K: Copy>(rows: &[(K, Rect)], y: f32) -> Option<K> {
+	if let Some((key, _)) = rows
+		.iter()
+		.find(|(_, rect)| rect.min.y <= y && y <= rect.max.y)
+	{
+		return Some(*key);
+	}
+	rows.iter()
+		.min_by(|(_, left), (_, right)| {
+			(left.center().y - y)
+				.abs()
+				.total_cmp(&(right.center().y - y).abs())
+		})
+		.map(|(key, _)| *key)
+}
+
 pub(crate) fn band_sense() -> Sense {
 	Sense::CLICK | Sense::DRAG
 }
 
 /// Paint a deferred widget galley, registering its selection unless a menu owns the pointer.
 fn show_embed(ui: &mut egui::Ui, embed: &Embed, menu_open: bool) {
-	if !embed.response.rect.is_positive() || !ui.is_rect_visible(embed.response.rect) {
+	if !embed.response.rect.is_positive() || !reaches(ui, embed.response.rect) {
 		return;
 	}
 	// The galley carries its own per-token colours; the fallback only covers unstyled glyphs.
@@ -450,13 +653,12 @@ fn show_embed(ui: &mut egui::Ui, embed: &Embed, menu_open: bool) {
 		));
 		return;
 	}
-	LabelSelectionState::label_text_selection(
+	register(
 		ui,
 		&embed.response,
 		embed.galley_pos,
 		embed.galley.clone(),
 		color,
-		Stroke::NONE,
 	);
 }
 
