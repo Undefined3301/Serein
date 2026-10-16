@@ -7108,64 +7108,85 @@ mod tests {
 		}
 		state.channels[0].last_message = Some(Id(8));
 		let mut view = TimelineView::default();
+		let mut draft = "UNSELECTED DRAFT".to_string();
+		let composer_id = egui::Id::unique("draft-selection");
 		let clock = std::cell::Cell::new(0.0_f64);
-		let mut frame = |events: Vec<egui::Event>| {
-			let output = ctx.run_ui(
-				egui::RawInput {
-					focused: true,
-					time: Some(clock.get()),
-					predicted_dt: 1.0 / 60.0,
-					events,
-					screen_rect: Some(egui::Rect::from_min_size(
-						egui::Pos2::ZERO,
-						egui::vec2(900.0, 600.0),
-					)),
-					..Default::default()
-				},
-				|ui| {
-					view.show(
-						ui,
-						&mut state,
-						&mut None,
-						&mut None,
-						(
-							&mut crate::avatars::Avatars::default(),
-							&mut crate::profiles::ProfileSession::default(),
-						),
-						None,
+		let mut frame =
+			|events: Vec<egui::Event>| {
+				let output = ctx.run_ui(
+					egui::RawInput {
+						focused: true,
+						time: Some(clock.get()),
+						predicted_dt: 1.0 / 60.0,
+						events,
+						screen_rect: Some(egui::Rect::from_min_size(
+							egui::Pos2::ZERO,
+							egui::vec2(900.0, 600.0),
+						)),
+						..Default::default()
+					},
+					|ui| {
+						// The composer is focused and has its own selection, and it is
+						// shown before the channel. A copy event reaches it first.
+						let mut edit = egui::text_edit::TextEditState::load(ui.ctx(), composer_id)
+							.unwrap_or_default();
+						edit.cursor
+							.set_char_range(Some(egui::text::CCursorRange::two(
+								egui::text::CCursor::new(0),
+								egui::text::CCursor::new(draft.chars().count()),
+							)));
+						edit.store(ui.ctx(), composer_id);
+						ui.memory_mut(|memory| memory.request_focus(composer_id));
+						egui::Panel::bottom("composer").show(ui, |ui| {
+							ui.add(
+								egui::TextEdit::multiline(&mut draft)
+									.id(composer_id)
+									.desired_rows(1),
+							);
+						});
+						view.show(
+							ui,
+							&mut state,
+							&mut None,
+							&mut None,
+							(
+								&mut crate::avatars::Avatars::default(),
+								&mut crate::profiles::ProfileSession::default(),
+							),
+							None,
+						);
+					},
+				);
+				// The window keeps the last copy command. An earlier one can be the draft.
+				let copied =
+					output.platform_output.commands.iter().rev().find_map(
+						|command| match command {
+							egui::OutputCommand::CopyText(text) => Some(text.clone()),
+							_ => None,
+						},
 					);
-				},
-			);
-			let copied = output
-				.platform_output
-				.commands
-				.iter()
-				.find_map(|command| match command {
-					egui::OutputCommand::CopyText(text) => Some(text.clone()),
-					_ => None,
-				});
-			let mut labels = vec![];
-			fn texts(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
-				match shape {
-					egui::Shape::Text(text) => out.push((
-						text.galley.job.text.clone(),
-						text.galley.rect.translate(text.pos.to_vec2()),
-					)),
-					egui::Shape::Vec(shapes) => {
-						for shape in shapes {
-							texts(shape, out);
+				let mut labels = vec![];
+				fn texts(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+					match shape {
+						egui::Shape::Text(text) => out.push((
+							text.galley.job.text.clone(),
+							text.galley.rect.translate(text.pos.to_vec2()),
+						)),
+						egui::Shape::Vec(shapes) => {
+							for shape in shapes {
+								texts(shape, out);
+							}
 						}
+						_ => {}
 					}
-					_ => {}
 				}
-			}
-			for shape in &output.shapes {
-				texts(&shape.shape, &mut labels);
-			}
-			output.drop_without_applying_deltas();
-			clock.set(clock.get() + 1.0 / 60.0);
-			(labels, copied)
-		};
+				for shape in &output.shapes {
+					texts(&shape.shape, &mut labels);
+				}
+				output.drop_without_applying_deltas();
+				clock.set(clock.get() + 1.0 / 60.0);
+				(labels, copied)
+			};
 		for _ in 0..8 {
 			frame(vec![]);
 		}
@@ -7216,8 +7237,10 @@ mod tests {
 			.nth(1)
 			.expect("last sentence number");
 		assert!(
-			expected.contains(first_id) && expected.contains(last_id),
-			"the drag itself did not cover both sentences: {expected:?}"
+			expected.contains(first_id)
+				&& expected.contains(last_id)
+				&& !expected.contains("UNSELECTED DRAFT"),
+			"Ctrl+C did not copy just the channel highlight: {expected:?}"
 		);
 		frame(press(to, egui::PointerButton::Secondary, true));
 		let (labels, _) = frame(vec![]);
@@ -7233,13 +7256,14 @@ mod tests {
 			!pressed_open || pressed_offered,
 			"Copy Selected Text left the menu while it was still open: {pressed:?}"
 		);
-		let (labels, copied) = frame(press(copy_at, egui::PointerButton::Primary, false));
-		let copied = copied.unwrap_or_default();
+		let (labels, copied_now) = frame(press(copy_at, egui::PointerButton::Primary, false));
+		let (_, copied_next) = frame(vec![]);
+		let copied = copied_next.unwrap_or_else(|| copied_now.unwrap_or_default());
 		let menu_open = labels.iter().any(|(text, _)| text == "Copy message");
 		let still_offered = labels.iter().any(|(text, _)| text == "Copy Selected Text");
 		assert!(
-			copied.contains(first_id) && copied.contains(last_id),
-			"Copy Selected Text dropped part of the range: expected {expected:?}, got {copied:?}"
+			copied == expected,
+			"Copy Selected Text was not the Ctrl+C text: ctrl+c {expected:?}, menu {copied:?}"
 		);
 		assert!(
 			!menu_open || still_offered,

@@ -296,6 +296,8 @@ fn register_run(ui: &mut egui::Ui, run: &Run, holes: &[Rect], menu_open: bool) {
 struct Pointer {
 	menu: bool,
 	silent: bool,
+	/// The last copy command from the right-click. The clipboard keeps that one.
+	/// An earlier command on the same pass can be a selected draft in the composer.
 	cached: String,
 	#[cfg(target_os = "macos")]
 	control_primary: bool,
@@ -400,28 +402,31 @@ impl egui::Plugin for Pointer {
 				.button(crate::i18n::translate("select-on-end-pass-copy"))
 				.clicked()
 			{
-				request_copy(ui.ctx());
+				let text = std::mem::take(&mut self.cached);
+				if !text.is_empty() {
+					ui.ctx().copy_text(text);
+				}
 				ui.close();
 			}
 		});
 	}
 
 	fn output_hook(&mut self, ctx: &egui::Context, output: &mut FullOutput) {
-		if let Some(text) = output
-			.platform_output
-			.commands
-			.iter()
-			.find_map(|command| match command {
-				egui::OutputCommand::CopyText(text) => Some(text.clone()),
-				_ => None,
-			}) {
+		if self.silent
+			&& let Some(text) = output
+				.platform_output
+				.commands
+				.iter()
+				.rev()
+				.find_map(|command| match command {
+					egui::OutputCommand::CopyText(text) => Some(text.clone()),
+					_ => None,
+				}) {
 			self.cached = text;
-			if self.silent {
-				output
-					.platform_output
-					.commands
-					.retain(|command| !matches!(command, egui::OutputCommand::CopyText(_)));
-			}
+			output
+				.platform_output
+				.commands
+				.retain(|command| !matches!(command, egui::OutputCommand::CopyText(_)));
 		}
 		self.silent = false;
 		if output.platform_output.cursor_icon == CursorIcon::Text && !hovering_edit(ctx) {
@@ -456,11 +461,14 @@ pub fn open_menu(ctx: &egui::Context) -> bool {
 		.is_some_and(|plugin| plugin.lock().menu)
 }
 
-/// Copy the text cached from the last selected range.
+/// Copy the channel highlight captured on the right-click.
+///
+/// That pass also copies a focused draft, and the draft command comes first.
+/// The clipboard keeps the last command, so this stores that one.
 pub fn request_copy(ctx: &egui::Context) {
 	let text = ctx
 		.plugin_opt::<Pointer>()
-		.map(|plugin| plugin.lock().cached.clone())
+		.map(|plugin| std::mem::take(&mut plugin.lock().cached))
 		.unwrap_or_default();
 	if !text.is_empty() {
 		ctx.copy_text(text);
