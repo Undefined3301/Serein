@@ -496,6 +496,37 @@ pub(crate) fn hold(ui: &mut egui::Ui, rect: Rect) {
 	);
 }
 
+/// A press inside an open selection menu is still on the selection.
+///
+/// egui clears a label range when a press hits nothing hovered. The menu button is not a
+/// label, so the press would drop the range and the copy action would leave the menu.
+pub(crate) fn keep(ui: &mut egui::Ui) {
+	if !has_selection(ui.ctx()) {
+		return;
+	}
+	let rect = Rect::from_min_size(Pos2::new(-10_000.0, -10_000.0), egui::vec2(1.0, 1.0));
+	let mut response = ui.interact(rect, ui.scope_id().with("selection-keep"), Sense::hover());
+	response.flags.set(egui::response::Flags::HOVERED, true);
+	response
+		.flags
+		.set(egui::response::Flags::CONTAINS_POINTER, false);
+	let galley = ui.fonts_mut(|fonts| {
+		fonts.layout_no_wrap(
+			String::new(),
+			egui::FontId::proportional(1.0),
+			Color32::TRANSPARENT,
+		)
+	});
+	LabelSelectionState::label_text_selection(
+		ui,
+		&response,
+		rect.min,
+		galley,
+		Color32::TRANSPARENT,
+		Stroke::NONE,
+	);
+}
+
 /// Channel clip for this pass. The timeline publishes it so a nested row can tell the
 /// viewport edge from its own short clip.
 fn viewport_id() -> egui::Id {
