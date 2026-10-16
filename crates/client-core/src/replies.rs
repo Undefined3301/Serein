@@ -1102,6 +1102,7 @@ mod tests {
 				guild: None,
 				query: "Synthetic".into(),
 				before: None,
+				oldest: false,
 				offset: 0,
 				total: None,
 				pin_before: None,

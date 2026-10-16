@@ -1036,12 +1036,46 @@ fn presence_badge_metrics(rect: Rect) -> (f32, f32, egui::Pos2) {
 	};
 	(radius, ring, rect.right_bottom() - Vec2::splat(inset))
 }
-fn presence_badge_rect(rect: Rect) -> Rect {
-	let (radius, ring, center) = presence_badge_metrics(rect);
-	Rect::from_center_size(center, Vec2::splat((radius + ring) * 2.0))
+/// Like Discord, the phone shows only for someone online from a phone.
+fn shows_phone(status: &str, clients: model::ClientPlatforms) -> bool {
+	clients.mobile && status == "online"
 }
-fn pointer_on_presence(status: Option<&str>, avatar: Rect, pointer: Option<egui::Pos2>) -> bool {
-	status.is_some() && pointer.is_some_and(|pos| presence_badge_rect(avatar).contains(pos))
+/// The phone stands taller than the status disc, centred a little above it.
+fn phone_body(center: egui::Pos2, radius: f32) -> Rect {
+	Rect::from_center_size(
+		center - vec2(0.0, radius * 0.3),
+		vec2(radius * 1.8, radius * 3.0),
+	)
+}
+fn presence_badge_rect(rect: Rect, mobile: bool) -> Rect {
+	let (radius, ring, center) = presence_badge_metrics(rect);
+	let disc = Rect::from_center_size(center, Vec2::splat((radius + ring) * 2.0));
+	if mobile {
+		disc.union(phone_body(center, radius).expand(ring))
+	} else {
+		disc
+	}
+}
+fn pointer_on_presence(
+	status: Option<&str>,
+	clients: model::ClientPlatforms,
+	avatar: Rect,
+	pointer: Option<egui::Pos2>,
+) -> bool {
+	status.is_some_and(|status| {
+		pointer.is_some_and(|pos| {
+			presence_badge_rect(avatar, shows_phone(status, clients)).contains(pos)
+		})
+	})
+}
+/// Discord sends no presence for an offline friend or DM recipient, so theirs reads offline
+/// while the client knows it would have one. Anyone else without a presence shows none.
+pub(crate) fn shown_status<'a>(
+	state: &State,
+	user: Id,
+	status: Option<&'a str>,
+) -> Option<&'a str> {
+	status.or_else(|| state.absent_presence_offline(user).then_some("offline"))
 }
 pub(crate) fn presence_badge(
 	ui: &mut egui::Ui,
@@ -1051,21 +1085,70 @@ pub(crate) fn presence_badge(
 	ring: Color32,
 ) {
 	let (radius, ring_width, center) = presence_badge_metrics(rect);
-	ui.painter()
-		.circle_filled(center, radius + ring_width, ring);
-	if clients.mobile {
-		icons::paint(
-			ui.painter(),
-			Icon::DeviceMobile,
-			Rect::from_center_size(center, Vec2::splat(radius * 2.2)),
-			presence_color(status),
-		);
-	} else {
-		ui.painter()
-			.circle_filled(center, radius, presence_color(status));
-	}
-	ui.allocate_rect(presence_badge_rect(rect), egui::Sense::hover())
+	let mobile = shows_phone(status, clients);
+	paint_status(
+		ui.painter(),
+		center,
+		radius,
+		status,
+		mobile,
+		(ring, ring_width),
+	);
+	ui.allocate_rect(presence_badge_rect(rect, mobile), egui::Sense::hover())
 		.on_hover_text(presence_label(status));
+}
+
+/// Discord's status glyphs, each set in a surface-coloured `ring` around a `radius` disc: a
+/// green disc online, a yellow crescent idle, a red disc with a bar for Do Not Disturb, a
+/// grey ring offline or invisible, and a green phone for someone online from a phone.
+pub(crate) fn paint_status(
+	painter: &egui::Painter,
+	center: egui::Pos2,
+	radius: f32,
+	status: &str,
+	mobile: bool,
+	(ring, ring_width): (Color32, f32),
+) {
+	let color = presence_color(status);
+	if mobile {
+		// Discord's phone: a 3:5 rounded body, a large screen and a round home button.
+		let body = phone_body(center, radius);
+		let (width, height) = (body.width(), body.height());
+		let corner = width * 0.2;
+		painter.rect_filled(body.expand(ring_width), corner + ring_width, ring);
+		painter.rect_filled(body, corner, color);
+		let screen = Rect::from_min_max(
+			body.min + vec2(width * 0.15, height * 0.15),
+			pos2(body.max.x - width * 0.15, body.min.y + height * 0.575),
+		);
+		painter.rect_filled(screen, 0.0, ring);
+		painter.circle_filled(
+			pos2(body.center().x, body.min.y + height * 0.825),
+			height * 0.085,
+			ring,
+		);
+		return;
+	}
+	painter.circle_filled(center, radius + ring_width, ring);
+	painter.circle_filled(center, radius, color);
+	match status {
+		"idle" => {
+			// The crescent: a disc of the ring colour bites the upper left.
+			painter.circle_filled(center - Vec2::splat(radius * 0.45), radius * 0.72, ring);
+		}
+		"dnd" => {
+			painter.rect_filled(
+				Rect::from_center_size(center, vec2(radius * 1.25, radius * 0.5)),
+				radius * 0.25,
+				ring,
+			);
+		}
+		"online" => {}
+		// Offline and invisible are a hollow ring.
+		_ => {
+			painter.circle_filled(center, radius * 0.5, ring);
+		}
+	}
 }
 /// Keep known guild presence through range loads and reconnects; access loss clears the snapshot.
 pub(crate) fn presence(
@@ -2878,7 +2961,21 @@ pub fn show_with_session(
 	let (status, custom, activities, clients) = if user.webhook {
 		(None, None, [].as_slice(), model::ClientPlatforms::default())
 	} else {
-		presence(state, user.id, guild)
+		let (status, custom, activities, clients) = presence(state, user.id, guild);
+		// A guild row without a status defers to the friend's or recipient's own presence,
+		// with its platforms so the phone shows.
+		let (status, clients) = match (status, state.presence_for(user.id)) {
+			(None, Some(direct)) if direct.status.is_some() => {
+				(direct.status.as_deref(), direct.clients)
+			}
+			_ => (status, clients),
+		};
+		(
+			shown_status(state, user.id, status),
+			custom,
+			activities,
+			clients,
+		)
 	};
 	let in_voice = !user.webhook && user_in_voice(state, user.id);
 	let dm_channel = state
@@ -2946,12 +3043,55 @@ pub fn show_with_session(
 		} else {
 			egui::Sense::hover()
 		};
+		// Discord heads a profile that is private to this viewer with a locked strip.
+		let private = data.is_some_and(|d| d.private);
+		// The height budget starts here, so it includes the strip above the banner.
+		let header_top = ui.cursor().top();
+		if private {
+			let (strip, _) = ui.allocate_exact_size(vec2(width, 30.0), egui::Sense::hover());
+			ui.painter().rect_filled(
+				strip,
+				CornerRadius {
+					nw: RADIUS,
+					ne: RADIUS,
+					sw: 0,
+					se: 0,
+				},
+				theme.panel,
+			);
+			let label = ui.painter().layout_no_wrap(
+				crate::i18n::translate("profiles-private-profile"),
+				egui::FontId::new(13.0, design::semibold_family(ui.ctx())),
+				theme.text,
+			);
+			let lock = 14.0;
+			let start = strip.center().x - (lock + 6.0 + label.size().x) * 0.5;
+			icons::paint(
+				ui.painter(),
+				Icon::Lock,
+				Rect::from_center_size(
+					pos2(start + lock * 0.5, strip.center().y),
+					Vec2::splat(lock),
+				),
+				theme.text,
+			);
+			ui.painter().galley(
+				pos2(start + lock + 6.0, strip.center().y - label.size().y * 0.5),
+				label,
+				theme.text,
+			);
+			ui.add_space(-ui.spacing().item_spacing.y);
+		}
 		let (banner, banner_response) = ui.allocate_exact_size(vec2(width, banner_height), sense);
-		let top_corners = CornerRadius {
-			nw: RADIUS,
-			ne: RADIUS,
-			sw: 0,
-			se: 0,
+		let top_corners = if private {
+			CornerRadius::ZERO
+		} else {
+			CornerRadius {
+				nw: RADIUS,
+				ne: RADIUS,
+				sw: 0,
+				se: 0,
+			}
 		};
 		if let Some(data) = data {
 			avatars.paint_banner(ui, data, banner, top_corners, state.demo);
@@ -3035,6 +3175,7 @@ pub fn show_with_session(
 		);
 		let pointer_on_presence = pointer_on_presence(
 			status,
+			clients,
 			avatar_rect,
 			ui.input(|input| input.pointer.hover_pos()),
 		);
@@ -3248,26 +3389,27 @@ pub fn show_with_session(
 								),
 								egui::Layout::left_to_right(egui::Align::Center),
 								|ui| {
-									let name = ui.add(
-										egui::Label::new(crate::role_names::galley(
-											ui,
-											&display,
-											egui::FontId::new(
-												if full { 26.0 } else { 20.0 },
-												design::semibold_family(ui.ctx()),
-											),
-											// Like Discord, the profile name stays neutral; roles show as chips.
-											None,
-											if full { theme.card } else { theme.panel },
-											theme.text,
-											ui.available_width(),
-										))
-										.truncate()
-										.sense(if full || user.webhook {
+									// Like Discord, the profile name stays neutral (roles show as
+									// chips) unless the account wears a Nitro name style.
+									let name = crate::name_styles::label(
+										ui,
+										crate::name_styles::style(
+											data.map_or(user, |data| &data.user),
+										),
+										&display,
+										egui::FontId::new(
+											if full { 26.0 } else { 20.0 },
+											design::semibold_family(ui.ctx()),
+										),
+										None,
+										if full { theme.card } else { theme.panel },
+										theme.text,
+										if full || user.webhook {
 											egui::Sense::hover()
 										} else {
 											egui::Sense::click()
-										}),
+										},
+										true,
 									);
 									if !full
 										&& !user.webhook && name
@@ -3504,7 +3646,7 @@ pub fn show_with_session(
 							} else {
 								divider(ui, &theme);
 							}
-							let used = ui.cursor().top() - banner.top();
+							let used = ui.cursor().top() - header_top;
 							// No floor here: a busy profile (many badges, connections, a long
 							// bio) must still fit `bounds`, or the card's rounded bottom
 							// corner renders past the window edge and looks square.
@@ -3527,6 +3669,30 @@ pub fn show_with_session(
 										state.demo,
 										(theme.chip, theme.muted),
 									);
+								}
+								if let Some(data) = data.filter(|d| d.private) {
+									// The service withheld the rest; say so, like Discord.
+									egui::Frame::new()
+										.fill(theme.chip)
+										.corner_radius(RADIUS)
+										.inner_margin(12)
+										.show(ui, |ui| {
+											ui.set_width(ui.available_width());
+											ui.add(
+												egui::Label::new(
+													RichText::new(crate::i18n::translate_args(
+														"profiles-private-notice",
+														&[(
+															"name",
+															state.user_display_name(&data.user),
+														)],
+													))
+													.size(body),
+												)
+												.wrap(),
+											);
+										});
+									sections += 1;
 								}
 								if let Some(data) = data {
 									let bio = data
@@ -3566,51 +3732,62 @@ pub fn show_with_session(
 										);
 										role_chips(ui, &theme, state, data.user.id, guild);
 									}
-									section(
-										ui,
-										&theme,
-										&mut sections,
-										"profiles-show-member-since",
-										full,
-									);
-									ui.horizontal_wrapped(|ui| {
-										ui.spacing_mut().item_spacing.x = 6.0;
-										if let Some(date) = creation_date(user.id) {
-											icons::inline(ui, Icon::Calendar, 16.0, theme.muted);
-											ui.label(RichText::new(date).size(body));
-										}
-										if let Some(joined) =
-											data.guild.as_ref().and_then(|g| g.joined_at.as_deref())
-										{
-											let server = data
+									if !data.private {
+										section(
+											ui,
+											&theme,
+											&mut sections,
+											"profiles-show-member-since",
+											full,
+										);
+										ui.horizontal_wrapped(|ui| {
+											ui.spacing_mut().item_spacing.x = 6.0;
+											if let Some(date) = creation_date(user.id) {
+												icons::inline(
+													ui,
+													Icon::Calendar,
+													16.0,
+													theme.muted,
+												);
+												ui.label(RichText::new(date).size(body));
+											}
+											if let Some(joined) = data
 												.guild
 												.as_ref()
-												.and_then(|g| {
-													state
-														.guilds
-														.iter()
-														.find(|known| known.id == g.guild)
-												})
-												.map_or_else(
-													|| {
-														crate::i18n::translate(
-															"profiles-show-server-2",
-														)
-													},
-													|g| g.name.clone(),
+												.and_then(|g| g.joined_at.as_deref())
+											{
+												let server = data
+													.guild
+													.as_ref()
+													.and_then(|g| {
+														state
+															.guilds
+															.iter()
+															.find(|known| known.id == g.guild)
+													})
+													.map_or_else(
+														|| {
+															crate::i18n::translate(
+																"profiles-show-server-2",
+															)
+														},
+														|g| g.name.clone(),
+													);
+												ui.label(
+													RichText::new("•")
+														.size(body)
+														.color(theme.muted),
 												);
-											ui.label(
-												RichText::new("•").size(body).color(theme.muted),
-											);
-											ui.label(
-												RichText::new(format!(
-													"{server} {}",
-													joined.split('T').next().unwrap_or(joined)
-												))
-												.size(body),
-											);
-										}
-									});
+												ui.label(
+													RichText::new(format!(
+														"{server} {}",
+														joined.split('T').next().unwrap_or(joined)
+													))
+													.size(body),
+												);
+											}
+										});
+									}
 									if let Some(since) =
 										state.friend_since(user.id).and_then(local_date)
 									{
@@ -3644,7 +3821,7 @@ pub fn show_with_session(
 										);
 									}
 									// Discord keeps the private note at the bottom of the profile.
-									if !own && !user.webhook {
+									if !own && !user.webhook && !data.private {
 										section(
 											ui,
 											&theme,
@@ -4134,6 +4311,7 @@ pub fn synthetic(user: &User, guild: Option<Id>) -> model::UserProfile {
         effect: Some(Box::new(synthetic_effect())),
         frame: Some(Box::new(synthetic_frame())),
         badge_catalog: Some(Box::new(crate::badges::synthetic_catalog())),
+        private: false,
         limited: false,
     }
 }
@@ -5516,5 +5694,106 @@ mod tests {
 				(expected, other) => panic!("{expected}: {:?}", other.is_some()),
 			}
 		}
+	}
+
+	#[test]
+	fn private_profiles_show_the_lock_strip_and_notice_and_hide_withheld_sections() {
+		let ctx = egui::Context::default();
+		let state = test_support::demo_state();
+		let user = state
+			.channels
+			.iter()
+			.find(|channel| channel.kind == 1)
+			.and_then(|channel| channel.recipients.first().cloned())
+			.unwrap();
+		let painted = |private: bool| {
+			let mut data = synthetic(&user, None);
+			data.private = private;
+			let view = ProfileView {
+				user: user.id,
+				guild: None,
+				request: 0,
+				loading: false,
+				error: None,
+				data: Some(data),
+			};
+			let mut session = ProfileSession::default();
+			let mut painted = Vec::new();
+			for _ in 0..2 {
+				let output = ctx.run_ui(
+					egui::RawInput {
+						screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1200.0, 900.0))),
+						..Default::default()
+					},
+					|ui| {
+						show_with_session(
+							ui,
+							&user,
+							Some(&view),
+							&state,
+							&mut Avatars::default(),
+							&mut None,
+							&mut FormatCache::default(),
+							false,
+							pos2(300.0, 60.0),
+							&mut session,
+						);
+					},
+				);
+				painted.clear();
+				fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+					match shape {
+						egui::Shape::Text(text) => out.push(text.galley.job.text.clone()),
+						egui::Shape::Vec(shapes) => {
+							shapes.iter().for_each(|shape| walk(shape, out))
+						}
+						_ => {}
+					}
+				}
+				output
+					.shapes
+					.iter()
+					.for_each(|shape| walk(&shape.shape, &mut painted));
+				output.drop_without_applying_deltas();
+			}
+			painted
+		};
+		let private = painted(true);
+		assert!(
+			private.iter().any(|text| text == "Private Profile"),
+			"{private:?}"
+		);
+		assert!(
+			private
+				.iter()
+				.any(|text| text.contains("profile is private"))
+		);
+		assert!(
+			!private
+				.iter()
+				.any(|text| text == "MEMBER SINCE" || text == "NOTE")
+		);
+		let public = painted(false);
+		assert!(!public.iter().any(|text| text == "Private Profile"));
+		assert!(public.iter().any(|text| text == "MEMBER SINCE"));
+	}
+
+	#[test]
+	fn a_stranger_without_presence_shows_no_status() {
+		let state = State {
+			gateway_connected: true,
+			..State::default()
+		};
+		assert_eq!(shown_status(&state, Id(7), None), None);
+		assert_eq!(shown_status(&state, Id(7), Some("idle")), Some("idle"));
+	}
+
+	#[test]
+	fn phone_badge_hover_covers_the_whole_phone() {
+		let avatar = Rect::from_min_size(pos2(0.0, 0.0), Vec2::splat(32.0));
+		let (radius, ring, center) = presence_badge_metrics(avatar);
+		let top = pos2(center.x, phone_body(center, radius).top() - ring * 0.5);
+		assert!(!presence_badge_rect(avatar, false).contains(top));
+		assert!(presence_badge_rect(avatar, true).contains(top));
 	}
 }

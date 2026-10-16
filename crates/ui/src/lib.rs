@@ -92,6 +92,7 @@ mod contact_editor;
 pub mod dialog;
 mod join_server;
 mod keybinds;
+mod name_styles;
 mod onboarding;
 mod polls;
 mod profile_edit;
@@ -1738,22 +1739,29 @@ impl MessagingUi {
 											let trailing =
 												profiles::server_tag_width(ui, server_tag)
 													+ if server_tag.is_some() { 5.0 } else { 0.0 };
-											account_badge::name(
-												ui,
-												&member.user,
-												name,
-												15.0,
-												(
-													text_color,
-													role_colors,
-													if response.hovered() || response.has_focus() {
-														colors.hover
-													} else {
-														colors.sidebar
-													},
-												),
-												egui::Sense::hover(),
-												trailing,
+											crate::name_styles::in_row(
+												response.contains_pointer() || response.has_focus(),
+												|| {
+													account_badge::name(
+														ui,
+														&member.user,
+														name,
+														15.0,
+														(
+															text_color,
+															role_colors,
+															if response.hovered()
+																|| response.has_focus()
+															{
+																colors.hover
+															} else {
+																colors.sidebar
+															},
+														),
+														egui::Sense::hover(),
+														trailing,
+													)
+												},
 											);
 											if let Some(tag) = server_tag {
 												profiles::server_tag(
@@ -2114,7 +2122,7 @@ impl MessagingUi {
 								design::presence_dot(
 									ui,
 									avatar.rect,
-									profiles::presence_color(self.own_presence.status.wire()),
+									self.own_presence.status.wire(),
 									ring,
 								);
 								anchor =
@@ -2143,23 +2151,26 @@ impl MessagingUi {
 											let identity = ui
 												.vertical(|ui| {
 													ui.spacing_mut().item_spacing.y = 0.0;
-													ui.add(
-														egui::Label::new(
-															design::semibold(
-																ui,
-																state.user.as_ref().map_or_else(
-																	|| {
-																		language
-																			.text("your-account")
-																	},
-																	|u| u.name.clone(),
-																),
-																14.0,
-															)
-															.color(colors.text_strong),
-														)
-														.truncate()
-														.selectable(false),
+													let name = state.user.as_ref().map_or_else(
+														|| language.text("your-account"),
+														|u| u.name.clone(),
+													);
+													name_styles::label(
+														ui,
+														state
+															.user
+															.as_ref()
+															.and_then(name_styles::style),
+														&name,
+														egui::FontId::new(
+															14.0,
+															design::semibold_family(ui.ctx()),
+														),
+														None,
+														card_fill,
+														colors.text_strong,
+														egui::Sense::hover(),
+														true,
 													);
 													ui.add(
 														egui::Label::new(
@@ -2342,6 +2353,7 @@ impl MessagingUi {
 							);
 						}
 						let (status, _, _, clients) = profiles::presence(state, user.id, None);
+						let status = profiles::shown_status(state, user.id, status);
 						if dm && let Some(status) = status {
 							profiles::presence_badge(
 								ui,
@@ -4017,6 +4029,7 @@ impl MessagingUi {
 
 	pub fn show(&mut self, ui: &mut egui::Ui, state: &mut State) -> Vec<Command> {
 		self.avatars.cosmetics = self.cosmetics;
+		name_styles::set_enabled(self.cosmetics.name_styles);
 		let cosmetics_refresh = state.set_profile_cosmetics(self.cosmetics);
 		self.timeline.download.gif_favorites = state
 			.gifs
@@ -4929,7 +4942,14 @@ impl MessagingUi {
 								commands.push(command);
 							}
 							ctx.request_repaint();
-						} else if std::mem::take(&mut self.timeline.load_newer) {
+						} else if std::mem::take(&mut self.timeline.load_newer)
+							| (std::mem::take(&mut self.timeline.fill_newer)
+								// A scroll up outranks filling; it asks for older messages.
+								&& !self.timeline.load_older
+								// A history request cancels a loading search; only a scroll may.
+								&& !state.search.as_ref().is_some_and(|s| s.loading)
+								&& !state.archives.as_ref().is_some_and(|a| a.loading))
+						{
 							if let Some(command) = state.newer_history() {
 								commands.push(command);
 							}
@@ -5428,6 +5448,26 @@ impl MessagingUi {
 			commands.push(command);
 		}
 		self.verification.show(&ctx, state);
+		// Discord's notice for a rate-limited send; the messages stay queued and go out on their own.
+		if state.send_throttled {
+			let result = dialog::Dialog::new(
+				"send-throttled",
+				crate::i18n::translate("send-throttled-title"),
+			)
+			.subtitle(crate::i18n::translate("send-throttled-body"))
+			.width(400.0)
+			.show(&ctx, |d| {
+				let mut close = false;
+				d.footer(|ui| {
+					close = dialog::action(ui, "send-throttled-dismiss", dialog::Action::Primary)
+						.clicked();
+				});
+				close
+			});
+			if result.inner || result.close {
+				state.dismiss_send_throttle();
+			}
+		}
 		self.onboarding.show(&ctx, state, &mut commands);
 		self.scroll.clear_if_unbound(&ctx);
 		self.scroll.paint(&ctx);

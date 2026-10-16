@@ -1218,8 +1218,9 @@ mod navigation_tests {
 					state.timeline.iter().last().map(|m| m.id),
 					Some(Id(start + 100))
 				);
-				assert!(!state.older_exhausted);
-				assert!(state.can_load_older());
+				// Opened at the first message, the window keeps the start through newer pages.
+				assert_eq!(state.older_exhausted, marker.is_none());
+				assert_eq!(state.can_load_older(), marker.is_some());
 				assert_eq!(state.read_marker(Id(1)), Some(marker));
 				let Command::History { before, after, .. } = state.history(None) else {
 					panic!()

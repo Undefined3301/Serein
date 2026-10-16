@@ -3797,6 +3797,7 @@ impl Desktop {
 					query,
 					before,
 					offset,
+					oldest,
 					request,
 					..
 				} => {
@@ -3814,8 +3815,10 @@ impl Desktop {
 						.map_or(channel, model::Id);
 					for id in (1..=500)
 						.rev()
-						.filter(|id| before.is_none_or(|b| *id < b.0))
-					{
+						// The cursor continues older newest first, newer oldest first.
+						.filter(|id| {
+							before.is_none_or(|b| if oldest { *id > b.0 } else { *id < b.0 })
+						}) {
 						let message = test_support::message(id, source);
 						if message
 							.content
@@ -3870,7 +3873,8 @@ impl Desktop {
 								)
 							}) {
 							total += 1;
-							if total > u64::from(offset) && hits.len() < model::SEARCH_PAGE_SIZE {
+							// The fixture is small: keep every match, then page in the chosen order.
+							{
 								hits.push(model::SearchHit {
 									id: message.id,
 									channel: source,
@@ -3883,6 +3887,15 @@ impl Desktop {
 							}
 						}
 					}
+					hits.sort_unstable_by_key(|hit| std::cmp::Reverse(hit.id));
+					if oldest {
+						hits.reverse();
+					}
+					let hits = hits
+						.into_iter()
+						.skip(offset as usize)
+						.take(model::SEARCH_PAGE_SIZE)
+						.collect();
 					Event::Search {
 						channel,
 						request,

@@ -4,6 +4,25 @@ Recent synthetic/offline measurements are workload-specific. They do not establi
 performance, universal device results or application-wide memory bounds. The raw PR screenshot,
 log and per-run evidence archive has been removed; the summaries below retain the useful results.
 
+## Name styles and bundled name fonts - October 15, 2026
+
+Compared baseline `5f83077e` (`main`) with the name-styles branch on Linux (CachyOS, x86_64),
+both built with `cargo xtask package` in separate worktrees and target directories. On this
+host the `.deb` stage fails in `dpkg-shlibdeps` for both revisions, so the measurement uses
+the release executable and the staged `dist` payload produced before that stage. Compressed
+size is `zstd -19` of the executable alone.
+
+| Metric | Baseline | After | Delta |
+| --- | ---: | ---: | ---: |
+| Release executable bytes | 88,266,920 | 91,822,792 | +3,555,872 (+4.03%) |
+| Staged `dist` payload bytes (no archives) | 92,445,973 | 96,065,437 | +3,619,464 (+3.92%) |
+| Executable, `zstd -19` bytes | 42,744,679 | 44,296,091 | +1,551,412 (+3.63%) |
+
+The growth is the 14 embedded display-name fonts (3,493,132 bytes) and their license texts.
+The faces are embedded but parsed only when a visible styled name first needs one; with name
+styles off (the default) none is parsed. CPU, process memory and frame timings were not
+sampled, and no runtime improvement is claimed.
+
 ## Game mention catalog and review fixes - October 14, 2026
 
 Compared baseline `7759f5b5` with game mentions and review fixes at `75c4dfe0`.
