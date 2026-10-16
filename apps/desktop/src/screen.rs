@@ -84,6 +84,7 @@ pub(super) struct Screen {
 	command: Option<Command>,
 	sequence: u64,
 	status: &'static str,
+	share_cued: bool,
 }
 impl Screen {
 	pub fn stop(&mut self) {
@@ -418,6 +419,17 @@ impl Screen {
 		if let Some(error) = failure {
 			self.request_stop(error);
 		}
+		if self.live.is_some() && !self.share_cued {
+			self.share_cued = true;
+			let cue = model::notification_preferences::Sound::ScreenShareOn;
+			if ui.notification_options.allows(cue) {
+				ui.notification_preview = Some(cue);
+				ctx.request_repaint();
+			}
+		}
+		if self.live.is_none() {
+			self.share_cued = false;
+		}
 		if let Some(live) = &self.live {
 			let on_channel = state.selected == Some(live.context.channel);
 			let shown = on_channel
@@ -437,11 +449,6 @@ impl Screen {
 				} else {
 					ui.screen.preview =
 						Some(ctx.load_texture("local-screen", image, egui::TextureOptions::LINEAR));
-					let cue = model::notification_preferences::Sound::ScreenShareOn;
-					if ui.notification_options.allows(cue) {
-						ui.notification_preview = Some(cue);
-						ctx.request_repaint();
-					}
 				}
 			}
 		} else {
