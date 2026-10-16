@@ -198,18 +198,13 @@ impl Surface {
 			if !run.rect.is_positive() || !reaches(ui, run.rect) {
 				continue;
 			}
-			if menu_open {
-				if !run.galley.job.text.is_empty() {
-					let color = if run.painted {
-						Color32::TRANSPARENT
-					} else {
-						ui.visuals().text_color()
-					};
-					ui.painter()
-						.add(TextShape::new(run.galley_pos, run.galley, color));
-				}
-				continue;
-			}
+			// An open menu must not take the click, but the range still has to be
+			// registered or egui drops it for lack of both ends.
+			let sense = if menu_open {
+				Sense::empty()
+			} else {
+				band_sense()
+			};
 			let mut response: Option<Response> = None;
 			let mut index = 0;
 			for line in &run.lines {
@@ -220,16 +215,21 @@ impl Surface {
 						run.band.with(index)
 					};
 					index += 1;
-					let piece = ui.interact(piece, id, band_sense());
+					let piece = ui.interact(piece, id, sense);
 					response = Some(match response.take() {
 						Some(prev) => prev.union(piece),
 						None => piece,
 					});
 				}
 			}
-			let Some(response) = response else {
+			let Some(mut response) = response else {
 				continue;
 			};
+			if menu_open {
+				response
+					.flags
+					.set(egui::response::Flags::CONTAINS_POINTER, false);
+			}
 			if run.galley.job.text.is_empty() {
 				continue;
 			}
@@ -334,7 +334,9 @@ impl egui::Plugin for Pointer {
 				self.silent = true;
 			}
 			self.menu = true;
-		} else {
+		} else if ctx.output(|output| output.num_completed_passes) == 0 {
+			// A discarded replay has empty input. Clearing here would drop the menu
+			// before the pass that is actually painted.
 			self.menu = false;
 		}
 	}
@@ -778,28 +780,22 @@ pub(crate) fn band_sense() -> Sense {
 	Sense::CLICK | Sense::DRAG
 }
 
-/// Paint a deferred widget galley, registering its selection unless a menu owns the pointer.
+/// Paint a deferred widget galley and register its selection.
+///
+/// An open menu clears the pointer flag so the click stays with the menu.
 fn show_embed(ui: &mut egui::Ui, embed: &Embed, menu_open: bool) {
 	if !embed.response.rect.is_positive() || !reaches(ui, embed.response.rect) {
 		return;
 	}
 	// The galley carries its own per-token colours; the fallback only covers unstyled glyphs.
 	let color = ui.visuals().text_color();
+	let mut response = embed.response.clone();
 	if menu_open {
-		ui.painter().add(TextShape::new(
-			embed.galley_pos,
-			embed.galley.clone(),
-			color,
-		));
-		return;
+		response
+			.flags
+			.set(egui::response::Flags::CONTAINS_POINTER, false);
 	}
-	register(
-		ui,
-		&embed.response,
-		embed.galley_pos,
-		embed.galley.clone(),
-		color,
-	);
+	register(ui, &response, embed.galley_pos, embed.galley.clone(), color);
 }
 
 fn punch(rect: Rect, holes: &[Rect]) -> Vec<Rect> {

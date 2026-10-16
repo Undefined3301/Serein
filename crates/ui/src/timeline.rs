@@ -2646,6 +2646,8 @@ impl TimelineView {
 			&& !ui.input(|input| input.is_scrolling())
 			&& ui.ctx().dragged_id().is_none();
 		let selection_edge = std::cell::Cell::new(false);
+		// Positive moves toward older messages, the same sign as a wheel delta.
+		let selection_scroll = std::cell::Cell::new(0.0f32);
 		let output = scroll.show_viewport(ui, |ui, viewport| {
 			ui.spacing_mut().item_spacing.y = 0.0;
 			if welcome && let Some(channel) = state.selected.and_then(|id| state.channel(id)) {
@@ -2689,11 +2691,13 @@ impl TimelineView {
 					0.0
 				};
 				if toward_older != 0.0 {
+					let delta = toward_older.clamp(-1.0, 1.0) * 64.0;
 					ui.scroll_with_delta_animation(
-						egui::vec2(0.0, toward_older.clamp(-1.0, 1.0) * 64.0),
+						egui::vec2(0.0, delta),
 						egui::style::ScrollAnimation::none(),
 					);
 					selection_edge.set(true);
+					selection_scroll.set(delta);
 				}
 			}
 			// Measure leading overscan without changing the visible rows or parent bounds.
@@ -4527,15 +4531,17 @@ impl TimelineView {
 			.selected
 			.and_then(|channel| state.channel(channel))
 			.and_then(|channel| channel.last_message);
-		let scrolled_toward_bottom = ui.input(|input| {
-			(scroll_delta < 0.0
-				&& (session.holding()
-					|| input
-						.pointer
-						.hover_pos()
-						.is_some_and(|pos| output.inner_rect.contains(pos))))
-				|| (input.pointer.any_down() && output.state.clamped_offset().y > output.inner)
-		});
+		let selection_scroll = selection_scroll.get();
+		let scrolled_toward_bottom = selection_scroll < 0.0
+			|| ui.input(|input| {
+				(scroll_delta < 0.0
+					&& (session.holding()
+						|| input
+							.pointer
+							.hover_pos()
+							.is_some_and(|pos| output.inner_rect.contains(pos))))
+					|| (input.pointer.any_down() && output.state.clamped_offset().y > output.inner)
+			});
 		// A window that does not fill the view cannot be scrolled, so it fetches newer pages
 		// until it does, like Discord after jumping to an early message.
 		let underfilled = output.content_size.y <= output.inner_rect.height() + 1.0;
@@ -4632,13 +4638,14 @@ impl TimelineView {
 		// Explicit upward input requests one page even when a short view cannot scroll.
 		// Idle layout still never drains history merely to fill the viewport.
 		self.load_older = output.state.clamped_offset().y < 160.0
-			&& ui.input(|i| {
-				scroll_delta > 0.0
-					&& (session.holding()
-						|| i.pointer
-							.hover_pos()
-							.is_some_and(|pos| output.inner_rect.contains(pos)))
-			}) && state.can_load_older();
+			&& scroll_delta + selection_scroll > 0.0
+			&& (session.holding()
+				|| selection_scroll > 0.0
+				|| ui.input(|i| {
+					i.pointer
+						.hover_pos()
+						.is_some_and(|pos| output.inner_rect.contains(pos))
+				})) && state.can_load_older();
 		if self.load_older {
 			self.browse_away();
 		}
@@ -6660,6 +6667,215 @@ mod tests {
 
 		assert!(view.load_newer);
 		assert!(view.target_browsing);
+	}
+
+	#[test]
+	fn selecting_into_an_edge_loads_the_next_page_in_that_direction() {
+		let ctx = egui::Context::default();
+		crate::design::apply(&ctx);
+		let mut state = loading_unread_channel(false);
+		state.freshness = model::Freshness::Fresh;
+		state.history_pending = false;
+		let mut message = text_message(20);
+		message.content = "Sentence 20 alpha bravo charlie delta".into();
+		state.channels[0].last_message = Some(Id(20));
+		state.timeline.insert(message, false, false).unwrap();
+		assert!(state.can_load_older());
+		let mut view = TimelineView::default();
+		for _ in 0..8 {
+			banner_frame(&ctx, &mut view, &mut state, vec![], false);
+		}
+		let labels = banner_frame(&ctx, &mut view, &mut state, vec![], false);
+		let rect = labels
+			.iter()
+			.find(|(text, _)| text.contains("alpha bravo"))
+			.map(|(_, rect)| *rect)
+			.expect("a sentence to drag toward older messages");
+		let from = egui::pos2(rect.left() + 4.0, rect.center().y);
+		let press = |pos: egui::Pos2, pressed: bool| {
+			vec![
+				egui::Event::PointerMoved(pos),
+				egui::Event::PointerButton {
+					pos,
+					button: egui::PointerButton::Primary,
+					pressed,
+					modifiers: egui::Modifiers::NONE,
+				},
+			]
+		};
+		banner_frame(&ctx, &mut view, &mut state, press(from, true), false);
+		let top = egui::pos2(from.x, 8.0);
+		banner_frame(
+			&ctx,
+			&mut view,
+			&mut state,
+			vec![egui::Event::PointerMoved(top)],
+			false,
+		);
+		let mut loaded_older = false;
+		for _ in 0..24 {
+			banner_frame(
+				&ctx,
+				&mut view,
+				&mut state,
+				vec![egui::Event::PointerMoved(top)],
+				false,
+			);
+			loaded_older |= view.load_older;
+		}
+		assert!(
+			loaded_older,
+			"holding a selection on the top edge did not request older messages (offset={})",
+			view.scroll_offset
+		);
+
+		let mut state = test_support::demo_state();
+		state.timeline.clear();
+		state.selected = Some(Id(20));
+		state.freshness = model::Freshness::Fresh;
+		state.history_pending = false;
+		state.history_targeted = true;
+		state.history_before = Some(Id(51));
+		state
+			.channels
+			.iter_mut()
+			.find(|channel| channel.id == Id(20))
+			.unwrap()
+			.last_message = Some(Id(100));
+		for id in 1..=50 {
+			state
+				.timeline
+				.insert(text_message(id), false, false)
+				.unwrap();
+		}
+		state.search_target = Some(Id(50));
+		state.revision += 1;
+		assert!(state.can_load_newer());
+		let mut view = TimelineView::default();
+		for _ in 0..80 {
+			banner_frame(&ctx, &mut view, &mut state, vec![], false);
+			if view.reveal_scroll.is_none() && view.highlighted.is_some() {
+				break;
+			}
+		}
+		view.following = true;
+		banner_frame(&ctx, &mut view, &mut state, vec![], false);
+		let labels = banner_frame(&ctx, &mut view, &mut state, vec![], false);
+		assert!(
+			!view.load_newer,
+			"sitting on the loaded bottom must not request newer messages"
+		);
+		let rect = labels
+			.iter()
+			.find(|(text, rect)| text.contains("Synthetic text") && rect.center().y > 80.0)
+			.map(|(_, rect)| *rect)
+			.expect("a sentence to drag toward newer messages");
+		let from = egui::pos2(rect.left() + 4.0, rect.center().y);
+		banner_frame(&ctx, &mut view, &mut state, press(from, true), false);
+		let bottom = egui::pos2(from.x, 590.0);
+		banner_frame(
+			&ctx,
+			&mut view,
+			&mut state,
+			vec![egui::Event::PointerMoved(bottom)],
+			false,
+		);
+		let mut loaded_newer = false;
+		for _ in 0..48 {
+			banner_frame(
+				&ctx,
+				&mut view,
+				&mut state,
+				vec![egui::Event::PointerMoved(bottom)],
+				false,
+			);
+			loaded_newer |= view.load_newer;
+			if loaded_newer {
+				break;
+			}
+		}
+		assert!(
+			loaded_newer,
+			"holding a selection on the bottom edge did not request newer messages (offset={})",
+			view.scroll_offset
+		);
+	}
+
+	#[test]
+	fn right_click_keeps_the_selection_and_offers_copy() {
+		let ctx = egui::Context::default();
+		crate::design::apply(&ctx);
+		let mut state = loading_unread_channel(false);
+		state.freshness = model::Freshness::Fresh;
+		state.history_pending = false;
+		state.older_exhausted = true;
+		let mut message = text_message(20);
+		message.content = "Sentence 20 alpha bravo charlie delta".into();
+		state.channels[0].last_message = Some(Id(20));
+		state.timeline.insert(message, false, false).unwrap();
+		let mut view = TimelineView::default();
+		for _ in 0..8 {
+			banner_frame(&ctx, &mut view, &mut state, vec![], false);
+		}
+		let labels = banner_frame(&ctx, &mut view, &mut state, vec![], false);
+		let rect = labels
+			.iter()
+			.find(|(text, _)| text.contains("alpha bravo"))
+			.map(|(_, rect)| *rect)
+			.expect("a sentence to select");
+		let from = egui::pos2(rect.left() + 4.0, rect.center().y);
+		let to = egui::pos2(rect.right() - 4.0, rect.center().y);
+		let press = |pos: egui::Pos2, button: egui::PointerButton, pressed: bool| {
+			vec![
+				egui::Event::PointerMoved(pos),
+				egui::Event::PointerButton {
+					pos,
+					button,
+					pressed,
+					modifiers: egui::Modifiers::NONE,
+				},
+			]
+		};
+		banner_frame(
+			&ctx,
+			&mut view,
+			&mut state,
+			press(from, egui::PointerButton::Primary, true),
+			false,
+		);
+		banner_frame(
+			&ctx,
+			&mut view,
+			&mut state,
+			vec![egui::Event::PointerMoved(to)],
+			false,
+		);
+		banner_frame(
+			&ctx,
+			&mut view,
+			&mut state,
+			press(to, egui::PointerButton::Primary, false),
+			false,
+		);
+		assert!(
+			crate::select::has_selection(&ctx),
+			"the drag never selected text"
+		);
+		banner_frame(
+			&ctx,
+			&mut view,
+			&mut state,
+			press(to, egui::PointerButton::Secondary, true),
+			false,
+		);
+		// The menu's first frame is egui's invisible sizing pass. The action paints after that.
+		let labels = banner_frame(&ctx, &mut view, &mut state, vec![], false);
+		let offered = labels.iter().any(|(text, _)| text == "Copy Selected Text");
+		assert!(
+			crate::select::has_selection(&ctx) && offered,
+			"right-click dropped the selection or hid copy: selected={} labels={labels:?}",
+			crate::select::has_selection(&ctx)
+		);
 	}
 
 	#[test]
