@@ -809,7 +809,6 @@ impl MessagingUi {
 							let visible = !access.hidden();
 							// Forum containers open their post list; Discord lists them as browsable rows.
 							let forum = channel.guild.is_some() && matches!(channel.kind, 15 | 16);
-							// A forum carries no messages of its own: its posts hold the activity.
 							let (unread, count) =
 								crate::notifications::row_activity(state, channel, visible);
 							let new_posts = if visible && forum {

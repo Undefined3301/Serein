@@ -444,8 +444,7 @@ impl MessagingUi {
 				.rect_filled(row, 8, crate::design::row_highlight(ui, colors.hover, 1.0));
 		}
 		let (unread, count) = crate::notifications::row_activity(state, channel, viewable);
-		// Plain unread is the call's own chat. Mentions stay visible from outside it.
-		let show_unread = unread && connected;
+		let unread_while_connected = unread && connected;
 		let text_color = channel_marks::tint(
 			&colors,
 			access,
@@ -459,7 +458,7 @@ impl MessagingUi {
 				Emphasis::Idle
 			},
 		);
-		if show_unread && !selected && !access.muted() {
+		if unread_while_connected && !selected && !access.muted() {
 			ui.painter().rect_filled(
 				egui::Rect::from_center_size(
 					egui::pos2(row.left() - 6.0, row.center().y),
@@ -542,7 +541,7 @@ impl MessagingUi {
 					} else {
 						String::new()
 					},
-					if show_unread {
+					if unread_while_connected {
 						crate::i18n::translate("categories-channel-list-unread")
 					} else {
 						String::new()

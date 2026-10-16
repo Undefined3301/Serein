@@ -90,7 +90,6 @@ fn home_request_label(friends: u32, messages: u32) -> String {
 	parts.join(" · ")
 }
 
-/// Unread mark and badge count shared by text rows and voice rows.
 pub(super) fn row_activity(state: &State, channel: &model::Channel, visible: bool) -> (bool, u32) {
 	let forum = channel.guild.is_some() && matches!(channel.kind, 15 | 16);
 	let unread = visible
