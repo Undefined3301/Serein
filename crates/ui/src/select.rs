@@ -301,6 +301,14 @@ impl egui::Plugin for Pointer {
 		"Chat selection pointer"
 	}
 
+	fn on_begin_pass(&mut self, ui: &mut egui::Ui) {
+		// Chrome above and below the timeline shares the window layer. A drag that
+		// started on a message must not continue into it. Mouse-up is still a drag
+		// until the end of that pass, so the release frame counts too.
+		let block_chrome = drag_outside_viewport(ui);
+		ui.style_mut().interaction.multi_widget_text_select = !block_chrome;
+	}
+
 	fn input_hook(&mut self, ctx: &egui::Context, input: &mut RawInput) {
 		#[cfg(target_os = "macos")]
 		normalize_control_click(input, &mut self.control_primary);
@@ -535,6 +543,24 @@ fn viewport_id() -> egui::Id {
 
 pub(crate) fn publish_viewport(ui: &egui::Ui, clip: Rect) {
 	ui.data_mut(|data| data.insert_temp(viewport_id(), clip));
+}
+
+/// The pointer is held outside the timeline while a message range is active.
+fn drag_outside_viewport(ui: &egui::Ui) -> bool {
+	let Some(viewport) = ui.data(|data| data.get_temp::<Rect>(viewport_id())) else {
+		return false;
+	};
+	if !viewport.is_positive() || !has_selection(ui.ctx()) {
+		return false;
+	}
+	let (down, released, pos) = ui.input(|input| {
+		(
+			input.pointer.primary_down(),
+			input.pointer.primary_released(),
+			input.pointer.interact_pos(),
+		)
+	});
+	(down || released) && pos.is_none_or(|pos| !viewport.contains(pos))
 }
 
 /// The pointer is held still, so a scroll must not retarget the drag onto whatever glyph
