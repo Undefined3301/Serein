@@ -4820,3 +4820,4 @@ search-overlays-message-contains = A mensagem contém
 search-overlays-no-matching-content-types = Nenhum tipo de conteúdo correspondente
 search-overlays-history = Histórico
 search-overlays-clear-history = Limpar histórico de pesquisa
+main-sign-in-rate-limited-detail = O Discord está limitando este login. Aguarde antes de tentar novamente. Outra tentativa antes disso pode aumentar a espera.

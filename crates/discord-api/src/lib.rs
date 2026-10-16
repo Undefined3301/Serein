@@ -60,21 +60,17 @@ tokio::task_local! {
 /// REST permits a preload must leave free for requests the user is waiting for.
 const FOREGROUND_PERMITS: usize = 2;
 const READ_RATE_LIMIT_RETRIES: u8 = 2;
-const MAX_READ_RATE_LIMIT_WAIT: Duration = Duration::from_secs(60);
+/// Longer JSON limits fail the read at once, so sign-in never stalls silently.
+const MAX_READ_RATE_LIMIT_WAIT: Duration = Duration::from_secs(10);
 const API_ORIGINS: [&str; 2] = [
 	"https://discord.com/api/v10",
 	"https://ptb.discord.com/api/v10",
 ];
-#[cfg(not(test))]
 static API_ON_TEST_HOST: AtomicBool = AtomicBool::new(false);
 
 /// Later lookups in this process follow a Cloudflare block of discord.com.
 pub fn api_v10_base() -> &'static str {
-	#[cfg(not(test))]
-	let index = usize::from(API_ON_TEST_HOST.load(Ordering::Acquire));
-	#[cfg(test)]
-	let index = 0;
-	API_ORIGINS[index]
+	API_ORIGINS[usize::from(API_ON_TEST_HOST.load(Ordering::Acquire))]
 }
 
 pub struct DiscordApi {
@@ -90,6 +86,9 @@ pub struct DiscordApi {
 	catalog: std::sync::Mutex<collectibles::Catalog>,
 	#[cfg(test)]
 	base: String,
+	/// Stands in for the public test host; tests keep the process-wide switch untouched.
+	#[cfg(test)]
+	test_host: Option<(String, AtomicBool)>,
 	#[cfg(test)]
 	upload_origin: Option<std::net::SocketAddr>,
 }
@@ -249,6 +248,8 @@ impl DiscordApi {
 			#[cfg(test)]
 			base: "https://discord.com/api/v10".into(),
 			#[cfg(test)]
+			test_host: None,
+			#[cfg(test)]
 			upload_origin: None,
 		})
 	}
@@ -350,6 +351,29 @@ impl DiscordApi {
 		)
 		.await
 	}
+	/// The REST origin for the next attempt and whether it is still discord.com.
+	#[cfg(not(test))]
+	fn api_origin(&self) -> (&'static str, bool) {
+		let base = api_v10_base();
+		(base, base == API_ORIGINS[0])
+	}
+	/// Without a stand-in test host, a test behaves as if the process already moved.
+	#[cfg(test)]
+	fn api_origin(&self) -> (&str, bool) {
+		match &self.test_host {
+			Some((origin, moved)) if moved.load(Ordering::Acquire) => (origin, false),
+			Some(_) => (&self.base, true),
+			None => (&self.base, false),
+		}
+	}
+	fn move_to_test_host(&self) {
+		#[cfg(not(test))]
+		API_ON_TEST_HOST.store(true, Ordering::Release);
+		#[cfg(test)]
+		if let Some((_, moved)) = &self.test_host {
+			moved.store(true, Ordering::Release);
+		}
+	}
 	async fn request_with_content(
 		&self,
 		method: Method,
@@ -402,16 +426,7 @@ impl DiscordApi {
 			let mut authorization = HeaderValue::from_str(self.secret.expose())
 				.map_err(|_| Failure::InvalidCredential)?;
 			authorization.set_sensitive(true);
-			#[cfg(not(test))]
-			let on_stable = !API_ON_TEST_HOST.load(Ordering::Acquire);
-			#[cfg(not(test))]
-			let base = if on_stable {
-				API_ORIGINS[0]
-			} else {
-				API_ORIGINS[1]
-			};
-			#[cfg(test)]
-			let base = &self.base;
+			let (base, on_stable) = self.api_origin();
 			let write = method != Method::GET;
 			let mut request = self
 				.rest_client()
@@ -537,9 +552,8 @@ impl DiscordApi {
 					return Err(Failure::Challenged);
 				}
 				if status == StatusCode::TOO_MANY_REQUESTS && cloudflare_block {
-					#[cfg(not(test))]
 					if on_stable {
-						API_ON_TEST_HOST.store(true, Ordering::Release);
+						self.move_to_test_host();
 						if idempotent {
 							continue;
 						}
@@ -3435,6 +3449,61 @@ mod tests {
 			api.base = format!("http://{address}");
 			assert_eq!(api.current_user().await.unwrap().id, Id(42));
 			task.await.unwrap();
+		}
+		{
+			// A Cloudflare block page moves reads to the test host for the rest of the process,
+			// and a block page there fails with a cooldown instead of another retry.
+			fn page(status: &str, content_type: &str, body: &str) -> String {
+				format!(
+					"HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+					body.len()
+				)
+			}
+			let blocked = page("429 Too Many Requests", "text/html", "<html>blocked</html>");
+			let user = page(
+				"200 OK",
+				"application/json",
+				r#"{"id":"42","username":"synthetic"}"#,
+			);
+			let serve = |listener: TcpListener, responses: Vec<String>| {
+				tokio::spawn(async move {
+					for response in responses {
+						let (mut socket, _) = listener.accept().await.unwrap();
+						let mut request = Vec::new();
+						while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+							let mut bytes = [0; 1024];
+							let n = socket.read(&mut bytes).await.unwrap();
+							assert!(n > 0 && request.len() < 4096);
+							request.extend_from_slice(&bytes[..n]);
+						}
+						assert!(request.starts_with(b"GET /users/@me HTTP/1.1\r\n"));
+						socket.write_all(response.as_bytes()).await.unwrap();
+					}
+				})
+			};
+			let stable = TcpListener::bind("127.0.0.1:0").await.unwrap();
+			let test = TcpListener::bind("127.0.0.1:0").await.unwrap();
+			let mut api = DiscordApi::new(Arc::new(
+				SessionSecret::from_owner_input("SYNTHETIC_SECRET_MARKER".into()).unwrap(),
+			))
+			.unwrap();
+			api.base = format!("http://{}", stable.local_addr().unwrap());
+			api.test_host = Some((
+				format!("http://{}", test.local_addr().unwrap()),
+				AtomicBool::new(false),
+			));
+			let stable = serve(stable, vec![blocked.clone()]);
+			let test = serve(test, vec![user.clone(), user, blocked]);
+			assert_eq!(api.current_user().await.unwrap().id, Id(42));
+			stable.await.unwrap();
+			assert_eq!(api.current_user().await.unwrap().id, Id(42));
+			assert_eq!(
+				api.current_user().await.map(|_| ()).unwrap_err(),
+				Failure::RateLimited
+			);
+			assert!(*api.cooldown.lock().await > Instant::now() + Duration::from_secs(30));
+			assert!(!api.stopped());
+			test.await.unwrap();
 		}
 		assert!(safe_delay(Some(f64::NAN)).is_err());
 		assert!(safe_delay(Some(-1.0)).is_err());

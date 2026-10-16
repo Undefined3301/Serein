@@ -4823,3 +4823,4 @@ search-overlays-message-contains = El mensaje contiene
 search-overlays-no-matching-content-types = No hay tipos de contenido coincidentes
 search-overlays-history = Historial
 search-overlays-clear-history = Borrar historial de búsqueda
+main-sign-in-rate-limited-detail = Discord está limitando este inicio de sesión. Espera antes de volver a intentarlo. Otro intento antes de tiempo puede alargar la espera.

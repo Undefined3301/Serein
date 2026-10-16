@@ -4911,3 +4911,4 @@ profiles-private-profile = Private Profile
 profiles-private-notice = { $name }’s profile is private, so some info is hidden. Add them as a friend to see more.
 settings-cosmetics-name-styles = Name styles
 settings-cosmetics-name-styles-description = Nitro display name fonts, colours and effects.
+main-sign-in-rate-limited-detail = Discord is rate limiting this sign-in. Wait before trying again. Another attempt before that can make the wait longer.
