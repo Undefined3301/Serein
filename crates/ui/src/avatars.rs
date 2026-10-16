@@ -494,16 +494,16 @@ impl Avatars {
 			self.fits.clear();
 			self.fit_bytes = 0;
 		}
-		let has_slot = self
-			.fits
-			.get(key)
-			.is_some_and(|fits| fits.iter().any(|fit| fit.edge == edge));
+		let has_slot = self.fits.get(key).is_some_and(|fits| {
+			fits.iter()
+				.any(|fit| fit.edge == edge && fit.frame.is_some() == frame.is_some())
+		});
 		if has_slot {
 			let (texture, before, after) = {
 				let fits = self.fits.get_mut(key).expect("fit slot");
 				let slot = fits
 					.iter_mut()
-					.find(|fit| fit.edge == edge)
+					.find(|fit| fit.edge == edge && fit.frame.is_some() == frame.is_some())
 					.expect("fit slot");
 				let before = slot.texture.byte_size();
 				slot.texture.set(image, egui::TextureOptions::LINEAR);
