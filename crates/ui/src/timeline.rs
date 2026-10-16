@@ -2695,35 +2695,6 @@ impl TimelineView {
 			crate::select::publish_viewport(ui, clip);
 			crate::select::lock_still_drag(ui);
 			let bar = crate::select::scroll_bar_strip(ui, clip);
-			// A drag held against the clip edge scrolls the channel. The step is immediate
-			// so the next rows arrive under the pointer while the button is still down.
-			if self.selection.dragging()
-				&& let Some(pos) = ui.input(|input| input.pointer.interact_pos())
-				&& !bar.contains(pos)
-			{
-				let band = 36.0;
-				// Past the content the drag keeps the same direction at full speed.
-				let toward_older = if pos.y < clip.min.y {
-					1.0
-				} else if pos.y > clip.max.y {
-					-1.0
-				} else if clip.contains(pos) && pos.y < clip.min.y + band {
-					(clip.min.y + band - pos.y) / band
-				} else if clip.contains(pos) && pos.y > clip.max.y - band {
-					-((pos.y - (clip.max.y - band)) / band)
-				} else {
-					0.0
-				};
-				if toward_older != 0.0 {
-					let delta = toward_older.clamp(-1.0, 1.0) * 64.0;
-					ui.scroll_with_delta_animation(
-						egui::vec2(0.0, delta),
-						egui::style::ScrollAnimation::none(),
-					);
-					selection_edge.set(true);
-					selection_scroll.set(delta);
-				}
-			}
 			// Measure leading overscan without changing the visible rows or parent bounds.
 			// Its new heights take effect together with anchor restoration next pass.
 			// The scroll content's box is only one viewport tall. A child that starts
@@ -3610,6 +3581,11 @@ impl TimelineView {
 													.response
 													.rect;
 											}
+											// The body is above the card. Register it before the card's labels.
+											if text_line.is_positive() {
+												surface.cover(text_line);
+											}
+											surface.flush(ui);
 											if formatted.limited {
 												ui.label(
 													RichText::new(crate::i18n::translate(
@@ -4517,6 +4493,34 @@ impl TimelineView {
 				.filter(|measured| (anchor..end).contains(&measured.index))
 				.map(|measured| (measured.id, measured.rect))
 				.collect();
+			// After every nested card scroll area has closed. A delta set earlier is
+			// taken by the first of those areas and never reaches the channel.
+			if self.selection.dragging()
+				&& let Some(pos) = ui.input(|input| input.pointer.interact_pos())
+				&& !bar.contains(pos)
+			{
+				let band = 36.0;
+				let toward_older = if pos.y < clip.min.y {
+					1.0
+				} else if pos.y > clip.max.y {
+					-1.0
+				} else if clip.contains(pos) && pos.y < clip.min.y + band {
+					(clip.min.y + band - pos.y) / band
+				} else if clip.contains(pos) && pos.y > clip.max.y - band {
+					-((pos.y - (clip.max.y - band)) / band)
+				} else {
+					0.0
+				};
+				if toward_older != 0.0 {
+					let delta = toward_older.clamp(-1.0, 1.0) * 64.0;
+					ui.scroll_with_delta_animation(
+						egui::vec2(0.0, delta),
+						egui::style::ScrollAnimation::none(),
+					);
+					selection_edge.set(true);
+					selection_scroll.set(delta);
+				}
+			}
 			self.selection.track(ui.ctx(), clip, &on_screen, bar);
 			viewport.min.y
 		});
@@ -7623,6 +7627,231 @@ mod tests {
 		assert!(
 			copied == expected,
 			"Copy Selected Text after leaving and returning was not the highlight: expected {expected:?}, got {copied:?}"
+		);
+	}
+
+	/// A link card sits under the message and owns a nested scroll area. Dragging
+	/// past the header or the composer must still move the channel, and the copy
+	/// must read the message before the card under it.
+	#[test]
+	fn dragging_past_chrome_with_an_embed_scrolls_and_copies_in_visual_order() {
+		let ctx = egui::Context::default();
+		crate::design::apply(&ctx);
+		let mut state = loading_unread_channel(false);
+		state.freshness = model::Freshness::Fresh;
+		state.history_pending = false;
+		state.older_exhausted = true;
+		for id in 1..=24 {
+			let mut message = text_message(id);
+			message.content = format!("Sentence {id:02} alpha bravo charlie delta");
+			if id == 20 {
+				message.content = "Alpha above the card".into();
+				message.embeds.push(model::Embed {
+					kind: "rich".into(),
+					title: Some("Beta under the card".into()),
+					description: Some("Gamma under the title".into()),
+					..Default::default()
+				});
+			}
+			state.timeline.insert(message, false, false).unwrap();
+		}
+		state.channels[0].last_message = Some(Id(24));
+		let mut view = TimelineView::default();
+		let mut composer = String::new();
+		let clock = std::cell::Cell::new(0.0_f64);
+		let mut frame = |events: Vec<egui::Event>| {
+			let output = ctx.run_ui(
+				egui::RawInput {
+					focused: true,
+					time: Some(clock.get()),
+					predicted_dt: 1.0 / 60.0,
+					events,
+					screen_rect: Some(egui::Rect::from_min_size(
+						egui::Pos2::ZERO,
+						egui::vec2(900.0, 600.0),
+					)),
+					..Default::default()
+				},
+				|ui| {
+					egui::Panel::top("channel-header")
+						.exact_size(48.0)
+						.show(ui, |ui| {
+							ui.style_mut().interaction.selectable_labels = false;
+							ui.label(
+								egui::RichText::new("General voice and off topic")
+									.size(16.0)
+									.strong(),
+							);
+						});
+					egui::Panel::bottom("composer").show(ui, |ui| {
+						ui.add(
+							egui::TextEdit::multiline(&mut composer)
+								.desired_rows(2)
+								.hint_text("Message"),
+						);
+					});
+					view.show(
+						ui,
+						&mut state,
+						&mut None,
+						&mut None,
+						(
+							&mut crate::avatars::Avatars::default(),
+							&mut crate::profiles::ProfileSession::default(),
+						),
+						None,
+					);
+				},
+			);
+			let copied = output
+				.platform_output
+				.commands
+				.iter()
+				.find_map(|command| match command {
+					egui::OutputCommand::CopyText(text) => Some(text.clone()),
+					_ => None,
+				});
+			let mut labels = vec![];
+			fn texts(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+				match shape {
+					egui::Shape::Text(text) => out.push((
+						text.galley.job.text.clone(),
+						text.galley.rect.translate(text.pos.to_vec2()),
+					)),
+					egui::Shape::Vec(shapes) => {
+						for shape in shapes {
+							texts(shape, out);
+						}
+					}
+					_ => {}
+				}
+			}
+			for shape in &output.shapes {
+				texts(&shape.shape, &mut labels);
+			}
+			output.drop_without_applying_deltas();
+			clock.set(clock.get() + 1.0 / 60.0);
+			(labels, copied, view.scroll_offset)
+		};
+		let press = |pos: egui::Pos2, pressed: bool| {
+			vec![
+				egui::Event::PointerMoved(pos),
+				egui::Event::PointerButton {
+					pos,
+					button: egui::PointerButton::Primary,
+					pressed,
+					modifiers: egui::Modifiers::NONE,
+				},
+			]
+		};
+		for _ in 0..8 {
+			frame(vec![]);
+		}
+		let (labels, _, _) = frame(vec![]);
+		let find = |labels: &[(String, egui::Rect)], needle: &str| {
+			labels.iter().find_map(|(text, rect)| {
+				(text.contains(needle)
+					&& rect.center().y > 48.0
+					&& rect.center().y < 560.0
+					&& rect.width() > 40.0)
+					.then_some(*rect)
+			})
+		};
+		let alpha = find(&labels, "Alpha above").expect("the message above the card");
+		let beta = find(&labels, "Beta under").expect("the card title under that message");
+		assert!(
+			alpha.top() < beta.top(),
+			"the card title should sit under the message, alpha={alpha:?} beta={beta:?}"
+		);
+		let gamma = find(&labels, "Gamma under");
+		let from = gamma
+			.map(|rect| rect.right_bottom())
+			.unwrap_or(beta.right_bottom())
+			+ egui::vec2(-4.0, 4.0);
+		let to = alpha.left_top() + egui::vec2(4.0, -4.0);
+		frame(press(from, true));
+		for step in 1..=8 {
+			let t = step as f32 / 8.0;
+			frame(vec![egui::Event::PointerMoved(from.lerp(to, t))]);
+		}
+		frame(press(to, false));
+		let (_, copied, _) = frame(vec![egui::Event::Copy]);
+		let copied = copied.unwrap_or_default();
+		let message_at = copied.find("Alpha above the card");
+		let card_at = copied.find("Beta under the card");
+		let copy_order = message_at.is_some() && card_at.is_some() && message_at < card_at;
+		let wheel = |delta: f32| {
+			vec![egui::Event::MouseWheel {
+				unit: egui::MouseWheelUnit::Point,
+				delta: egui::vec2(0.0, delta),
+				modifiers: egui::Modifiers::NONE,
+				phase: egui::TouchPhase::Move,
+				source: egui::MouseWheelSource::Unknown,
+			}]
+		};
+		let on_screen = |labels: &[(String, egui::Rect)], needle: &str| {
+			labels.iter().any(|(text, rect)| {
+				text.contains(needle)
+					&& rect.center().y > 48.0
+					&& rect.center().y < 560.0
+					&& rect.width() > 40.0
+			})
+		};
+		let mut left = false;
+		for _ in 0..40 {
+			let (labels, _, _) = frame(wheel(240.0));
+			if !on_screen(&labels, "Alpha above") && !on_screen(&labels, "Beta under") {
+				left = true;
+				break;
+			}
+		}
+		assert!(left, "the card never left the screen");
+		for _ in 0..40 {
+			let (labels, _, _) = frame(wheel(-240.0));
+			if on_screen(&labels, "Alpha above") && on_screen(&labels, "Beta under") {
+				break;
+			}
+		}
+		let (_, again, _) = frame(vec![egui::Event::Copy]);
+		let again = again.unwrap_or_default();
+		assert!(
+			again == copied,
+			"copy after leaving and returning was not the same highlight: before {copied:?}, after {again:?}"
+		);
+
+		let (labels, _, start) = frame(vec![]);
+		let from = find(&labels, "alpha bravo").expect("a sentence to drag");
+		let origin = egui::pos2(from.right() - 4.0, from.center().y);
+		frame(press(origin, true));
+		let above = egui::pos2(origin.x, 8.0);
+		let mut offset = start;
+		for _ in 0..20 {
+			let (_, _, next) = frame(vec![egui::Event::PointerMoved(above)]);
+			offset = next;
+		}
+		assert!(
+			start - offset > 24.0,
+			"dragging into the header did not scroll toward older messages (start={start}, offset={offset})"
+		);
+		frame(press(above, false));
+		let (_, _, away) = frame(vec![]);
+		let (labels, _, _) = frame(vec![]);
+		let from = find(&labels, "alpha bravo").expect("a sentence away from the live edge");
+		let origin = egui::pos2(from.left() + 4.0, from.center().y);
+		frame(press(origin, true));
+		let below = egui::pos2(origin.x, 590.0);
+		let mut offset = away;
+		for _ in 0..20 {
+			let (_, _, next) = frame(vec![egui::Event::PointerMoved(below)]);
+			offset = next;
+		}
+		assert!(
+			offset - away > 24.0,
+			"dragging into the composer did not scroll toward newer messages (away={away}, offset={offset})"
+		);
+		assert!(
+			copy_order,
+			"copied text reversed the message and the card under it: {copied:?}"
 		);
 	}
 

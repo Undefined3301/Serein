@@ -47,11 +47,15 @@ struct Overlay {
 /// One text block's runs, in layout order.
 pub struct Surface {
 	base: egui::Id,
+	/// Next band id. It does not restart when a flush registers the body early.
+	band_count: usize,
 	runs: Vec<Run>,
 	embeds: Vec<Embed>,
 	holes: Vec<Hole>,
 	overlays: Vec<Overlay>,
 	cover: Option<Rect>,
+	/// Line rects already registered. `blank_at` still has to see them after a flush.
+	seen: Vec<Rect>,
 }
 
 impl Surface {
@@ -59,11 +63,13 @@ impl Surface {
 	pub fn new(ui: &egui::Ui, salt: impl egui::AsIdSalt) -> Self {
 		Self {
 			base: ui.scope_id().with(salt),
+			band_count: 0,
 			runs: Vec::new(),
 			embeds: Vec::new(),
 			holes: Vec::new(),
 			overlays: Vec::new(),
 			cover: None,
+			seen: Vec::new(),
 		}
 	}
 
@@ -111,7 +117,8 @@ impl Surface {
 		galley: Arc<Galley>,
 		artwork: Vec<Artwork>,
 	) {
-		let band = self.base.with(self.runs.len());
+		let band = self.base.with(self.band_count);
+		self.band_count += 1;
 		let painted =
 			!artwork.is_empty() && galley.rows.iter().all(|row| row.visuals.mesh.is_empty());
 		if painted {
@@ -160,22 +167,54 @@ impl Surface {
 			.iter()
 			.flat_map(|run| &run.lines)
 			.chain(self.embeds.iter().map(|embed| &embed.response.rect))
+			.chain(self.seen.iter())
 			.chain(self.holes.iter().map(|hole| &hole.rect))
 			.chain(self.overlays.iter().map(|over| &over.rect))
 			.any(|rect| rect.contains(pos))
 	}
 
-	/// Tile the block and register selection on the remaining bands.
-	pub fn finish(self, ui: &mut egui::Ui) {
+	/// Register the runs queued so far, in the order they were recorded.
+	///
+	/// A card under the message registers its own labels while it is drawn. If the
+	/// body waits until `finish`, egui copies the card first and the text above it
+	/// lands at the end.
+	pub fn flush(&mut self, ui: &mut egui::Ui) {
+		if self.runs.is_empty() && self.embeds.is_empty() {
+			return;
+		}
 		let block = block_rect(ui, &self.runs, self.cover);
-		let embeds = self.embeds;
-		let mut embedded = 0;
-		let mut runs = self.runs;
+		let mut runs = std::mem::take(&mut self.runs);
+		let embeds = std::mem::take(&mut self.embeds);
 		if runs.is_empty() && block.is_positive() {
 			runs.push(blank_run(ui, self.base, block));
 		}
 		let covered = self.cover.is_some();
 		tile(&mut runs, block, covered);
+		let menu_open = Popup::is_any_open(ui.ctx());
+		let holes: Vec<Rect> = self.holes.iter().map(|hole| hole.rect).collect();
+		let mut embedded = 0;
+		for (position, run) in runs.iter().enumerate() {
+			while embeds
+				.get(embedded)
+				.is_some_and(|embed| embed.after <= position)
+			{
+				show_embed(ui, &embeds[embedded], menu_open);
+				self.seen.push(embeds[embedded].response.rect);
+				embedded += 1;
+			}
+			self.seen.extend(run.lines.iter().copied());
+			register_run(ui, run, &holes, menu_open);
+		}
+		for embed in &embeds[embedded..] {
+			show_embed(ui, embed, menu_open);
+			self.seen.push(embed.response.rect);
+		}
+		self.cover = None;
+	}
+
+	/// Tile the block and register selection on the remaining bands.
+	pub fn finish(mut self, ui: &mut egui::Ui) {
+		let block = block_rect(ui, &self.runs, self.cover);
 		let pointer = ui.input(|input| input.pointer.hover_pos());
 		let over_click = pointer.is_some_and(|pos| {
 			self.holes
@@ -185,64 +224,11 @@ impl Surface {
 		});
 		let over_reserved =
 			pointer.is_some_and(|pos| self.holes.iter().any(|hole| hole.rect.contains(pos)));
-		let menu_open = Popup::is_any_open(ui.ctx());
-		let holes: Vec<Rect> = self.holes.iter().map(|hole| hole.rect).collect();
-		for (position, run) in runs.into_iter().enumerate() {
-			while embeds
-				.get(embedded)
-				.is_some_and(|embed| embed.after <= position)
-			{
-				show_embed(ui, &embeds[embedded], menu_open);
-				embedded += 1;
-			}
-			if !run.rect.is_positive() || !reaches(ui, run.rect) {
-				continue;
-			}
-			// An open menu must not take the click, but the range still has to be
-			// registered or egui drops it for lack of both ends.
-			let sense = if menu_open {
-				Sense::empty()
-			} else {
-				band_sense()
-			};
-			let mut response: Option<Response> = None;
-			let mut index = 0;
-			for line in &run.lines {
-				for piece in punch(*line, &holes) {
-					let id = if index == 0 {
-						run.band
-					} else {
-						run.band.with(index)
-					};
-					index += 1;
-					let piece = ui.interact(piece, id, sense);
-					response = Some(match response.take() {
-						Some(prev) => prev.union(piece),
-						None => piece,
-					});
-				}
-			}
-			let Some(mut response) = response else {
-				continue;
-			};
-			if menu_open {
-				response
-					.flags
-					.set(egui::response::Flags::CONTAINS_POINTER, false);
-			}
-			if run.galley.job.text.is_empty() {
-				continue;
-			}
-			let color = if run.painted {
-				Color32::TRANSPARENT
-			} else {
-				ui.visuals().text_color()
-			};
-			register(ui, &response, run.galley_pos, run.galley, color);
-		}
-		for embed in &embeds[embedded..] {
-			show_embed(ui, embed, menu_open);
-		}
+		self.flush(ui);
+		let block = self
+			.seen
+			.iter()
+			.fold(block, |block, rect| block.union(*rect));
 		for over in self.overlays {
 			ui.interact_opt(
 				over.rect,
@@ -257,6 +243,53 @@ impl Surface {
 			ui.ctx().set_cursor_icon(CursorIcon::Default);
 		}
 	}
+}
+
+fn register_run(ui: &mut egui::Ui, run: &Run, holes: &[Rect], menu_open: bool) {
+	if !run.rect.is_positive() || !reaches(ui, run.rect) {
+		return;
+	}
+	// An open menu must not take the click, but the range still has to be
+	// registered or egui drops it for lack of both ends.
+	let sense = if menu_open {
+		Sense::empty()
+	} else {
+		band_sense()
+	};
+	let mut response: Option<Response> = None;
+	let mut index = 0;
+	for line in &run.lines {
+		for piece in punch(*line, holes) {
+			let id = if index == 0 {
+				run.band
+			} else {
+				run.band.with(index)
+			};
+			index += 1;
+			let piece = ui.interact(piece, id, sense);
+			response = Some(match response.take() {
+				Some(prev) => prev.union(piece),
+				None => piece,
+			});
+		}
+	}
+	let Some(mut response) = response else {
+		return;
+	};
+	if menu_open {
+		response
+			.flags
+			.set(egui::response::Flags::CONTAINS_POINTER, false);
+	}
+	if run.galley.job.text.is_empty() {
+		return;
+	}
+	let color = if run.painted {
+		Color32::TRANSPARENT
+	} else {
+		ui.visuals().text_color()
+	};
+	register(ui, &response, run.galley_pos, run.galley.clone(), color);
 }
 
 #[derive(Default)]
