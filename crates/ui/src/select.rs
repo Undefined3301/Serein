@@ -296,7 +296,8 @@ fn register_run(ui: &mut egui::Ui, run: &Run, holes: &[Rect], menu_open: bool) {
 struct Pointer {
 	menu: bool,
 	silent: bool,
-	/// The last copy command from the right-click. The clipboard keeps that one.
+	/// The last copy command from this right-click. Empty when that pass copied nothing,
+	/// so an earlier right-click cannot leak onto the next menu action.
 	/// An earlier command on the same pass can be a selected draft in the composer.
 	cached: String,
 	#[cfg(target_os = "macos")]
@@ -412,8 +413,8 @@ impl egui::Plugin for Pointer {
 	}
 
 	fn output_hook(&mut self, ctx: &egui::Context, output: &mut FullOutput) {
-		if self.silent
-			&& let Some(text) = output
+		if self.silent {
+			self.cached = output
 				.platform_output
 				.commands
 				.iter()
@@ -421,8 +422,8 @@ impl egui::Plugin for Pointer {
 				.find_map(|command| match command {
 					egui::OutputCommand::CopyText(text) => Some(text.clone()),
 					_ => None,
-				}) {
-			self.cached = text;
+				})
+				.unwrap_or_default();
 			output
 				.platform_output
 				.commands
@@ -895,7 +896,7 @@ impl<K: Copy + Eq> Span<K> {
 		on_screen: &[(K, Rect)],
 		exclude: Rect,
 	) {
-		let (down, released, pressed, shift, origin, pointer) = ctx.input(|input| {
+		let (down, released, pressed, shift, origin, pointer, delta_sq) = ctx.input(|input| {
 			(
 				input.pointer.primary_down(),
 				input.pointer.primary_released(),
@@ -903,6 +904,7 @@ impl<K: Copy + Eq> Span<K> {
 				input.modifiers.shift,
 				input.pointer.press_origin(),
 				input.pointer.interact_pos().or(input.pointer.hover_pos()),
+				input.pointer.delta().length_sq(),
 			)
 		});
 		if !down && !released && !has_selection(ctx) {
@@ -927,7 +929,16 @@ impl<K: Copy + Eq> Span<K> {
 				focus: anchor,
 			};
 		}
-		if let Ends::Dragging { anchor, .. } = self.ends
+		// A wheel tick slides new rows under a pointer that did not move. Following
+		// that row abandons the end that scrolled away, and the highlight drops.
+		// The viewport edge is the exception: holding there extends the range.
+		let at_edge = pointer.is_some_and(|pos| {
+			let band = 36.0;
+			pos.y < viewport.min.y + band || pos.y > viewport.max.y - band
+		});
+		let still = (down || released) && !pressed && delta_sq < 0.25 && !at_edge;
+		if !still
+			&& let Ends::Dragging { anchor, .. } = self.ends
 			&& let Some(pointer) = pointer
 		{
 			let y = pointer.y.clamp(viewport.min.y, viewport.max.y);
