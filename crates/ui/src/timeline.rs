@@ -4521,6 +4521,7 @@ impl TimelineView {
 					selection_scroll.set(delta);
 				}
 			}
+			crate::select::follow_pointer_below(ui);
 			self.selection.track(ui.ctx(), clip, &on_screen, bar);
 			viewport.min.y
 		});

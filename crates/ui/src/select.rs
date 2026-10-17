@@ -682,12 +682,29 @@ pub(crate) fn register(
 		ui,
 		&response,
 		galley_pos,
-		galley,
+		galley.clone(),
 		color,
 		Stroke::NONE,
 	);
 	if hide {
 		ui.set_clip_rect(clip);
+	}
+	// The last on-screen label is the one a pointer below the text should drag.
+	// Offstage rows register later and must not replace it.
+	if !offstage
+		&& ui.input(|input| input.pointer.primary_down() && !input.pointer.primary_released())
+	{
+		ui.data_mut(|data| {
+			data.insert_temp(
+				drag_claim_id(),
+				DragClaim {
+					response: response.clone(),
+					galley_pos,
+					galley,
+					color,
+				},
+			);
+		});
 	}
 	if freeze && let Some(Some(idx)) = shape_idx {
 		ui.ctx().graphics_mut(|gfx| {
@@ -696,6 +713,76 @@ pub(crate) fn register(
 			}
 		});
 	}
+}
+
+#[derive(Clone)]
+struct DragClaim {
+	response: Response,
+	galley_pos: Pos2,
+	galley: Arc<Galley>,
+	color: Color32,
+}
+
+fn drag_claim_id() -> egui::Id {
+	egui::Id::unique("serein-drag-claim")
+}
+
+/// A pointer below the last label never hits one, so egui keeps the moving end
+/// where an upward drag left it. That end stays above the anchor, and the rows
+/// below the anchor never join the selection. Put the moving end on the last
+/// label without painting it a second time.
+pub(crate) fn follow_pointer_below(ui: &mut egui::Ui) {
+	let id = drag_claim_id();
+	let claim = ui.data(|data| data.get_temp::<DragClaim>(id));
+	ui.data_mut(|data| {
+		data.remove::<DragClaim>(id);
+	});
+	let Some(mut claim) = claim else {
+		return;
+	};
+	let below = ui.input(|input| {
+		input
+			.pointer
+			.interact_pos()
+			.is_some_and(|pos| pos.y > claim.response.rect.bottom())
+	});
+	if !below {
+		return;
+	}
+	claim
+		.response
+		.flags
+		.set(egui::response::Flags::CONTAINS_POINTER, true);
+	claim
+		.response
+		.flags
+		.set(egui::response::Flags::HOVERED, true);
+	let clip = ui.clip_rect();
+	ui.set_clip_rect(Rect::NOTHING);
+	// The labels already copied this pass. A second registration would append the
+	// same line again.
+	let copied = ui.input_mut(|input| {
+		let mut copied = Vec::new();
+		let mut kept = Vec::new();
+		for event in std::mem::take(&mut input.events) {
+			match event {
+				Event::Copy | Event::Cut => copied.push(event),
+				other => kept.push(other),
+			}
+		}
+		input.events = kept;
+		copied
+	});
+	LabelSelectionState::label_text_selection(
+		ui,
+		&claim.response,
+		claim.galley_pos,
+		claim.galley,
+		claim.color,
+		Stroke::NONE,
+	);
+	ui.input_mut(|input| input.events.extend(copied));
+	ui.set_clip_rect(clip);
 }
 
 /// Rows that must keep registering after they leave the screen.
