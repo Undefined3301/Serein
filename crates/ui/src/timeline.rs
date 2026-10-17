@@ -7093,6 +7093,179 @@ mod tests {
 		);
 	}
 
+	/// Dragging up through older messages, then back past the press, has to take
+	/// the text below that press. The moving end starts above the anchor, and a
+	/// pointer below the channel never lands on a label.
+	#[test]
+	fn dragging_back_down_past_the_start_selects_the_text_below_it() {
+		let ctx = egui::Context::default();
+		crate::design::apply(&ctx);
+		let mut state = loading_unread_channel(false);
+		state.freshness = model::Freshness::Fresh;
+		state.history_pending = false;
+		state.older_exhausted = true;
+		for id in 1..=40 {
+			let mut message = text_message(id);
+			message.content = format!("Sentence {id:02} alpha bravo charlie delta");
+			state.timeline.insert(message, false, false).unwrap();
+		}
+		state.channels[0].last_message = Some(Id(40));
+		let mut view = TimelineView::default();
+		let clock = std::cell::Cell::new(0.0_f64);
+		let mut frame =
+			|events: Vec<egui::Event>| {
+				let output = ctx.run_ui(
+					egui::RawInput {
+						focused: true,
+						time: Some(clock.get()),
+						predicted_dt: 1.0 / 60.0,
+						events,
+						screen_rect: Some(egui::Rect::from_min_size(
+							egui::Pos2::ZERO,
+							egui::vec2(900.0, 600.0),
+						)),
+						..Default::default()
+					},
+					|ui| {
+						view.show(
+							ui,
+							&mut state,
+							&mut None,
+							&mut None,
+							(
+								&mut crate::avatars::Avatars::default(),
+								&mut crate::profiles::ProfileSession::default(),
+							),
+							None,
+						);
+					},
+				);
+				let copied =
+					output.platform_output.commands.iter().rev().find_map(
+						|command| match command {
+							egui::OutputCommand::CopyText(text) => Some(text.clone()),
+							_ => None,
+						},
+					);
+				let mut labels = vec![];
+				fn texts(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+					match shape {
+						egui::Shape::Text(text) => out.push((
+							text.galley.job.text.clone(),
+							text.galley.rect.translate(text.pos.to_vec2()),
+						)),
+						egui::Shape::Vec(shapes) => {
+							for shape in shapes {
+								texts(shape, out);
+							}
+						}
+						_ => {}
+					}
+				}
+				for shape in &output.shapes {
+					texts(&shape.shape, &mut labels);
+				}
+				output.drop_without_applying_deltas();
+				clock.set(clock.get() + 1.0 / 60.0);
+				(labels, copied, view.scroll_offset)
+			};
+		let press = |pos: egui::Pos2, pressed: bool| {
+			vec![
+				egui::Event::PointerMoved(pos),
+				egui::Event::PointerButton {
+					pos,
+					button: egui::PointerButton::Primary,
+					pressed,
+					modifiers: egui::Modifiers::NONE,
+				},
+			]
+		};
+		let sentence_id = |text: &str| {
+			text.split_whitespace()
+				.nth(1)
+				.and_then(|id| id.parse::<u32>().ok())
+		};
+		for _ in 0..8 {
+			frame(vec![]);
+		}
+		let (_, _, live) = frame(vec![]);
+		for _ in 0..16 {
+			let (_, _, next) = frame(vec![egui::Event::MouseWheel {
+				unit: egui::MouseWheelUnit::Point,
+				delta: egui::vec2(0.0, 240.0),
+				modifiers: egui::Modifiers::NONE,
+				phase: egui::TouchPhase::Move,
+				source: egui::MouseWheelSource::Unknown,
+			}]);
+			if live - next > 200.0 {
+				break;
+			}
+		}
+		for _ in 0..4 {
+			frame(vec![]);
+		}
+		let (labels, _, _) = frame(vec![]);
+		let mut sentences: Vec<(u32, egui::Rect)> = labels
+			.iter()
+			.filter_map(|(text, rect)| {
+				let id = sentence_id(text)?;
+				if text.contains("alpha bravo")
+					&& rect.center().y > 80.0
+					&& rect.center().y < 520.0
+					&& rect.width() > 40.0
+				{
+					Some((id, *rect))
+				} else {
+					None
+				}
+			})
+			.collect();
+		sentences.sort_by(|(_, left), (_, right)| {
+			left.center()
+				.y
+				.partial_cmp(&right.center().y)
+				.unwrap_or(std::cmp::Ordering::Equal)
+		});
+		sentences.dedup_by_key(|(id, _)| *id);
+		assert!(
+			sentences.len() >= 3,
+			"need a sentence with text above and below it, saw {sentences:?}"
+		);
+		let (anchor_id, anchor_rect) = sentences[sentences.len() / 2];
+		let from = egui::pos2(anchor_rect.left() + 8.0, anchor_rect.center().y);
+		frame(press(from, true));
+		let above = egui::pos2(from.x, -40.0);
+		frame(vec![egui::Event::PointerMoved(above)]);
+		let (_, _, at_press) = frame(vec![egui::Event::PointerMoved(above)]);
+		for _ in 0..12 {
+			frame(vec![egui::Event::PointerMoved(above)]);
+		}
+		let below = egui::pos2(from.x, 680.0);
+		frame(vec![egui::Event::PointerMoved(below)]);
+		let mut offset = at_press;
+		for _ in 0..24 {
+			let (_, _, next) = frame(vec![egui::Event::PointerMoved(below)]);
+			offset = next;
+			if next > at_press + 24.0 {
+				break;
+			}
+		}
+		frame(press(below, false));
+		let (_, copied, _) = frame(vec![egui::Event::Copy]);
+		let copied = copied.unwrap_or_default();
+		let reached_below =
+			(anchor_id + 1..=40).any(|id| copied.contains(&format!("Sentence {id:02}")));
+		let anchor_mark = format!("{anchor_id:02}");
+		assert!(
+			offset > at_press + 24.0
+				&& copied.contains(&anchor_mark)
+				&& reached_below
+				&& !copied.contains("Sentence 01")
+				&& crate::select::has_selection(&ctx),
+			"dragging back past the start left the text below it unselected (press={at_press}, offset={offset}, anchor={anchor_id}, copy={copied:?})"
+		);
+	}
+
 	#[test]
 	fn copy_selected_text_copies_the_whole_range_and_stays_until_the_menu_closes() {
 		let ctx = egui::Context::default();
