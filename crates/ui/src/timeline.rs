@@ -4496,7 +4496,7 @@ impl TimelineView {
 			// After every nested card scroll area has closed. A delta set earlier is
 			// taken by the first of those areas and never reaches the channel.
 			if self.selection.dragging()
-				&& crate::select::has_selection(ui.ctx())
+				&& self.selection.pulled()
 				&& let Some(pos) = ui.input(|input| input.pointer.interact_pos())
 				&& !bar.contains(pos)
 			{

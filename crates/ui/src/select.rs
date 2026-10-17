@@ -54,8 +54,13 @@ pub struct Surface {
 	holes: Vec<Hole>,
 	overlays: Vec<Overlay>,
 	cover: Option<Rect>,
-	/// Line rects already registered. `blank_at` still has to see them after a flush.
+	/// Line rects already registered. `finish` unions them after a flush.
 	seen: Vec<Rect>,
+	/// Glyph rows. Hit bands are wider than the glyphs, and a double-click in that
+	/// spare space is still a blank row.
+	glyphs: Vec<Rect>,
+	/// Embeds registered by an earlier flush. `blank_at` still has to see them.
+	blocked: Vec<Rect>,
 }
 
 impl Surface {
@@ -70,6 +75,8 @@ impl Surface {
 			overlays: Vec::new(),
 			cover: None,
 			seen: Vec::new(),
+			glyphs: Vec::new(),
+			blocked: Vec::new(),
 		}
 	}
 
@@ -131,6 +138,12 @@ impl Surface {
 		for art in &artwork {
 			paint_artwork(ui, art);
 		}
+		self.glyphs.extend(
+			galley
+				.rows
+				.iter()
+				.map(|row| row.rect().translate(galley_pos.to_vec2())),
+		);
 		self.runs.push(Run {
 			band,
 			galley_pos,
@@ -151,6 +164,7 @@ impl Surface {
 	/// run — "between" the two ends. Deferring the block to the same pass keeps both in
 	/// reading order.
 	pub fn embed(&mut self, response: &Response, galley_pos: Pos2, galley: Arc<Galley>) {
+		self.blocked.push(response.rect);
 		self.embeds.push(Embed {
 			after: self.runs.len(),
 			response: response.clone(),
@@ -159,15 +173,14 @@ impl Surface {
 		});
 	}
 
-	/// True when `pos` is on no glyph line, widget or excluded card of this block, so a
+	/// True when `pos` is on no glyph, embed, widget or excluded card of this block, so a
 	/// row gesture there cannot be a word selection, link or media interaction.
 	pub fn blank_at(&self, pos: Pos2) -> bool {
 		!self
-			.runs
+			.glyphs
 			.iter()
-			.flat_map(|run| &run.lines)
+			.chain(self.blocked.iter())
 			.chain(self.embeds.iter().map(|embed| &embed.response.rect))
-			.chain(self.seen.iter())
 			.chain(self.holes.iter().map(|hole| &hole.rect))
 			.chain(self.overlays.iter().map(|over| &over.rect))
 			.any(|rect| rect.contains(pos))
@@ -741,11 +754,13 @@ pub(crate) fn follow_pointer_below(ui: &mut egui::Ui) {
 	let Some(mut claim) = claim else {
 		return;
 	};
-	let below = ui.input(|input| {
-		input
-			.pointer
-			.interact_pos()
-			.is_some_and(|pos| pos.y > claim.response.rect.bottom())
+	// Only a pointer that has left the channel. A click on a button under the last
+	// line is still inside the viewport, and retargeting it would select that line.
+	let pos = ui.input(|input| input.pointer.interact_pos());
+	let viewport = ui.data(|data| data.get_temp::<Rect>(viewport_id()));
+	let below = pos.is_some_and(|pos| {
+		pos.y > claim.response.rect.bottom()
+			&& viewport.is_some_and(|viewport| pos.y > viewport.max.y)
 	});
 	if !below {
 		return;
@@ -792,11 +807,16 @@ pub(crate) fn follow_pointer_below(ui: &mut egui::Ui) {
 /// those rows. It resets when egui reports no selection and the primary button is up.
 pub struct Span<K> {
 	ends: Ends<K>,
+	/// The pointer left the press. A click that never moves is not an edge drag.
+	pulled: bool,
 }
 
 impl<K> Default for Span<K> {
 	fn default() -> Self {
-		Self { ends: Ends::None }
+		Self {
+			ends: Ends::None,
+			pulled: false,
+		}
 	}
 }
 
@@ -884,6 +904,11 @@ impl<K: Copy + Eq> Span<K> {
 		matches!(self.ends, Ends::Dragging { .. })
 	}
 
+	/// The press moved far enough to be a drag, not a click on a control.
+	pub fn pulled(&self) -> bool {
+		self.pulled
+	}
+
 	/// Follow this pass's primary button over the rows on screen.
 	///
 	/// `viewport` is the timeline clip in screen space. `on_screen` lists the rows
@@ -909,7 +934,13 @@ impl<K: Copy + Eq> Span<K> {
 		});
 		if !down && !released && !has_selection(ctx) {
 			self.ends = Ends::None;
+			self.pulled = false;
 			return;
+		}
+		if let (Some(origin), Some(pointer)) = (origin, pointer)
+			&& origin.distance_sq(pointer) > 16.0
+		{
+			self.pulled = true;
 		}
 		// The copy menu's press lands on a message row. A new drag there forgets the
 		// rows already selected, and the next scroll drops the highlight.
@@ -928,6 +959,7 @@ impl<K: Copy + Eq> Span<K> {
 				anchor,
 				focus: anchor,
 			};
+			self.pulled = false;
 		}
 		// A wheel tick slides new rows under a pointer that did not move. Following
 		// that row abandons the end that scrolled away, and the highlight drops.
