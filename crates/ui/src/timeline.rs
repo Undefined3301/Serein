@@ -5731,6 +5731,60 @@ mod tests {
 			selected_while_dragging && dragged.as_ref().is_some_and(|text| text.contains("alpha")),
 			"wheel during a drag cleared the selection: {dragged:?}"
 		);
+
+		let (labels, _, _) = frame(vec![]);
+		let sentences: Vec<(String, egui::Rect)> = labels
+			.into_iter()
+			.filter(|(text, rect)| {
+				text.contains("alpha bravo")
+					&& rect.center().y > 80.0
+					&& rect.center().y < 520.0
+					&& rect.width() > 40.0
+			})
+			.collect();
+		let (first_text, first_rect) = sentences
+			.first()
+			.cloned()
+			.expect("a sentence to start a two-row drag");
+		let (second_text, second_rect) = sentences
+			.iter()
+			.find(|(text, _)| text != &first_text)
+			.cloned()
+			.expect("a second sentence under the pointer");
+		let from = egui::pos2(first_rect.left() + 4.0, first_rect.center().y);
+		let to = egui::pos2(second_rect.right() - 4.0, second_rect.center().y);
+		let first_id = first_text[9..11].to_owned();
+		let second_id = second_text[9..11].to_owned();
+		frame(press(from, true));
+		frame(vec![egui::Event::PointerMoved(to)]);
+		let (_, held, selected_held) = frame(vec![egui::Event::Copy]);
+		let held = held.unwrap_or_default();
+		assert!(
+			selected_held && held.contains(&first_id) && held.contains(&second_id),
+			"two-row drag did not select both sentences: {held:?}"
+		);
+		let mut left = false;
+		for _ in 0..16 {
+			let (labels, _, _) = frame(vec![egui::Event::MouseWheel {
+				unit: egui::MouseWheelUnit::Point,
+				phase: egui::TouchPhase::Move,
+				source: egui::MouseWheelSource::Unknown,
+				delta: egui::vec2(0.0, -220.0),
+				modifiers: egui::Modifiers::NONE,
+			}]);
+			left = !labels.iter().any(|(text, rect)| {
+				text == &second_text && rect.top() < 600.0 && rect.bottom() > 0.0
+			});
+			if left {
+				break;
+			}
+		}
+		frame(press(to, false));
+		let (_, after, selected_after) = frame(vec![egui::Event::Copy]);
+		assert!(
+			left && selected_after && after.as_deref() == Some(held.as_str()),
+			"a still wheel dropped the rows selected before it: left={left} selected={selected_after} before={held:?} after={after:?}"
+		);
 	}
 
 	/// Premise: registering the end row offstage is enough for every scroll gesture.
